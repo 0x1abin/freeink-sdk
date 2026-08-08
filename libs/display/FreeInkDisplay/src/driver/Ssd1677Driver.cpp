@@ -99,6 +99,24 @@ static const Ssd1677Config& ssd1677StickyConfig() {
   return cfg;
 }
 
+// Mofei M4 keeps the generic SSD1677 waveform but its two panel batches need
+// different pseudo-temperature values for HALF refresh. Batch 2 (R13 fitted)
+// is the shipping default; define FREEINK_MOFEI_M4_BATCH1=1 for the earlier
+// no-R13 panel. Keep this compile-time until both batches are hardware-verified.
+static const Ssd1677Config& ssd1677MofeiM4Config() {
+  static const Ssd1677Config cfg = [] {
+    Ssd1677Config value = ssd1677DefaultConfig();
+#if defined(FREEINK_MOFEI_M4_BATCH1) && FREEINK_MOFEI_M4_BATCH1
+    value.halfRefreshTemp = 0x3C;  // batch 1: 60°C
+#else
+    value.halfRefreshTemp = 0x50;  // batch 2: 80°C
+#endif
+    value.halfSeqOverride = 0xD4;
+    return value;
+  }();
+  return cfg;
+}
+
 // ── Reusable per-board waveform shortcuts ────────────────────────────────────
 // Opt-in optimizations a board can layer onto a base Ssd1677Config when its
 // specific panel is known to tolerate them. Each is a pure copy-and-tweak so a
@@ -631,6 +649,7 @@ static const Ssd1677Config& ssd1677ActiveConfig() { return FREEINK_SSD1677_CONFI
 static const Ssd1677Config& ssd1677ActiveConfig() {
   switch (BoardConfig::ACTIVE.board) {
     case BoardConfig::Board::Sticky: return ssd1677StickyConfig();
+    case BoardConfig::Board::MofeiM4: return ssd1677MofeiM4Config();
     // X4 Pro runs on the stock X4/GDEQ0426T82 config — same controller and panel
     // class, confirmed painting on hardware. No custom LUT or drive voltages needed.
     case BoardConfig::Board::XteinkX4Pro: return ssd1677DefaultConfig();

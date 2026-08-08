@@ -652,13 +652,13 @@ void testBatteryIndicator() {
   CHECK_EQ(charge.rect.width, 9);  // cavity is 18 wide at 50%
   CHECK(charge.paint == PaintKind::Solid);
 
-  // Charging without an icon keeps the solid fill and overlays a bolt.
+  // Charging without an icon keeps the solid fill and overlays a bitmap bolt.
   FakeDrawTarget draw2;
   Frame<4> frame2(draw2, device, input, interactions);
   props.charging = true;
   batteryIndicator(frame2, Rect{400, 0, 80, 20}, props);
   CHECK(draw2.ops[2].paint == PaintKind::Solid);
-  CHECK_EQ(draw2.countKind(FakeDrawTarget::Op::Triangle), 2u);
+  CHECK_EQ(draw2.countKind(FakeDrawTarget::Op::Bitmap), 1u);
 
   // Percent above 100 clamps to a full cavity.
   FakeDrawTarget draw3;
@@ -1012,6 +1012,43 @@ void testInteractionOverflowFlag() {
   CHECK(!buffer.overflowed());
 }
 
+void testContentWidthTabBarLayout() {
+  FakeDrawTarget draw;
+  DeviceContext device = makeDevice();
+  InputSnapshot input;
+  InteractionBuffer<8> interactions;
+  Frame<8> frame(draw, device, input, interactions);
+
+  TabItem tabs[2];
+  tabs[0].label = "One";
+  tabs[0].value = 10;
+  tabs[0].selected = true;
+  tabs[1].label = "Longer";
+  tabs[1].value = 20;
+  TabBarProps bar;
+  bar.tabs = tabs;
+  bar.count = 2;
+  bar.action = 60;
+  bar.layout = TabBarLayout::ContentWidth;
+  bar.leadingInset = 20;
+  bar.gap = 8;
+  bar.tabInset = Insets{2, 0, 4, 0};
+  bar.contentInset = Insets{2, 8, 2, 8};
+  tabBar(frame, Rect{0, 0, 480, 40}, bar);
+
+  CHECK_EQ(interactions.count(), 2u);
+  // Monospace labels are 18px and 36px wide. With 8px content padding,
+  // pills start at x=20 and x=62 instead of being centered in 240px slots.
+  CHECK_EQ(draw.ops[0].rect.x, 20);
+  CHECK_EQ(draw.ops[0].rect.width, 34);
+  CHECK_EQ(draw.ops[2].rect.x, 62);
+  CHECK_EQ(draw.ops[2].rect.width, 52);
+  InputSnapshot tap;
+  tap.touchReleased = true;
+  tap.touchX = 70;
+  tap.touchY = 20;
+  CHECK_EQ(interactions.route(tap).value, 20);
+}
 
 void testRoundedRaffSurfaces() {
   // Mirrors the retired RoundedRaffTheme: pill settings tabs with a bottom
@@ -1157,14 +1194,14 @@ void testThemePrimitiveParity() {
   CHECK_EQ(draw4.countKind(FakeDrawTarget::Op::Line), 1u);
   CHECK_EQ(draw4.countKind(FakeDrawTarget::Op::Bitmap), 1u);
 
-  // Charging battery draws a bolt (two triangles) instead of a dithered fill.
+  // Charging battery draws a bitmap bolt instead of a dithered fill.
   FakeDrawTarget draw5;
   Frame<16> frame5(draw5, device, input, interactions);
   BatteryIndicatorProps battery;
   battery.percent = 80;
   battery.charging = true;
   batteryIndicator(frame5, Rect{400, 0, 80, 20}, battery);
-  CHECK_EQ(draw5.countKind(FakeDrawTarget::Op::Triangle), 2u);
+  CHECK_EQ(draw5.countKind(FakeDrawTarget::Op::Bitmap), 1u);
 }
 
 
@@ -2322,7 +2359,7 @@ void testHeaderBorderEdges() {
   // The themed header supplies a 1px divider when the theme's popup style has
   // no border of its own, so default headers match the documented divider.
   screen.header("Top");
-  CHECK_EQ(draw.countKind(FakeDrawTarget::Op::Line), 1u);
+  CHECK_EQ(draw.countKind(FakeDrawTarget::Op::Fill), 2u);  // background + bottom divider band
   CHECK_EQ(draw.countKind(FakeDrawTarget::Op::Stroke), 0u);
 
   FakeDrawTarget boxedDraw;
@@ -2563,6 +2600,7 @@ int main() {
   testCrossInkReaderMenuList();
   testCrossInkReadingStatsSurfaces();
   testInteractionOverflowFlag();
+  testContentWidthTabBarLayout();
   testRoundedRaffSurfaces();
   testThemePrimitiveParity();
   testRotationAndBitmapSampling();

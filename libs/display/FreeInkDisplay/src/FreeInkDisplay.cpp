@@ -35,6 +35,9 @@
 #if FREEINK_DRIVER_UC8279_X4
 #include "driver/Uc8279X4Driver.h"
 #endif
+#if FREEINK_DRIVER_UC8279C_A4
+#include "driver/Uc8279cA4Driver.h"
+#endif
 #if FREEINK_DRIVER_ED2208
 #include "driver/Ed2208M5Driver.h"
 #endif
@@ -152,6 +155,12 @@ void FreeInkDisplay::selectDriver() {
       // from the X3's UC8279d driver, which routes via PanelSel::X3 above.
       if (BoardConfig::ACTIVE.displayController == BoardConfig::DisplayController::UC8279) {
         _driver = &uc8279X4Driver();
+        break;
+      }
+#endif
+#if FREEINK_DRIVER_UC8279C_A4
+      if (BoardConfig::ACTIVE.displayController == BoardConfig::DisplayController::UC8279C) {
+        _driver = &uc8279cA4Driver();
         break;
       }
 #endif

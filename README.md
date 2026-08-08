@@ -126,6 +126,8 @@ so the SD manager itself stays device-agnostic.
 | **M5Paper v1.1** | ESP32 (classic) | IT8951E | 540×960 16-gray ED047TC1 | hand-rolled IT8951 driver (own SPI, 1bpp→4bpp load, GC16/DU/A2 modes, auto rotation onto the portrait panel), GT911 touch, GPIO35 ADC battery |
 | **Sticky** (Upcoming Device) | ESP32-S3 | SSD1677 | 3.97" 800×480 B/W | reuses the SSD1677 driver (X4-class), GT911 touch, PDM microphone (Microphone lib), BQ27220 I²C battery gauge, PCF8563 RTC + SHT40 temp/humidity + LSM6DS3TR-C IMU (Rtc / EnvironmentSensor / Imu libs), SPI MicroSD (shares the display bus), LEDC buzzer (Buzzer lib); orientation/SD-sharing pending hardware validation |
 | **Xteink X4 Pro** | ESP32-S3 | SSD1677 **or** UC8179 (per batch) | 800×480 B/W | GT911 touch, dual warm/cold frontlight, native 1-bit SDMMC, BM8563 RTC, CW2017 battery gauge; controller auto-detected at boot |
+| **eego A4** | ESP32-S3 N16R8 | UC8279C | 768×552 | GSLX680 touch, PCF8563 RTC, SPI MicroSD, 4-level grayscale in PSRAM |
+| **Mofei M4** | ESP32-S3 N16R8 | SSD1677 | 800×480 | FT6336U polling touch, RX8010 RTC, dual warm/cool frontlight, native 4-bit SDMMC |
 
 X3 and X4 share the ESP32-C3 and a pinout, so **one firmware binary drives both**:
 it carries both board profiles (`XTEINK_X4` and `XTEINK_X3`) and picks one at
@@ -256,6 +258,8 @@ MCU (a C3-vs-S3 mix is a compile error):
 | `-DFREEINK_DEVICE_MURPHY` | Murphy M3 (S3, UC8253 + touch + frontlight) |
 | `-DFREEINK_DEVICE_LILYGO` | LilyGo T5 S3 (S3, ED047TC1 raw-parallel EPD via LovyanGFX) |
 | `-DFREEINK_DEVICE_STICKY` | Sticky (S3, SSD1677 800×480 + GT911 touch + PDM mic) |
+| `-DFREEINK_DEVICE_EEGO_A4` | eego A4 (S3, UC8279C 768×552 + GSLX680 touch) |
+| `-DFREEINK_DEVICE_MOFEI_M4` | Mofei M4 (S3, SSD1677 800×480 + FT6336U touch) |
 | *(none)* | **compile error** — a build must select at least one device |
 
 Multiple **different-pinout** devices on one MCU are runtime-selected: `ACTIVE`
@@ -273,7 +277,7 @@ tight. Each defaults on when an included device needs it; force with `=0`/`=1`:
 | `FREEINK_CAP_COLOR` | color panel code | on for M5 |
 | `FREEINK_CAP_AUDIO` | audio output (AudioManager: ES8388/ES8311 codec + I2S WAV playback) | on for Murphy and M5 |
 | `FREEINK_CAP_MIC` | microphone capture (Microphone lib: PDM mic → 16-bit PCM via i2s_pdm RX) | on for Sticky |
-| `FREEINK_CAP_RTC` | real-time clock (Rtc lib: PCF8563 over I²C) | on for Sticky |
+| `FREEINK_CAP_RTC` | real-time clock (Rtc lib: PCF8563, DS3231, or RX8010 over I²C) | on for boards with an RTC |
 | `FREEINK_CAP_TEMP_HUMIDITY` | temperature + humidity (EnvironmentSensor lib: SHT40 over I²C) | on for Sticky |
 | `FREEINK_CAP_IMU` | 6-axis IMU (Imu lib: LSM6DS3TR-C over I²C) | on for Sticky |
 | `FREEINK_CAP_BUZZER` | LEDC PWM tone buzzer (Buzzer lib: tone/beep on `audio.buzzer`) | on for Sticky and Murphy |

@@ -12,6 +12,9 @@
 #include <BoardConfig.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
+#if FREEINK_DEVICE_MOFEI_M4
+#include <freertos/semphr.h>
+#endif
 #include <freertos/task.h>
 
 class InputManager {
@@ -130,6 +133,9 @@ public:
   // (~700 ms), while still down — a hold shortcut (e.g. open the reader menu).
   // Cleared each #update().
   bool wasHomeKeyLongPressed() const;
+  // Put a touch controller into its board-specific low-power state before the
+  // SDK isolates rails and enters deep sleep. Safe/no-op on non-touch boards.
+  void prepareForDeepSleep();
 
   // Optional board hook for buttons that aren't direct GPIOs — e.g. a key
   // behind an I2C IO-expander (the LilyGo T5 S3 user button on its PCA9535). It
@@ -212,7 +218,7 @@ private:
   void applyStateChange(uint8_t state, unsigned long currentTime);
 
   // Touch backend. Compiled only when FREEINK_CAP_TOUCH is set; dispatches on
-  // BoardConfig::ACTIVE.touch.controller (CHSC6x IRQ-driven, GT911 polled).
+  // BoardConfig::ACTIVE.touch.controller (CHSC6x, GT911, GSLX680, or FT6336).
   void beginTouch();
   uint8_t serviceTouch(); // runs the machine; returns synthesized button mask
   void updateTouchFromIrq(unsigned long now,
@@ -223,9 +229,32 @@ private:
                          TouchPoint &point) const;
   uint16_t mapTouchAxis(uint16_t raw, uint16_t rawMin, uint16_t rawMax,
                         uint16_t outMax) const;
+  TouchPoint mapTouchPoint(uint16_t rawX, uint16_t rawY,
+                           unsigned long now) const;
+  void updateTouchContact(const TouchPoint &point);
+  void releaseTouch(unsigned long now);
   void beginGt911();
   bool gt911ReadReg(uint16_t reg, uint8_t *buf, uint8_t len);
   void gt911ClearStatus();
+#if FREEINK_DEVICE_EEGO_A4
+  void beginGslx680();
+  void pollGslx680(unsigned long now);
+  bool gslx680Read(uint8_t reg, uint8_t *data, uint8_t len);
+  bool gslx680Write(uint8_t reg, const uint8_t *data, uint8_t len);
+  bool gslx680Write32(uint8_t reg, uint32_t value);
+  void gslx680ClearRegisters();
+  void gslx680ResetChip();
+  void gslx680StartChip();
+  bool gslx680LoadFirmware();
+  bool gslx680Check();
+#endif
+#if FREEINK_DEVICE_MOFEI_M4
+  void beginFt6336();
+  void pollFt6336(unsigned long now);
+  bool ft6336ReadReg(uint8_t reg, uint8_t* data, uint8_t len);
+  static void ft6336TaskTrampoline(void* self);
+  void ft6336TaskLoop();
+#endif
 
   uint8_t currentState;
   uint8_t lastState;
@@ -270,6 +299,25 @@ private:
       0; // contact duration, latched at release
   bool touchMovedBeyondTapSlop =
       false; // suppresses tap activation after a drag/scroll
+
+#if FREEINK_DEVICE_MOFEI_M4
+  // Mofei M4's FT6336 INT line is held low by the board. A fixed-size snapshot
+  // bridges the 10 ms poll task to update() without allocating an event queue.
+  struct Ft6336TaskState {
+    bool contact = false;
+    bool pressLatched = false;
+    bool releaseLatched = false;
+    uint16_t rawX = 0;
+    uint16_t rawY = 0;
+    uint16_t downRawX = 0;
+    uint16_t downRawY = 0;
+    uint16_t releaseRawX = 0;
+    uint16_t releaseRawY = 0;
+  };
+  Ft6336TaskState ft6336State;
+  SemaphoreHandle_t ft6336Mutex = nullptr;
+  TaskHandle_t ft6336Task = nullptr;
+#endif
 
   static constexpr int NUM_BUTTONS_1 = 4;
   static const int ADC_RANGES_1[];
