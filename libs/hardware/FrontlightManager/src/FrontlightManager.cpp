@@ -39,9 +39,7 @@ uint32_t physicalDuty(uint32_t logicalDuty, uint32_t full, bool activeHigh) {
 }
 
 #if defined(ARDUINO) && ESP_ARDUINO_VERSION_MAJOR >= 3
-void attachChannel(int8_t gpio, uint8_t /*ch*/, uint32_t freq, uint8_t bits) {
-  ledcAttach(gpio, freq, bits);
-}
+void attachChannel(int8_t gpio, uint8_t /*ch*/, uint32_t freq, uint8_t bits) { ledcAttach(gpio, freq, bits); }
 void writeChannel(int8_t gpio, uint8_t /*ch*/, uint32_t duty) { ledcWrite(gpio, duty); }
 #else
 void attachChannel(int8_t gpio, uint8_t ch, uint32_t freq, uint8_t bits) {
@@ -90,7 +88,13 @@ void FrontlightManager::apply() {
   // Splitting integer percentages first loses both fractional parts at low
   // levels: brightness=1, warmth=50 previously became cool=0% + warm=0%.
   // Splitting the total duty also keeps cool+warm equal to the requested total.
-  const uint32_t totalDuty = (static_cast<uint32_t>(_brightness) * full + 50u) / 100u;
+  uint32_t totalDuty = 0;
+  if (_useLevel && _brightnessLevel > 0) {
+    const uint32_t n = static_cast<uint32_t>(_brightnessLevel - 1u);
+    totalDuty = 1u + (n * n * (full - 1u)) / (254u * 254u);
+  } else if (!_useLevel) {
+    totalDuty = (static_cast<uint32_t>(_brightness) * full + 50u) / 100u;
+  }
   uint32_t warmDuty = 0;
   uint32_t coolDuty = totalDuty;
   if (dual) {
@@ -109,10 +113,23 @@ void FrontlightManager::setBrightness(uint8_t percent) {
 #if FREEINK_CAP_FRONTLIGHT
   if (percent > 100) percent = 100;
   _brightness = percent;
+  _brightnessLevel = (static_cast<uint16_t>(percent) * 255u) / 100u;
+  _useLevel = false;
   if (percent > 0) _lastBrightness = percent;
   apply();
 #else
   (void)percent;
+#endif
+}
+
+void FrontlightManager::setBrightnessLevel(uint8_t level) {
+#if FREEINK_CAP_FRONTLIGHT
+  _brightnessLevel = level;
+  _brightness = (static_cast<uint16_t>(level) * 100u) / 255u;
+  _useLevel = true;
+  apply();
+#else
+  (void)level;
 #endif
 }
 

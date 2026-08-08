@@ -25,6 +25,10 @@ class FrontlightManager {
   // this is the TOTAL brightness; the current color-temperature split is preserved.
   void setBrightness(uint8_t percent);
 
+  // Set brightness with 8-bit control and a perceptual curve. Level 1 maps to the
+  // smallest non-zero hardware duty, making dim night reading possible.
+  void setBrightnessLevel(uint8_t level);
+
   // Convenience: fully off / restore last brightness.
   void off();
   void on();
@@ -56,6 +60,7 @@ class FrontlightManager {
   }
 
   uint8_t brightness() const { return _brightness; }
+  uint8_t brightnessLevel() const { return _brightnessLevel; }
   uint8_t colorTemperature() const { return _warmPercent; }
 
  private:
@@ -66,6 +71,8 @@ class FrontlightManager {
 
   bool _begun = false;
   uint8_t _brightness = 0;
+  uint8_t _brightnessLevel = 0;
+  bool _useLevel = false;
   uint8_t _lastBrightness = 50;
   uint8_t _warmPercent = 50;  // neutral by default
 };
