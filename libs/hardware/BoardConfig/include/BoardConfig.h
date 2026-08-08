@@ -60,6 +60,9 @@
 #ifndef FREEINK_DEVICE_PAPERMONO
 #define FREEINK_DEVICE_PAPERMONO 0
 #endif
+#ifndef FREEINK_DEVICE_EEGO_A4
+#define FREEINK_DEVICE_EEGO_A4 0
+#endif
 #ifndef FREEINK_DEVICE_MOFEI_M4
 #define FREEINK_DEVICE_MOFEI_M4 0
 #endif
@@ -67,9 +70,9 @@
 // --- 2) Coherence: exactly one MCU family, at least one device ---------------
 #if !(FREEINK_DEVICE_X4 || FREEINK_DEVICE_X3 || FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_M5 || FREEINK_DEVICE_MURPHY || \
       FREEINK_DEVICE_DELINK || FREEINK_DEVICE_LILYGO || FREEINK_DEVICE_M5PAPER || FREEINK_DEVICE_STICKY ||            \
-      FREEINK_DEVICE_PAPERMONO || FREEINK_DEVICE_MOFEI_M4)
+      FREEINK_DEVICE_PAPERMONO || FREEINK_DEVICE_EEGO_A4 || FREEINK_DEVICE_MOFEI_M4)
 #error \
-    "FreeInk: no device selected. Pass at least one -DFREEINK_DEVICE_<NAME> (X4, X3, X4PRO, M5, MURPHY, DELINK, LILYGO, M5PAPER, STICKY, PAPERMONO, MOFEI_M4) in your build env — see platformio.sample.ini."
+    "FreeInk: no device selected. Pass at least one -DFREEINK_DEVICE_<NAME> (X4, X3, X4PRO, M5, MURPHY, DELINK, LILYGO, M5PAPER, STICKY, PAPERMONO, EEGO_A4, MOFEI_M4) in your build env — see platformio.sample.ini."
 #endif
 // Each device belongs to one MCU family; a binary targets exactly one. X3/X4 are
 // ESP32-C3; M5 PaperColor/Murphy/de-link/LilyGo are ESP32-S3; M5Paper v1.1 is the
@@ -78,7 +81,8 @@
 #define FREEINK_MCU_C3 (FREEINK_DEVICE_X3 || FREEINK_DEVICE_X4)
 #define FREEINK_MCU_S3                                                                                    \
   (FREEINK_DEVICE_M5 || FREEINK_DEVICE_MURPHY || FREEINK_DEVICE_DELINK || FREEINK_DEVICE_LILYGO ||        \
-   FREEINK_DEVICE_STICKY || FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_PAPERMONO || FREEINK_DEVICE_MOFEI_M4)
+   FREEINK_DEVICE_STICKY || FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_PAPERMONO || FREEINK_DEVICE_EEGO_A4 || \
+   FREEINK_DEVICE_MOFEI_M4)
 #define FREEINK_MCU_ESP32 (FREEINK_DEVICE_M5PAPER)
 #if (FREEINK_MCU_C3 + FREEINK_MCU_S3 + FREEINK_MCU_ESP32) != 1
 #error \
@@ -97,6 +101,11 @@
 #define FREEINK_DRIVER_SSD1677 1
 #else
 #define FREEINK_DRIVER_SSD1677 0
+#endif
+#if FREEINK_DEVICE_EEGO_A4
+#define FREEINK_DRIVER_UC8279C_A4 1
+#else
+#define FREEINK_DRIVER_UC8279C_A4 0
 #endif
 #if FREEINK_DEVICE_X3
 #define FREEINK_DRIVER_UC8253_X3 1
@@ -169,7 +178,7 @@
 #ifndef FREEINK_CAP_TOUCH
 #define FREEINK_CAP_TOUCH                                                                               \
   (FREEINK_DEVICE_MURPHY || FREEINK_DEVICE_LILYGO || FREEINK_DEVICE_M5PAPER || FREEINK_DEVICE_STICKY || \
-   FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_PAPERMONO || FREEINK_DEVICE_MOFEI_M4)
+   FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_PAPERMONO || FREEINK_DEVICE_EEGO_A4 || FREEINK_DEVICE_MOFEI_M4)
 #endif
 #ifndef FREEINK_CAP_FRONTLIGHT
 #define FREEINK_CAP_FRONTLIGHT                                                                        \
@@ -252,7 +261,7 @@
 #ifndef FREEINK_CAP_RTC
 #define FREEINK_CAP_RTC                                                                              \
   (FREEINK_DEVICE_X3 || FREEINK_DEVICE_STICKY || FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_PAPERMONO || \
-   FREEINK_DEVICE_MOFEI_M4)
+   FREEINK_DEVICE_EEGO_A4 || FREEINK_DEVICE_MOFEI_M4)
 #endif
 #ifndef FREEINK_CAP_TEMP_HUMIDITY
 #define FREEINK_CAP_TEMP_HUMIDITY (FREEINK_DEVICE_STICKY)
@@ -345,6 +354,7 @@ enum class Board : uint8_t {
   M5PaperV11,
   Sticky,
   PaperMono,
+  EegoA4,
   MofeiM4,
 };
 
@@ -378,10 +388,11 @@ enum class DisplayController : uint8_t {
   IT8951,
   UC8279,
   UC8179,
+  UC8279C,
 };
 
 // Optional capacitive touch controller.
-enum class TouchController : uint8_t { None, Chsc6x, Gt911, Ft5x06, Ft6336 };
+enum class TouchController : uint8_t { None, Chsc6x, Gt911, Ft5x06, Gslx680, Ft6336 };
 
 // Optional audio output path. Murphy M3 ships an ES8388-compatible stereo
 // codec (I2S slave, control over the shared touch I2C bus) — the contract was
@@ -1309,6 +1320,36 @@ constexpr BoardProfile XTEINK_X4_PRO = {
     // button ladder — that earlier assumption was wrong; the ladder pins remain unconfirmed.
     {1}};
 
+// --- EEGO A4 — ESP32-S3 N16R8, UC8279C + GSLX680 ---------------------------
+// This profile follows the validated EEGO A4 template pinout and calibration.
+constexpr BoardProfile EEGO_A4 = {Board::EegoA4,
+                                  "eego_a4",
+                                  InputStyle::DigitalButtons,
+                                  DisplayController::UC8279C,
+                                  768,
+                                  552,
+                                  {42, 45, 21, 14, 13, 41, 6},
+                                  20000000,
+                                  {39, 40, 38, 47, PIN_UNASSIGNED, true, 20000000},
+                                  {PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, 5, 7, 8, true},
+                                  10,
+                                  11,
+                                  1.559f,
+                                  PIN_UNASSIGNED,
+                                  // GSL rawY 12..632 maps to panel X; rawX 884..9 maps in reverse to panel Y.
+                                  {TouchController::Gslx680, 2, 1, PIN_UNASSIGNED, 3, 0x40, 12, 632, 9, 884, false, 0,
+                                   false, false, PIN_UNASSIGNED, true, false, true, true},
+                                  NO_FRONTLIGHT,
+                                  NO_AUDIO,
+                                  NO_LEDS,
+                                  NO_FLIP,
+                                  NO_SDMMC,
+                                  NO_GAUGE,
+                                  NO_MIC,
+                                  {2, 1, 400000, 0x51, 0, 0, 0, RtcType::Pcf8563, ImuType::None},
+                                  1.2f,
+                                  {4}};
+
 // --- Mofei M4 — ESP32-S3 N16R8, SSD1677 + FT6336U --------------------------
 // TOUCH_INT cannot be used reliably on this board, so InputManager polls the
 // controller while the touch rail is enabled.
@@ -1360,6 +1401,8 @@ constexpr BoardProfile MOFEI_M4 = {
     1.2f,
     {}};
 
+static_assert(EEGO_A4.touch.swapXY && !EEGO_A4.touch.flipX && EEGO_A4.touch.flipY,
+              "EEGO A4 touch must map raw Y to X and reverse raw X onto Y");
 static_assert(MOFEI_M4.displayWidth / 8 * MOFEI_M4.displayHeight == 48000,
               "Mofei M4 must use one 48,000-byte framebuffer");
 static_assert(MOFEI_M4.touch.controller == TouchController::Ft6336 && MOFEI_M4.touch.swapXY &&
@@ -1387,7 +1430,8 @@ constexpr uint32_t MAX_FRAMEBUFFER_BYTES =
                         FREEINK_DEVICE_X4PRO ? panelBytes(XTEINK_X4_PRO) : 0u)),
               cmax(cmax(FREEINK_DEVICE_STICKY ? panelBytes(STICKY) : 0u,
                         FREEINK_DEVICE_PAPERMONO ? panelBytes(PAPER_MONO) : 0u),
-                   FREEINK_DEVICE_MOFEI_M4 ? panelBytes(MOFEI_M4) : 0u)));
+                   cmax(FREEINK_DEVICE_EEGO_A4 ? panelBytes(EEGO_A4) : 0u,
+                        FREEINK_DEVICE_MOFEI_M4 ? panelBytes(MOFEI_M4) : 0u))));
 
 // Compile-time default device — the profile ACTIVE starts as. With a single
 // device in the build this is the only device; with several same-MCU devices it
@@ -1408,6 +1452,8 @@ constexpr BoardProfile DEFAULT_DEVICE = M5PAPER_V11;
 constexpr BoardProfile DEFAULT_DEVICE = STICKY;
 #elif FREEINK_DEVICE_X4PRO
 constexpr BoardProfile DEFAULT_DEVICE = XTEINK_X4_PRO;
+#elif FREEINK_DEVICE_EEGO_A4
+constexpr BoardProfile DEFAULT_DEVICE = EEGO_A4;
 #elif FREEINK_DEVICE_MOFEI_M4
 constexpr BoardProfile DEFAULT_DEVICE = MOFEI_M4;
 #elif FREEINK_DEVICE_X3 && !FREEINK_DEVICE_X4
@@ -1482,6 +1528,11 @@ inline bool selectDevice(Board which) {
       ACTIVE = PAPER_MONO;
       return true;
 #endif
+#if FREEINK_DEVICE_EEGO_A4
+    case Board::EegoA4:
+      ACTIVE = EEGO_A4;
+      break;
+#endif
 #if FREEINK_DEVICE_MOFEI_M4
     case Board::MofeiM4:
       ACTIVE = MOFEI_M4;
@@ -1505,6 +1556,7 @@ inline bool isM5PaperV11() { return ACTIVE.board == Board::M5PaperV11; }
 inline bool isSticky() { return ACTIVE.board == Board::Sticky; }
 inline bool isX4Pro() { return ACTIVE.board == Board::XteinkX4Pro; }
 inline bool isPaperMono() { return ACTIVE.board == Board::PaperMono; }
+inline bool isEegoA4() { return ACTIVE.board == Board::EegoA4; }
 inline bool isMofeiM4() { return ACTIVE.board == Board::MofeiM4; }
 inline bool hasTouch() { return ACTIVE.touch.controller != TouchController::None; }
 inline bool hasHomeKey() { return ACTIVE.touch.hasHomeKey; }

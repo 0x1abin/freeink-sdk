@@ -5,6 +5,9 @@
 #include <driver/gpio.h>
 
 #include <cstring>
+#if FREEINK_DEVICE_EEGO_A4
+#include "gsl/EegoA4GslFirmware.h"
+#endif
 #endif
 #if FREEINK_DEVICE_PAPERMONO
 #include <PaperMonoBoard.h>
@@ -689,6 +692,22 @@ void InputManager::prepareForDeepSleep() {
       touchDataEnabled = false;
 #endif
       return;
+    case BoardConfig::TouchController::Gslx680:
+#if FREEINK_DEVICE_EEGO_A4
+      gslx680Write32(0xe0, 0x00000088);
+      delay(5);
+      Wire.end();
+      if (t.sda >= 0) pinMode(t.sda, INPUT);
+      if (t.scl >= 0) pinMode(t.scl, INPUT);
+      if (t.reset >= 0) {
+        const auto reset = static_cast<gpio_num_t>(t.reset);
+        gpio_hold_dis(reset);
+        pinMode(t.reset, OUTPUT);
+        digitalWrite(t.reset, LOW);
+        gpio_hold_en(reset);
+      }
+#endif
+      return;
     case BoardConfig::TouchController::None:
     case BoardConfig::TouchController::Chsc6x:
     case BoardConfig::TouchController::Gt911:
@@ -716,6 +735,11 @@ void InputManager::beginTouch() {
       return;
     case BoardConfig::TouchController::Ft5x06:
       beginFt5x06();
+      return;
+    case BoardConfig::TouchController::Gslx680:
+#if FREEINK_DEVICE_EEGO_A4
+      beginGslx680();
+#endif
       return;
     case BoardConfig::TouchController::Ft6336:
 #if FREEINK_DEVICE_MOFEI_M4
@@ -746,6 +770,11 @@ uint8_t InputManager::serviceTouch() {
       break;
     case BoardConfig::TouchController::Ft5x06:
       pollFt5x06(now);
+      break;
+    case BoardConfig::TouchController::Gslx680:
+#if FREEINK_DEVICE_EEGO_A4
+      pollGslx680(now);
+#endif
       break;
     case BoardConfig::TouchController::Ft6336:
 #if FREEINK_DEVICE_MOFEI_M4
@@ -1188,6 +1217,171 @@ void InputManager::pollFt6336(const unsigned long now) {
     touchPoint = mapTouchPoint(snapshot.releaseRawX, snapshot.releaseRawY, now);
     releaseTouch(now);
   }
+}
+#endif
+
+// --- GSLX680 (EEGO A4) ------------------------------------------------------
+
+#if FREEINK_DEVICE_EEGO_A4
+bool InputManager::gslx680Write(const uint8_t reg, const uint8_t* data, const uint8_t len) {
+  Wire.beginTransmission(BoardConfig::ACTIVE.touch.i2cAddress);
+  Wire.write(reg);
+  if (len && data) Wire.write(data, len);
+  return Wire.endTransmission() == 0;
+}
+
+bool InputManager::gslx680Write32(const uint8_t reg, const uint32_t value) {
+  const uint8_t data[] = {static_cast<uint8_t>(value), static_cast<uint8_t>(value >> 8),
+                          static_cast<uint8_t>(value >> 16), static_cast<uint8_t>(value >> 24)};
+  return gslx680Write(reg, data, sizeof(data));
+}
+
+bool InputManager::gslx680Read(const uint8_t reg, uint8_t* data, const uint8_t len) {
+  Wire.beginTransmission(BoardConfig::ACTIVE.touch.i2cAddress);
+  Wire.write(reg);
+  if (Wire.endTransmission(false) != 0) return false;
+  if (Wire.requestFrom(BoardConfig::ACTIVE.touch.i2cAddress, len, static_cast<uint8_t>(true)) != len) {
+    while (Wire.available()) Wire.read();
+    return false;
+  }
+  for (uint8_t i = 0; i < len; ++i) data[i] = Wire.read();
+  return true;
+}
+
+void InputManager::gslx680ClearRegisters() {
+  gslx680Write32(0xe0, 0x00000088);
+  delay(20);
+  gslx680Write32(0x80, 0x00000003);
+  delay(5);
+  gslx680Write32(0xe4, 0x00000004);
+  delay(5);
+  gslx680Write32(0xe0, 0);
+  delay(20);
+}
+
+void InputManager::gslx680ResetChip() {
+  gslx680Write32(0xe0, 0x00000088);
+  delay(20);
+  gslx680Write32(0xe4, 0x00000004);
+  delay(10);
+  gslx680Write32(0xbc, 0);
+  delay(10);
+}
+
+void InputManager::gslx680StartChip() {
+  gslx680Write32(0xe0, 0);
+  delay(10);
+}
+
+bool InputManager::gslx680LoadFirmware() {
+  size_t i = 0;
+  while (i < freeink::EEGO_A4_GSL_FIRMWARE_COUNT) {
+    freeink::Gslx680FirmwareEntry entry;
+    memcpy_P(&entry, &freeink::EEGO_A4_GSL_FIRMWARE[i], sizeof(entry));
+    if (entry.offset == 0xf0) {
+      if (!gslx680Write32(entry.offset, entry.value)) return false;
+      ++i;
+      continue;
+    }
+    uint8_t payload[64];
+    uint8_t words = 0;
+    const uint8_t firstReg = entry.offset;
+    while (i < freeink::EEGO_A4_GSL_FIRMWARE_COUNT && words < 16) {
+      memcpy_P(&entry, &freeink::EEGO_A4_GSL_FIRMWARE[i], sizeof(entry));
+      if (entry.offset == 0xf0 || entry.offset != static_cast<uint8_t>(firstReg + words * 4)) {
+        break;
+      }
+      memcpy(payload + words * 4, &entry.value, sizeof(entry.value));
+      ++words;
+      ++i;
+    }
+    if (!words || !gslx680Write(firstReg, payload, words * 4)) return false;
+  }
+  return true;
+}
+
+bool InputManager::gslx680Check() {
+  uint8_t status[4] = {};
+  return gslx680Read(0xb0, status, sizeof(status)) && status[0] == 0x5a && status[1] == 0x5a && status[2] == 0x5a &&
+         status[3] == 0x5a;
+}
+
+void InputManager::beginGslx680() {
+  const auto& t = BoardConfig::ACTIVE.touch;
+  if (t.reset >= 0) {
+    gpio_hold_dis(static_cast<gpio_num_t>(t.reset));
+    pinMode(t.reset, OUTPUT);
+    digitalWrite(t.reset, HIGH);
+    delay(20);
+  }
+  Wire.begin(t.sda, t.scl, 400000);
+  Wire.setTimeOut(256);
+  uint8_t probe = 0;
+  if (!gslx680Read(0xf0, &probe, 1) || !gslx680Write32(0xf0, 0x00000012) || !gslx680Read(0xf0, &probe, 1)) {
+    touchDataEnabled = false;
+    return;
+  }
+  gslx680ClearRegisters();
+  gslx680ResetChip();
+  gslx680ResetChip();
+  gslx680ClearRegisters();
+  gslx680ResetChip();
+  if (!gslx680LoadFirmware()) {
+    touchDataEnabled = false;
+    return;
+  }
+  gslx680StartChip();
+  gslx680ResetChip();
+  gslx680StartChip();
+  if (!gslx680Check()) {
+    gslx680ResetChip();
+    gslx680StartChip();
+  }
+  touchDataEnabled = gslx680Check();
+}
+
+void InputManager::pollGslx680(const unsigned long now) {
+  if (now < touchReadAt) return;
+  touchReadAt = now + TOUCH_SAMPLE_DELAY_MS;
+  uint8_t frame[24] = {};
+  if (!gslx680Read(0x80, frame, sizeof(frame))) return;
+
+  const auto finishHomeKey = [this, now]() {
+    if (!touchHomeKeyDown) return;
+    lastTouchHeldDurationMs = now - touchHomeKeyDownAt;
+    if (!touchHomeKeyLongFired) touchHomeKeyTapEvent = true;
+    touchHomeKeyDown = false;
+    touchHomeKeyLongFired = false;
+  };
+  const uint8_t count = frame[0] > 5 ? 5 : frame[0];
+  if (!count) {
+    finishHomeKey();
+    releaseTouch(now);
+    return;
+  }
+
+  const uint16_t rawYWord = static_cast<uint16_t>(frame[5]) << 8 | frame[4];
+  const uint16_t rawXWord = static_cast<uint16_t>(frame[7]) << 8 | frame[6];
+  const bool homeKeyDown = count == 1 && rawXWord == 0x03a0 && rawYWord == 0x1020;
+  if (homeKeyDown) {
+    if (!touchHomeKeyDown) {
+      touchHomeKeyEvent = true;
+      touchHomeKeyDown = true;
+      touchHomeKeyLongFired = false;
+      touchHomeKeyDownAt = now;
+    } else if (!touchHomeKeyLongFired && now - touchHomeKeyDownAt >= HOME_KEY_LONG_PRESS_MS) {
+      touchHomeKeyLongEvent = true;
+      touchHomeKeyLongFired = true;
+    }
+    touchPressed = false;
+    touchPoint.valid = false;
+    return;
+  }
+  finishHomeKey();
+
+  const uint16_t rawY = rawYWord & 0x0fff;
+  const uint16_t rawX = rawXWord & 0x0fff;
+  updateTouchContact(mapTouchPoint(rawX, rawY, now));
 }
 #endif
 

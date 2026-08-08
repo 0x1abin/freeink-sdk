@@ -234,6 +234,18 @@ class InputManager {
   void beginGt911();
   bool gt911ReadReg(uint16_t reg, uint8_t* buf, uint8_t len);
   void gt911ClearStatus();
+#if FREEINK_DEVICE_EEGO_A4
+  void beginGslx680();
+  void pollGslx680(unsigned long now);
+  bool gslx680Read(uint8_t reg, uint8_t* data, uint8_t len);
+  bool gslx680Write(uint8_t reg, const uint8_t* data, uint8_t len);
+  bool gslx680Write32(uint8_t reg, uint32_t value);
+  void gslx680ClearRegisters();
+  void gslx680ResetChip();
+  void gslx680StartChip();
+  bool gslx680LoadFirmware();
+  bool gslx680Check();
+#endif
 #if FREEINK_DEVICE_MOFEI_M4
   void beginFt6336();
   void pollFt6336(unsigned long now);
