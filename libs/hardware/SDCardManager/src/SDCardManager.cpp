@@ -1,8 +1,8 @@
 #include "SDCardManager.h"
 
 #include <BoardConfig.h>
-#include <driver/gpio.h>
 #include <SPI.h>
+#include <driver/gpio.h>
 
 #include "SdmmcBlockDevice.h"  // no-op unless FREEINK_SD_SDMMC
 
@@ -58,7 +58,8 @@ bool SDCardManager::begin() {
   // dormant — bail out before any pin is touched, or SdFat drives "pin 255" and
   // floods the log. (Native-SDMMC boards like the X4 Pro take the #if branch above.)
   if (BoardConfig::ACTIVE.sd.cs < 0) {
-    if (Serial) Serial.printf("[%lu] [SD] SD disabled: CS unassigned in the %s profile\n", millis(), BoardConfig::ACTIVE.name);
+    if (Serial)
+      Serial.printf("[%lu] [SD] SD disabled: CS unassigned in the %s profile\n", millis(), BoardConfig::ACTIVE.name);
     initialized = false;
     cachedTotalBytes = 0;
     cachedUsedBytesValid = false;
@@ -68,12 +69,12 @@ bool SDCardManager::begin() {
   // Pins/clock come from the runtime-active profile (board-overridable via
   // BoardConfig::ACTIVE.sd.spiHz; 0 = default). Read after device selection.
   const uint8_t SD_CS = BoardConfig::ACTIVE.sd.cs;
-  const int8_t SD_SCLK = BoardConfig::ACTIVE.sd.sclk >= 0 ? BoardConfig::ACTIVE.sd.sclk
-                                                          : (BoardConfig::ACTIVE.sd.separateSpi ? -1
-                                                                                                : BoardConfig::ACTIVE.display.sclk);
-  const int8_t SD_MOSI = BoardConfig::ACTIVE.sd.mosi >= 0 ? BoardConfig::ACTIVE.sd.mosi
-                                                          : (BoardConfig::ACTIVE.sd.separateSpi ? -1
-                                                                                                : BoardConfig::ACTIVE.display.mosi);
+  const int8_t SD_SCLK = BoardConfig::ACTIVE.sd.sclk >= 0
+                             ? BoardConfig::ACTIVE.sd.sclk
+                             : (BoardConfig::ACTIVE.sd.separateSpi ? -1 : BoardConfig::ACTIVE.display.sclk);
+  const int8_t SD_MOSI = BoardConfig::ACTIVE.sd.mosi >= 0
+                             ? BoardConfig::ACTIVE.sd.mosi
+                             : (BoardConfig::ACTIVE.sd.separateSpi ? -1 : BoardConfig::ACTIVE.display.mosi);
   const int8_t SD_MISO = BoardConfig::ACTIVE.sd.miso;
   const uint32_t SPI_FQ = BoardConfig::ACTIVE.sd.spiHz != 0 ? BoardConfig::ACTIVE.sd.spiHz : 40000000;
 
@@ -102,15 +103,27 @@ bool SDCardManager::begin() {
     digitalWrite(BoardConfig::ACTIVE.display.cs, HIGH);
   }
 
-  if (SD_SCLK >= 0 && SD_MOSI >= 0 && SD_MISO >= 0) {
-    SPI.begin(SD_SCLK, SD_MISO, SD_MOSI, SD_CS);
+  bool cardReady = false;
+#if FREEINK_MCU_S3 || FREEINK_MCU_ESP32
+  if (BoardConfig::ACTIVE.sd.separateSpi && SD_SCLK >= 0 && SD_MOSI >= 0 && SD_MISO >= 0) {
+    static SPIClass dedicatedSdSpi(HSPI);
+    cardReady = dedicatedSdSpi.begin(SD_SCLK, SD_MISO, SD_MOSI, SD_CS) &&
+                sd.begin(SdSpiConfig(SD_CS, DEDICATED_SPI | USER_SPI_BEGIN, SPI_FQ, &dedicatedSdSpi));
+  } else {
+#endif
+    if (SD_SCLK >= 0 && SD_MOSI >= 0 && SD_MISO >= 0) {
+      SPI.begin(SD_SCLK, SD_MISO, SD_MOSI, SD_CS);
+    }
+    cardReady = sd.begin(SD_CS, SPI_FQ);
+#if FREEINK_MCU_S3 || FREEINK_MCU_ESP32
   }
+#endif
 
-  if (!sd.begin(SD_CS, SPI_FQ)) {
+  if (!cardReady) {
     if (Serial)
-      Serial.printf("[%lu] [SD] SD card not detected (err=0x%02X data=0x%02X cs=%d sclk=%d miso=%d mosi=%d clk=%luHz)\n",
-                    millis(), sd.sdErrorCode(), sd.sdErrorData(), SD_CS, SD_SCLK,
-                    SD_MISO, SD_MOSI, (unsigned long)SPI_FQ);
+      Serial.printf(
+          "[%lu] [SD] SD card not detected (err=0x%02X data=0x%02X cs=%d sclk=%d miso=%d mosi=%d clk=%luHz)\n",
+          millis(), sd.sdErrorCode(), sd.sdErrorData(), SD_CS, SD_SCLK, SD_MISO, SD_MOSI, (unsigned long)SPI_FQ);
     initialized = false;
     cachedTotalBytes = 0;
     cachedUsedBytesValid = false;
@@ -125,9 +138,7 @@ bool SDCardManager::begin() {
 }
 #endif
 
-bool SDCardManager::ready() const {
-  return initialized;
-}
+bool SDCardManager::ready() const { return initialized; }
 
 std::vector<String> SDCardManager::listFiles(const char* path, const int maxFiles) {
   std::vector<String> ret;
@@ -215,8 +226,7 @@ bool SDCardManager::readFileToStream(const char* path, Print& out, const size_t 
 }
 
 size_t SDCardManager::readFileToBuffer(const char* path, char* buffer, const size_t bufferSize, const size_t maxBytes) {
-  if (!buffer || bufferSize == 0)
-    return 0;
+  if (!buffer || bufferSize == 0) return 0;
   if (!initialized) {
     if (Serial) Serial.println("SDCardManager: not initialized; cannot read file");
     buffer[0] = '\0';
@@ -342,9 +352,8 @@ uint64_t SDCardManager::sdUsedBytes() {
     if (freeClusters < 0) {
       cachedUsedBytes = 0;
     } else {
-      const uint64_t cappedFree = (static_cast<uint64_t>(freeClusters) > clusterCount)
-                                      ? clusterCount
-                                      : static_cast<uint64_t>(freeClusters);
+      const uint64_t cappedFree =
+          (static_cast<uint64_t>(freeClusters) > clusterCount) ? clusterCount : static_cast<uint64_t>(freeClusters);
       cachedUsedBytes = (clusterCount - cappedFree) * vol().bytesPerCluster();
     }
     cachedUsedBytesValid = true;

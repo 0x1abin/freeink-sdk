@@ -57,15 +57,15 @@ void PowerManager::waitForPowerButtonRelease() {
 }
 
 namespace {
-// Drive a rail-enable pin to `offLevel` and latch it so the level survives deep
+// Drive a rail pin to `level` and latch it so the level survives deep
 // sleep (requires gpio_deep_sleep_hold_en(), done in deepSleep()). gpio_hold_dis
 // first: a hold left over from a previous cycle would make the writes no-ops.
-void holdRailOff(int8_t pin, uint8_t offLevel) {
+void holdRailLevel(int8_t pin, uint8_t level) {
   if (pin < 0) return;
   const auto g = static_cast<gpio_num_t>(pin);
   gpio_hold_dis(g);
   pinMode(pin, OUTPUT);
-  digitalWrite(pin, offLevel);
+  digitalWrite(pin, level);
   gpio_hold_en(g);
 }
 }  // namespace
@@ -80,15 +80,18 @@ void PowerManager::powerDownRailsForSleep() {
   // not stay collapsed, so its analog restarts and drains the pack through "off"
   // (field report: dead in ~36 h). Holding RST high is the controller's normal
   // idle level, so it's harmless for the SSD1677 batch. Released on wake in
-  // EpdBus::begin() before the reset pulse. (holdRailOff no-ops if RST unassigned.)
-  holdRailOff(b.display.rst, HIGH);
-  holdRailOff(b.display.powerEnable, LOW);
+  // EpdBus::begin() before the reset pulse.
+  holdRailLevel(b.display.rst, HIGH);
+  // Keep battery-latch rails asserted while the switchable peripherals sleep.
+  holdRailLevel(b.power.latch0, HIGH);
+  holdRailLevel(b.power.latch1, HIGH);
+  holdRailLevel(b.display.powerEnable, LOW);
   // SD enable OFF = the inactive level: LOW for active-high enables, HIGH for the
   // active-low ones (e.g. X4 Pro's GPIO5, which powers the card while held LOW).
-  holdRailOff(b.sd.powerEnable, b.sd.powerActiveHigh ? LOW : HIGH);
-  holdRailOff(b.touch.powerEnable, b.touch.powerEnableActiveHigh ? LOW : HIGH);
+  holdRailLevel(b.sd.powerEnable, b.sd.powerActiveHigh ? LOW : HIGH);
+  holdRailLevel(b.touch.powerEnable, b.touch.powerEnableActiveHigh ? LOW : HIGH);
   // The mic enable also carries a polarity flag; OFF is the inactive level.
-  holdRailOff(b.mic.enable, b.mic.enableActiveHigh ? LOW : HIGH);
+  holdRailLevel(b.mic.enable, b.mic.enableActiveHigh ? LOW : HIGH);
 }
 
 void PowerManager::deepSleep() {

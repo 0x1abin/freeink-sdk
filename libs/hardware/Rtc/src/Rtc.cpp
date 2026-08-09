@@ -1,8 +1,7 @@
 #include "Rtc.h"
 
-#include <time.h>
-
 #include <BoardConfig.h>
+#include <time.h>
 
 #if FREEINK_CAP_RTC
 
@@ -32,6 +31,11 @@ constexpr uint8_t RX8130_REG_CONTROL0 = 0x1D;
 constexpr uint8_t RX8130_POR_FLAG = 0x80;
 constexpr uint8_t RX8130_STOP = 0x01;
 
+// Epson RX8010SJ register map.
+constexpr uint8_t RX8010_REG_TIME = 0x10;
+constexpr uint8_t RX8010_REG_FLAG = 0x1E;
+constexpr uint8_t RX8010_FLAG_VLF = 0x02;
+
 bool g_wireReady[2] = {false, false};
 TwoWire& sensorWire() {
   const auto& s = BoardConfig::ACTIVE.sensors;
@@ -56,8 +60,9 @@ void ensureWire() {
   g_wireReady[bus] = true;
 }
 
-uint8_t bcdToDec(uint8_t v) { return static_cast<uint8_t>((v >> 4) * 10U + (v & 0x0FU)); }
-uint8_t decToBcd(uint8_t v) { return static_cast<uint8_t>((v / 10U) << 4 | (v % 10U)); }
+constexpr uint8_t bcdToDec(uint8_t v) { return static_cast<uint8_t>((v >> 4) * 10U + (v & 0x0FU)); }
+constexpr uint8_t decToBcd(uint8_t v) { return static_cast<uint8_t>((v / 10U) << 4 | (v % 10U)); }
+static_assert(bcdToDec(0x59) == 59 && decToBcd(59) == 0x59, "RTC BCD conversion must round-trip");
 
 bool writeReg(uint8_t addr, uint8_t reg, uint8_t value) {
   ensureWire();
@@ -99,6 +104,9 @@ bool Rtc::begin() {
       break;
     case BoardConfig::RtcType::Rx8130:
       if (!readRegs(addr, RX8130_REG_CONTROL0, &status, 1)) return false;
+      break;
+    case BoardConfig::RtcType::Rx8010:
+      if (!readRegs(addr, RX8010_REG_FLAG, &status, 1)) return false;
       break;
     case BoardConfig::RtcType::None:
       return false;
@@ -163,6 +171,25 @@ bool Rtc::now(DateTime& out) {
       out.year = static_cast<uint16_t>(2000 + bcdToDec(raw[6]));
       return true;
     }
+    case BoardConfig::RtcType::Rx8010: {
+      uint8_t flag = 0;
+      if (!readRegs(addr, RX8010_REG_FLAG, &flag, 1) || (flag & RX8010_FLAG_VLF)) return false;
+      if (!readRegs(addr, RX8010_REG_TIME, raw, sizeof(raw))) return false;
+      out.second = bcdToDec(raw[0] & 0x7FU);
+      out.minute = bcdToDec(raw[1] & 0x7FU);
+      out.hour = bcdToDec(raw[2] & 0x3FU);
+      out.weekday = 0;
+      for (uint8_t i = 0; i < 7; ++i) {
+        if (raw[3] & (1u << i)) {
+          out.weekday = i;
+          break;
+        }
+      }
+      out.day = bcdToDec(raw[4] & 0x3FU);
+      out.month = bcdToDec(raw[5] & 0x1FU);
+      out.year = static_cast<uint16_t>(2000 + bcdToDec(raw[6]));
+      return true;
+    }
     case BoardConfig::RtcType::None:
       return false;
   }
@@ -196,8 +223,11 @@ bool Rtc::set(const DateTime& dt) {
     const bool restarted = writeReg(addr, RX8130_REG_CONTROL0, static_cast<uint8_t>(control & ~RX8130_STOP));
     return written && restarted;
   }
+  const uint8_t timeReg = s.rtcType == BoardConfig::RtcType::Rx8010
+                              ? RX8010_REG_TIME
+                              : (s.rtcType == BoardConfig::RtcType::Pcf8563 ? PCF8563_REG_TIME : DS3231_REG_TIME);
   wire.beginTransmission(addr);
-  wire.write(s.rtcType == BoardConfig::RtcType::Pcf8563 ? PCF8563_REG_TIME : DS3231_REG_TIME);
+  wire.write(timeReg);
   wire.write(decToBcd(dt.second));  // also clears VL once a valid time is written
   wire.write(decToBcd(dt.minute));
   wire.write(decToBcd(dt.hour));
@@ -205,8 +235,12 @@ bool Rtc::set(const DateTime& dt) {
     wire.write(decToBcd(dt.day));
     wire.write(decToBcd(dt.weekday));
     wire.write(static_cast<uint8_t>(decToBcd(dt.month) | centuryBit));
-  } else {
+  } else if (s.rtcType == BoardConfig::RtcType::Ds3231) {
     wire.write(decToBcd(dt.weekday == 0 ? 7 : dt.weekday));
+    wire.write(decToBcd(dt.day));
+    wire.write(decToBcd(dt.month));
+  } else {
+    wire.write(static_cast<uint8_t>(1u << (dt.weekday % 7u)));
     wire.write(decToBcd(dt.day));
     wire.write(decToBcd(dt.month));
   }
@@ -216,6 +250,11 @@ bool Rtc::set(const DateTime& dt) {
     uint8_t status = 0;
     if (readRegs(addr, DS3231_REG_STATUS, &status, 1)) {
       writeReg(addr, DS3231_REG_STATUS, static_cast<uint8_t>(status & ~DS3231_STATUS_OSF));
+    }
+  } else if (s.rtcType == BoardConfig::RtcType::Rx8010) {
+    uint8_t status = 0;
+    if (readRegs(addr, RX8010_REG_FLAG, &status, 1)) {
+      writeReg(addr, RX8010_REG_FLAG, static_cast<uint8_t>(status & ~RX8010_FLAG_VLF));
     }
   }
   return true;
