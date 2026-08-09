@@ -652,13 +652,13 @@ void testBatteryIndicator() {
   CHECK_EQ(charge.rect.width, 9);  // cavity is 18 wide at 50%
   CHECK(charge.paint == PaintKind::Solid);
 
-  // Charging without an icon keeps the solid fill and overlays a bolt.
+  // Charging without an icon keeps the solid fill and overlays a bitmap bolt.
   FakeDrawTarget draw2;
   Frame<4> frame2(draw2, device, input, interactions);
   props.charging = true;
   batteryIndicator(frame2, Rect{400, 0, 80, 20}, props);
   CHECK(draw2.ops[2].paint == PaintKind::Solid);
-  CHECK_EQ(draw2.countKind(FakeDrawTarget::Op::Triangle), 2u);
+  CHECK_EQ(draw2.countKind(FakeDrawTarget::Op::Bitmap), 1u);
 
   // Percent above 100 clamps to a full cavity.
   FakeDrawTarget draw3;
@@ -1194,14 +1194,14 @@ void testThemePrimitiveParity() {
   CHECK_EQ(draw4.countKind(FakeDrawTarget::Op::Line), 1u);
   CHECK_EQ(draw4.countKind(FakeDrawTarget::Op::Bitmap), 1u);
 
-  // Charging battery draws a bolt (two triangles) instead of a dithered fill.
+  // Charging battery draws one bitmap bolt instead of a dithered fill.
   FakeDrawTarget draw5;
   Frame<16> frame5(draw5, device, input, interactions);
   BatteryIndicatorProps battery;
   battery.percent = 80;
   battery.charging = true;
   batteryIndicator(frame5, Rect{400, 0, 80, 20}, battery);
-  CHECK_EQ(draw5.countKind(FakeDrawTarget::Op::Triangle), 2u);
+  CHECK_EQ(draw5.countKind(FakeDrawTarget::Op::Bitmap), 1u);
 }
 
 
@@ -2359,7 +2359,7 @@ void testHeaderBorderEdges() {
   // The themed header supplies a 1px divider when the theme's popup style has
   // no border of its own, so default headers match the documented divider.
   screen.header("Top");
-  CHECK_EQ(draw.countKind(FakeDrawTarget::Op::Line), 1u);
+  CHECK_EQ(draw.countKind(FakeDrawTarget::Op::Fill), 2u);  // background + bottom divider
   CHECK_EQ(draw.countKind(FakeDrawTarget::Op::Stroke), 0u);
 
   FakeDrawTarget boxedDraw;
