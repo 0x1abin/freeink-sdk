@@ -1387,7 +1387,7 @@ constexpr BoardProfile MOFEI_M4 = {
      45,
      true,
      false,
-     false,
+     true,
      false,
      false},
     {47, 1000, 8, true, 48},
