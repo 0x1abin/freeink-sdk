@@ -1,8 +1,7 @@
 #include "Rtc.h"
 
-#include <time.h>
-
 #include <BoardConfig.h>
+#include <time.h>
 
 #if FREEINK_CAP_RTC
 
@@ -26,7 +25,13 @@ constexpr uint8_t DS3231_REG_STATUS = 0x0F;
 constexpr uint8_t DS3231_CONTROL_INTCN = 0x04;
 constexpr uint8_t DS3231_STATUS_OSF = 0x80;
 
-// Epson RX8010SJ register map (Mofei M4).
+// RX8130CE register map (Paper Mono / PaperS3).
+constexpr uint8_t RX8130_REG_TIME = 0x10;
+constexpr uint8_t RX8130_REG_CONTROL0 = 0x1D;
+constexpr uint8_t RX8130_POR_FLAG = 0x80;
+constexpr uint8_t RX8130_STOP = 0x01;
+
+// Epson RX8010SJ register map.
 constexpr uint8_t RX8010_REG_TIME = 0x10;
 constexpr uint8_t RX8010_REG_FLAG = 0x1E;
 constexpr uint8_t RX8010_FLAG_VLF = 0x02;
@@ -97,6 +102,9 @@ bool Rtc::begin() {
       if (!readRegs(addr, DS3231_REG_STATUS, &status, 1)) return false;
       writeReg(addr, DS3231_REG_CONTROL, DS3231_CONTROL_INTCN);  // disable square-wave output
       break;
+    case BoardConfig::RtcType::Rx8130:
+      if (!readRegs(addr, RX8130_REG_CONTROL0, &status, 1)) return false;
+      break;
     case BoardConfig::RtcType::Rx8010:
       if (!readRegs(addr, RX8010_REG_FLAG, &status, 1)) return false;
       break;
@@ -145,6 +153,24 @@ bool Rtc::now(DateTime& out) {
       out.year = static_cast<uint16_t>(2000 + bcdToDec(raw[6]));
       return true;
     }
+    case BoardConfig::RtcType::Rx8130: {
+      if (!readRegs(addr, RX8130_REG_TIME, raw, sizeof(raw))) return false;
+      if (raw[0] & RX8130_POR_FLAG) return false;
+      out.second = bcdToDec(raw[0] & 0x7FU);
+      out.minute = bcdToDec(raw[1] & 0x7FU);
+      out.hour = bcdToDec(raw[2] & 0x3FU);
+      out.weekday = 0;
+      for (uint8_t i = 0; i < 7; ++i) {
+        if (raw[3] & (1u << i)) {
+          out.weekday = i;
+          break;
+        }
+      }
+      out.day = bcdToDec(raw[4] & 0x3FU);
+      out.month = bcdToDec(raw[5] & 0x1FU);
+      out.year = static_cast<uint16_t>(2000 + bcdToDec(raw[6]));
+      return true;
+    }
     case BoardConfig::RtcType::Rx8010: {
       uint8_t flag = 0;
       if (!readRegs(addr, RX8010_REG_FLAG, &flag, 1) || (flag & RX8010_FLAG_VLF)) return false;
@@ -153,9 +179,9 @@ bool Rtc::now(DateTime& out) {
       out.minute = bcdToDec(raw[1] & 0x7FU);
       out.hour = bcdToDec(raw[2] & 0x3FU);
       out.weekday = 0;
-      for (uint8_t day = 0; day < 7; ++day) {
-        if (raw[3] & (1U << day)) {
-          out.weekday = day;
+      for (uint8_t i = 0; i < 7; ++i) {
+        if (raw[3] & (1u << i)) {
+          out.weekday = i;
           break;
         }
       }
@@ -177,20 +203,29 @@ bool Rtc::set(const DateTime& dt) {
   const uint8_t centuryBit = dt.year < 2000 ? 0x80U : 0x00U;
   ensureWire();
   auto& wire = sensorWire();
-  uint8_t timeReg = 0;
-  switch (s.rtcType) {
-    case BoardConfig::RtcType::Pcf8563:
-      timeReg = PCF8563_REG_TIME;
-      break;
-    case BoardConfig::RtcType::Ds3231:
-      timeReg = DS3231_REG_TIME;
-      break;
-    case BoardConfig::RtcType::Rx8010:
-      timeReg = RX8010_REG_TIME;
-      break;
-    case BoardConfig::RtcType::None:
+  if (s.rtcType == BoardConfig::RtcType::None) return false;
+  if (s.rtcType == BoardConfig::RtcType::Rx8130) {
+    uint8_t control = 0;
+    if (!readRegs(addr, RX8130_REG_CONTROL0, &control, 1) ||
+        !writeReg(addr, RX8130_REG_CONTROL0, static_cast<uint8_t>(control | RX8130_STOP))) {
       return false;
+    }
+    wire.beginTransmission(addr);
+    wire.write(RX8130_REG_TIME);
+    wire.write(decToBcd(dt.second));
+    wire.write(decToBcd(dt.minute));
+    wire.write(decToBcd(dt.hour));
+    wire.write(static_cast<uint8_t>(1u << (dt.weekday % 7u)));
+    wire.write(decToBcd(dt.day));
+    wire.write(decToBcd(dt.month));
+    wire.write(decToBcd(static_cast<uint8_t>(dt.year % 100)));
+    const bool written = wire.endTransmission() == 0;
+    const bool restarted = writeReg(addr, RX8130_REG_CONTROL0, static_cast<uint8_t>(control & ~RX8130_STOP));
+    return written && restarted;
   }
+  const uint8_t timeReg = s.rtcType == BoardConfig::RtcType::Rx8010
+                              ? RX8010_REG_TIME
+                              : (s.rtcType == BoardConfig::RtcType::Pcf8563 ? PCF8563_REG_TIME : DS3231_REG_TIME);
   wire.beginTransmission(addr);
   wire.write(timeReg);
   wire.write(decToBcd(dt.second));  // also clears VL once a valid time is written
@@ -205,7 +240,7 @@ bool Rtc::set(const DateTime& dt) {
     wire.write(decToBcd(dt.day));
     wire.write(decToBcd(dt.month));
   } else {
-    wire.write(static_cast<uint8_t>(1U << (dt.weekday % 7U)));
+    wire.write(static_cast<uint8_t>(1u << (dt.weekday % 7u)));
     wire.write(decToBcd(dt.day));
     wire.write(decToBcd(dt.month));
   }
@@ -217,9 +252,9 @@ bool Rtc::set(const DateTime& dt) {
       writeReg(addr, DS3231_REG_STATUS, static_cast<uint8_t>(status & ~DS3231_STATUS_OSF));
     }
   } else if (s.rtcType == BoardConfig::RtcType::Rx8010) {
-    uint8_t flag = 0;
-    if (readRegs(addr, RX8010_REG_FLAG, &flag, 1)) {
-      writeReg(addr, RX8010_REG_FLAG, static_cast<uint8_t>(flag & ~RX8010_FLAG_VLF));
+    uint8_t status = 0;
+    if (readRegs(addr, RX8010_REG_FLAG, &status, 1)) {
+      writeReg(addr, RX8010_REG_FLAG, static_cast<uint8_t>(status & ~RX8010_FLAG_VLF));
     }
   }
   return true;

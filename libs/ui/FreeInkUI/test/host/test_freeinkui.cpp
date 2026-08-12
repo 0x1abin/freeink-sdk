@@ -1194,7 +1194,7 @@ void testThemePrimitiveParity() {
   CHECK_EQ(draw4.countKind(FakeDrawTarget::Op::Line), 1u);
   CHECK_EQ(draw4.countKind(FakeDrawTarget::Op::Bitmap), 1u);
 
-  // Charging battery draws a bitmap bolt instead of a dithered fill.
+  // Charging battery draws one bitmap bolt instead of a dithered fill.
   FakeDrawTarget draw5;
   Frame<16> frame5(draw5, device, input, interactions);
   BatteryIndicatorProps battery;
@@ -2359,7 +2359,7 @@ void testHeaderBorderEdges() {
   // The themed header supplies a 1px divider when the theme's popup style has
   // no border of its own, so default headers match the documented divider.
   screen.header("Top");
-  CHECK_EQ(draw.countKind(FakeDrawTarget::Op::Fill), 2u);  // background + bottom divider band
+  CHECK_EQ(draw.countKind(FakeDrawTarget::Op::Fill), 2u);  // background + bottom divider
   CHECK_EQ(draw.countKind(FakeDrawTarget::Op::Stroke), 0u);
 
   FakeDrawTarget boxedDraw;

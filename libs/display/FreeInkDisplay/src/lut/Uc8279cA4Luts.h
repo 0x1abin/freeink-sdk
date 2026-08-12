@@ -1,17 +1,13 @@
 #pragma once
 
-// EEGO A4 UC8279C waveforms extracted verbatim from the user-supplied
-// CrossLink v1.0.10 application image. Its fast bank is what gives that firmware the
-// substantially better page-turn behavior than the official firmware. The
-// full bank was independently confirmed byte-for-byte in official 1.2.7.
-// Full refresh writes all 49 bytes of each record to controller registers
-// 0x20..0x24; CrossLink's fast loader sends the first 42 bytes of each 49-byte
-// record, and its grayscale loader uses five packed 42-byte records.
+// EEGO A4 UC8279C waveform tables. Full refresh writes all 49 bytes of each
+// record to controller registers 0x20..0x24. Fast refresh writes the first
+// 42 bytes of each 49-byte record; grayscale uses five packed 42-byte records.
 // Raw 245-byte record-bank SHA-256:
 // 1ed90690ea30f78caf3e89c96693314e60023dcb9bc0257099d56fadc0ae1ed0
-// CrossLink fast bank SHA-256:
+// Fast bank SHA-256:
 // 6bcb79bc45c53071254275623cd3e99ba7e21c913b892f1731b835694e2773ca
-// CrossLink grayscale bank SHA-256:
+// Grayscale bank SHA-256:
 // c38ac9c0085d1fe35c50d3632e8d58474a59093a9b03ce25adc84929ffab731b
 
 #include <Arduino.h>

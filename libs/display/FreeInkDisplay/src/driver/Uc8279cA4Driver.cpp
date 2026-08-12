@@ -29,9 +29,8 @@ constexpr uint8_t CMD_TCON = 0xe1;
 
 constexpr uint16_t CONTROLLER_HEIGHT = 600;
 constexpr uint16_t PADDING_ROWS = 48;
-// The CrossLink fast waveform is intentionally light and accumulates visible
-// residue on this panel. Cap every run at four fast paints; the fifth uses the
-// shared OEM/CrossLink full bank even when an app screen requested Fast.
+// The fast waveform is intentionally light and accumulates visible residue on
+// this panel. Cap every run at four fast paints; the fifth uses the full bank.
 constexpr uint8_t MAX_CONSECUTIVE_FAST_REFRESHES = 4;
 static_assert(CONTROLLER_HEIGHT - PADDING_ROWS == 552, "EEGO A4 framebuffer/padding mismatch");
 }  // namespace
@@ -50,8 +49,7 @@ PanelGeometry Uc8279cA4Driver::geometry() const {
 }
 
 void Uc8279cA4Driver::hardwareReset(EpdBus& bus) {
-  // Exact timing recovered from the OEM binary (EpdBus's generic 2-ms low pulse
-  // is too short for this panel).
+  // EpdBus's generic 2-ms low pulse is too short for this panel.
   const int8_t rst = bus.pins().rst;
   digitalWrite(rst, HIGH);
   delay(20);
@@ -83,8 +81,8 @@ void Uc8279cA4Driver::initController(EpdBus& bus, const bool grayMode) {
   bus.cmdData(CMD_TCON, &tcon, 1);
 
   if (grayMode) {
-    // CrossLink's 4-gray path uses a lower drive setup and powers the panel
-    // before seeding DTM1. Preserve that order exactly.
+    // Four-gray drive uses a lower power setup and powers the panel before
+    // seeding DTM1. Preserve that order exactly.
     bus.cmd(CMD_POWER_ON);
     bus.waitBusy(" A4 gray power-on");
     fillControllerRam(bus, CMD_DTM1, 0xff);
@@ -106,8 +104,8 @@ void Uc8279cA4Driver::ensurePowerOn(EpdBus& bus) {
 }
 
 void Uc8279cA4Driver::loadFullLut(EpdBus& bus) {
-  const uint8_t* const lut[] = {
-      A4_UC8279C_LUT_20, A4_UC8279C_LUT_21, A4_UC8279C_LUT_22, A4_UC8279C_LUT_23, A4_UC8279C_LUT_24};
+  const uint8_t* const lut[] = {A4_UC8279C_LUT_20, A4_UC8279C_LUT_21, A4_UC8279C_LUT_22, A4_UC8279C_LUT_23,
+                                A4_UC8279C_LUT_24};
   for (uint8_t i = 0; i < 5; ++i) {
     bus.cmdData(static_cast<uint8_t>(CMD_LUT_VCOM + i), lut[i], A4_UC8279C_LUT_LENGTH);
   }
@@ -115,16 +113,14 @@ void Uc8279cA4Driver::loadFullLut(EpdBus& bus) {
 
 void Uc8279cA4Driver::loadFastLut(EpdBus& bus) {
   for (uint8_t i = 0; i < 5; ++i) {
-    bus.cmdData(static_cast<uint8_t>(CMD_LUT_VCOM + i),
-                A4_UC8279C_FAST_LUT + i * A4_UC8279C_FAST_RECORD_LENGTH,
+    bus.cmdData(static_cast<uint8_t>(CMD_LUT_VCOM + i), A4_UC8279C_FAST_LUT + i * A4_UC8279C_FAST_RECORD_LENGTH,
                 A4_UC8279C_FAST_WRITE_LENGTH);
   }
 }
 
 void Uc8279cA4Driver::loadGrayLut(EpdBus& bus) {
   for (uint8_t i = 0; i < 5; ++i) {
-    bus.cmdData(static_cast<uint8_t>(CMD_LUT_VCOM + i),
-                A4_UC8279C_GRAY_LUT + i * A4_UC8279C_GRAY_RECORD_LENGTH,
+    bus.cmdData(static_cast<uint8_t>(CMD_LUT_VCOM + i), A4_UC8279C_GRAY_LUT + i * A4_UC8279C_GRAY_RECORD_LENGTH,
                 A4_UC8279C_GRAY_RECORD_LENGTH);
   }
 }
@@ -181,12 +177,11 @@ void Uc8279cA4Driver::display(EpdBus& bus, const uint8_t* fb, const uint8_t* pre
   const uint8_t interval = fast ? 0xd7 : 0x97;
   bus.cmdData(CMD_VCOM_DATA_INTERVAL, &interval, 1);
   if (fast) {
-    // Exact 245-byte CrossLink v1.0.10 bank. The third-party firmware sends
-    // the first 42 bytes of each 49-byte record.
+    // Fast mode sends the first 42 bytes of each 49-byte record.
     loadFastLut(bus);
   } else {
     // HALF is CrossPoint's periodic ghost-cleanup cadence on this target.
-    // Treat it as a complete refresh, like CrossLink's non-fast branch.
+    // Treat it as a complete refresh.
     loadFullLut(bus);
   }
   writeFrame(bus, CMD_DTM2, fb);
@@ -217,8 +212,8 @@ void Uc8279cA4Driver::copyGrayscaleMsb(EpdBus& bus, const uint8_t* msb) {
   if (_grayMsb) memcpy(_grayMsb, msb, static_cast<size_t>(_widthBytes) * _height);
 }
 
-void Uc8279cA4Driver::displayGray(EpdBus& bus, const uint8_t* fb, const bool turnOff,
-                                  const unsigned char* lut, const bool factoryMode) {
+void Uc8279cA4Driver::displayGray(EpdBus& bus, const uint8_t* fb, const bool turnOff, const unsigned char* lut,
+                                  const bool factoryMode) {
   (void)fb;
   (void)lut;
   (void)factoryMode;
@@ -228,8 +223,8 @@ void Uc8279cA4Driver::displayGray(EpdBus& bus, const uint8_t* fb, const bool tur
 
   hardwareReset(bus);
   initController(bus, true);
-  // CrossLink stores MSB in DTM1 and LSB in DTM2, bottom-up, then appends the
-  // same 48 white gate-padding rows used by its normal framebuffer path.
+  // Store MSB in DTM1 and LSB in DTM2, bottom-up, then append the same 48 white
+  // gate-padding rows used by the normal framebuffer path.
   writeFrame(bus, CMD_DTM1, _grayMsb);
   writeFrame(bus, CMD_DTM2, _grayLsb);
   loadGrayLut(bus);
@@ -241,7 +236,7 @@ void Uc8279cA4Driver::cleanupGrayscaleBuffers(EpdBus& bus, const uint8_t* bw) {
   if (!bw || !_screenOn) return;
   // This keeps both controller planes coherent for callers that explicitly
   // request cleanup. The next normal display also leaves gray drive mode via
-  // a complete controller re-init before applying CrossLink's fast waveform.
+  // a complete controller re-init before applying the fast waveform.
   writeFrame(bus, CMD_DTM1, bw);
   writeFrame(bus, CMD_DTM2, bw);
 }

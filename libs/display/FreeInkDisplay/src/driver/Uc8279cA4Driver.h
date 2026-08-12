@@ -1,8 +1,8 @@
 #pragma once
 
-// UC8279C panel driver for EEGO A4. The panel controller is 768x600; CrossLink's
-// host framebuffer is 768x552 and every transfer appends 48 white padding rows.
-// The OEM scans framebuffer rows bottom-to-top and uses BUSY active-low.
+// UC8279C panel driver for EEGO A4. The panel controller is 768x600; the host
+// framebuffer is 768x552 and every transfer appends 48 white padding rows.
+// Transfers scan framebuffer rows bottom-to-top and BUSY is active-low.
 
 #include "PanelDriver.h"
 
@@ -21,8 +21,7 @@ class Uc8279cA4Driver : public PanelDriver {
   void display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) override;
   void copyGrayscaleLsb(EpdBus& bus, const uint8_t* lsb) override;
   void copyGrayscaleMsb(EpdBus& bus, const uint8_t* msb) override;
-  void displayGray(EpdBus& bus, const uint8_t* fb, bool turnOff, const unsigned char* lut,
-                   bool factoryMode) override;
+  void displayGray(EpdBus& bus, const uint8_t* fb, bool turnOff, const unsigned char* lut, bool factoryMode) override;
   void cleanupGrayscaleBuffers(EpdBus& bus, const uint8_t* bw) override;
 
  private:
