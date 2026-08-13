@@ -60,13 +60,16 @@
 #ifndef FREEINK_DEVICE_PAPERMONO
 #define FREEINK_DEVICE_PAPERMONO 0
 #endif
+#ifndef FREEINK_DEVICE_PAPERS3
+#define FREEINK_DEVICE_PAPERS3 0
+#endif
 
 // --- 2) Coherence: exactly one MCU family, at least one device ---------------
 #if !(FREEINK_DEVICE_X4 || FREEINK_DEVICE_X3 || FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_M5 || FREEINK_DEVICE_MURPHY || \
       FREEINK_DEVICE_DELINK || FREEINK_DEVICE_LILYGO || FREEINK_DEVICE_M5PAPER || FREEINK_DEVICE_STICKY ||            \
-      FREEINK_DEVICE_PAPERMONO)
+      FREEINK_DEVICE_PAPERMONO || FREEINK_DEVICE_PAPERS3)
 #error \
-    "FreeInk: no device selected. Pass at least one -DFREEINK_DEVICE_<NAME> (X4, X3, X4PRO, M5, MURPHY, DELINK, LILYGO, M5PAPER, STICKY, PAPERMONO) in your build env — see platformio.sample.ini."
+    "FreeInk: no device selected. Pass at least one -DFREEINK_DEVICE_<NAME> (X4, X3, X4PRO, M5, MURPHY, DELINK, LILYGO, M5PAPER, STICKY, PAPERMONO, PAPERS3) in your build env — see platformio.sample.ini."
 #endif
 // Each device belongs to one MCU family; a binary targets exactly one. X3/X4 are
 // ESP32-C3; M5 PaperColor/Murphy/de-link/LilyGo are ESP32-S3; M5Paper v1.1 is the
@@ -75,7 +78,7 @@
 #define FREEINK_MCU_C3 (FREEINK_DEVICE_X3 || FREEINK_DEVICE_X4)
 #define FREEINK_MCU_S3                                                                                    \
   (FREEINK_DEVICE_M5 || FREEINK_DEVICE_MURPHY || FREEINK_DEVICE_DELINK || FREEINK_DEVICE_LILYGO ||        \
-   FREEINK_DEVICE_STICKY || FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_PAPERMONO)
+   FREEINK_DEVICE_STICKY || FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_PAPERMONO || FREEINK_DEVICE_PAPERS3)
 #define FREEINK_MCU_ESP32 (FREEINK_DEVICE_M5PAPER)
 #if (FREEINK_MCU_C3 + FREEINK_MCU_S3 + FREEINK_MCU_ESP32) != 1
 #error \
@@ -142,8 +145,10 @@
 #else
 #define FREEINK_DRIVER_UC8253_MURPHY 0
 #endif
-// LilyGo T5 S3: raw-parallel ED047TC1 via LovyanGFX (M5GFX). External-bus driver.
-#if FREEINK_DEVICE_LILYGO
+// LilyGo T5 S3 and M5Stack PaperS3: raw-parallel ED047TC1 via LovyanGFX (M5GFX).
+// External-bus driver; each board injects its own bus pins/power in an
+// LgfxEpdConfig (PaperS3's rails are plain GPIOs, LilyGo's ride a PMIC+expander).
+#if FREEINK_DEVICE_LILYGO || FREEINK_DEVICE_PAPERS3
 #define FREEINK_DRIVER_LGFX_EPD 1
 #else
 #define FREEINK_DRIVER_LGFX_EPD 0
@@ -165,7 +170,7 @@
 #ifndef FREEINK_CAP_TOUCH
 #define FREEINK_CAP_TOUCH                                                                         \
   (FREEINK_DEVICE_MURPHY || FREEINK_DEVICE_LILYGO || FREEINK_DEVICE_M5PAPER || FREEINK_DEVICE_STICKY || \
-   FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_PAPERMONO)
+   FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_PAPERMONO || FREEINK_DEVICE_PAPERS3)
 #endif
 #ifndef FREEINK_CAP_FRONTLIGHT
 #define FREEINK_CAP_FRONTLIGHT                                                                     \
@@ -246,7 +251,9 @@
 // On-board I2C sensors. Each lib (Rtc / EnvironmentSensor / Imu) compiles its
 // I2C driver only when its flag is set; otherwise it links stub bodies.
 #ifndef FREEINK_CAP_RTC
-#define FREEINK_CAP_RTC (FREEINK_DEVICE_X3 || FREEINK_DEVICE_STICKY || FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_PAPERMONO)
+#define FREEINK_CAP_RTC \
+  (FREEINK_DEVICE_X3 || FREEINK_DEVICE_STICKY || FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_PAPERMONO || \
+   FREEINK_DEVICE_PAPERS3)
 #endif
 #ifndef FREEINK_CAP_TEMP_HUMIDITY
 #define FREEINK_CAP_TEMP_HUMIDITY (FREEINK_DEVICE_STICKY)
@@ -255,10 +262,12 @@
 #define FREEINK_CAP_IMU (FREEINK_DEVICE_X3 || FREEINK_DEVICE_STICKY)
 #endif
 // LEDC PWM buzzer (tone beeper). The Buzzer lib drives the AudioConfig.buzzer
-// pin; on for boards that wire one (Sticky GPIO48, Murphy GPIO46). Separate from
-// FREEINK_CAP_AUDIO — a buzzer is a tone device, not a WAV/codec output.
+// pin; on for boards that wire one (Sticky GPIO48, Murphy GPIO46, PaperS3
+// GPIO21). Separate from FREEINK_CAP_AUDIO — a buzzer is a tone device, not a
+// WAV/codec output.
 #ifndef FREEINK_CAP_BUZZER
-#define FREEINK_CAP_BUZZER (FREEINK_DEVICE_STICKY || FREEINK_DEVICE_MURPHY || FREEINK_DEVICE_PAPERMONO)
+#define FREEINK_CAP_BUZZER \
+  (FREEINK_DEVICE_STICKY || FREEINK_DEVICE_MURPHY || FREEINK_DEVICE_PAPERMONO || FREEINK_DEVICE_PAPERS3)
 #endif
 #ifndef FREEINK_CAP_LED
 #define FREEINK_CAP_LED (FREEINK_DEVICE_M5 || FREEINK_DEVICE_PAPERMONO)
@@ -338,6 +347,7 @@ enum class Board : uint8_t {
   M5PaperV11,
   Sticky,
   PaperMono,
+  M5PaperS3,  // ESP32-S3 sibling of M5Paper v1.1: same ED047TC1 glass, no IT8951 — raw parallel via LovyanGFX
 };
 
 // How the board reports button presses.
@@ -727,6 +737,11 @@ constexpr AudioConfig M5_PAPERCOLOR_AUDIO = {
 constexpr AudioConfig STICKY_AUDIO = {AudioOutput::None,    PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED,
                                       PIN_UNASSIGNED,       PIN_UNASSIGNED, true,           PIN_UNASSIGNED,
                                       PIN_UNASSIGNED,       PIN_UNASSIGNED, 0,              48};
+// M5Stack PaperS3 has no output codec — just the LEDC buzzer on GPIO21 (per the
+// official pin map and M5Unified's buzzer speaker config). Same shape as Sticky.
+constexpr AudioConfig M5_PAPERS3_AUDIO = {AudioOutput::None,    PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED,
+                                          PIN_UNASSIGNED,       PIN_UNASSIGNED, true,           PIN_UNASSIGNED,
+                                          PIN_UNASSIGNED,       PIN_UNASSIGNED, 0,              21};
 constexpr DisplayOrientation NO_FLIP = {false, false};   // native scan
 constexpr DisplayOrientation ROTATE_180 = {true, true};  // upside-down mount
 constexpr DisplayOrientation MIRROR_X = {true, false};   // horizontal mirror
@@ -1111,6 +1126,71 @@ constexpr BoardProfile M5PAPER_V11 = {
     // via holdPowerRails() or the board powers off when USB is unplugged.
     {2}};
 
+// --- M5Stack PaperS3 4.7" (ED047TC1 raw-parallel EPD) — ESP32-S3 ---------------
+// The S3 successor to M5Paper v1.1: the same 960x540 16-gray ED047TC1 glass, but
+// with NO IT8951 — the S3 drives the panel directly over the 8-bit parallel bus,
+// exactly the LilyGo T5 S3 display class, so it shares FREEINK_DRIVER_LGFX_EPD
+// (LovyanGFX Panel_EPD/Bus_EPD via m5stack/M5GFX). Unlike the LilyGo there is no
+// PMIC/expander: the EPD rails are plain GPIOs (OE=45, PWR=46) that Bus_EPD's
+// stock power sequence drives itself, so the board's LgfxEpdConfig
+// (m5PaperS3LgfxConfig, libs/hardware/BoardPaperS3) carries real pins and no
+// power hooks. Pin map cross-checked M5GFX autodetect (board_M5PaperS3) +
+// M5Unified + the official docs; where the docs pinmap disagrees (it labels G45
+// "PWR" and omits G16/G46), M5GFX — the working vendor driver — wins.
+//
+// Inputs: there are NO firmware-readable buttons. The single side button feeds
+// the PMS150G power-latch chip (press = on, 2 s hold = hard off), so paging and
+// all navigation MUST come from the GT911 touch (tap zones/gestures are firmware
+// policy). Power-off is not a latch release either: firmware pulses GPIO44
+// (BoardPaperS3::powerOff()); there is no latch pin to hold.
+//
+// Pending hardware validation: panel rotation (M5GFX defaults the device to
+// portrait via offset_rotation=3; this profile keeps the SDK's native-landscape
+// convention with rotation 0 in the LgfxEpdConfig), touch flipX/flipY +
+// gt911CoordsAtByte0 (no RST wired -> self-configured, like M5Paper v1.1), and
+// the battery divider. IMU is a BMI270 at 0x68 on the internal bus — not a
+// supported ImuType yet, so it is left out of sensors.
+constexpr BoardProfile M5PAPER_S3 = {
+    Board::M5PaperS3,
+    "m5paper_s3",
+    InputStyle::DigitalButtons,  // vacuous: no GPIO buttons exist (see note above)
+    DisplayController::LgfxEpd,
+    960,
+    540,
+    {PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED,
+     PIN_UNASSIGNED},                            // no SPI display pins: parallel bus lives in LgfxEpdConfig
+    0,                                           // displaySpiHz n/a (external bus)
+    {39, 40, 38, 47, PIN_UNASSIGNED, false, 0},  // SD over SPI: SCLK39 MISO40 MOSI38 CS47, no power gate
+    {PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED,
+     PIN_UNASSIGNED, false},  // no GPIO buttons — touch-only navigation
+    3,     // batteryAdc GPIO3 (ADC1_CH2)
+    4,     // batteryChargeStatus GPIO4, LOW = charging (LGS4056H STAT)
+    2.0f,  // divider 2:1 (M5Unified's _adc_ratio; pending hardware validation)
+    5,     // usbDetect GPIO5, HIGH = USB present
+    // GT911 on the internal I2C bus SDA41/SCL42 (shared with the BM8563 RTC +
+    // BMI270 IMU), INT=GPIO48, no reset wired (self-loads its config), 0x5D alt
+    // 0x14. Portrait digitizer (540x960) on the landscape panel -> swapXY, rawMax
+    // in post-swap panel order; flips mirror the LilyGo/M5Paper defaults pending
+    // corner-tap validation. NOTE: GPIO48 is not an RTC IO on the S3, so touch
+    // cannot be a deep-sleep EXT wake source (light-sleep GPIO wake only).
+    {TouchController::Gt911, 41, 42, 48, PIN_UNASSIGNED, 0x5D, 0, 959, 0, 539, false, 0x14, false,
+     true,  // gt911CoordsAtByte0: no reset/config dance, like M5Paper v1.1 (pending validation)
+     PIN_UNASSIGNED, true, false, true},  // powerEnable none, swapXY=true, flipX=false, flipY=true
+    NO_FRONTLIGHT,     // e-paper, no frontlight (the GPIO0 status LED is board-support)
+    M5_PAPERS3_AUDIO,  // no output codec; LEDC buzzer on GPIO21 (Buzzer lib)
+    NO_LEDS,           // single PWM LED on GPIO0 is not an addressable strip — board-support
+    NO_FLIP,
+    NO_SDMMC,  // SD is SPI, not SDMMC
+    NO_GAUGE,  // ADC battery (GPIO3 above), no I2C fuel gauge
+    NO_MIC,
+    // BM8563 RTC (PCF8563 register-compatible) at 0x51 on the internal bus
+    // SDA41/SCL42, shared with the GT911 — bus 0 (Wire), like the X4 Pro's shared
+    // touch/RTC bus. The RTC INT line feeds the PMS150G power latch (wake-from-off
+    // via Rtc alarm), not an ESP32 GPIO. BMI270 IMU (0x68) unsupported — omitted.
+    {41, 42, 400000, 0x51, 0, 0, 0, RtcType::Pcf8563, ImuType::None},
+    1.2f,  // uiScale: 4.7" 960x540 touch (~234 PPI) — finger-sized chrome, like LilyGo/M5Paper
+    {}};   // no power latch: the PMS150G self-latches; off = GPIO44 pulse (BoardPaperS3::powerOff)
+
 // --- Sticky (Seeed Sticky) — ESP32-S3R8, SSD1677 + GT911 touch ---------------
 // 3.97" 800x480 B/W e-paper on a 24-pin FPC, controller confirmed SSD1677 by the
 // vendor peripheral demo (pin_config.h: "E-paper SSD1677 (SPI)") — same driver,
@@ -1309,8 +1389,9 @@ constexpr uint32_t MAX_FRAMEBUFFER_BYTES = cmax(
                    FREEINK_DEVICE_LILYGO ? panelBytes(LILYGO_T5S3) : 0u),
               cmax(FREEINK_DEVICE_M5PAPER ? panelBytes(M5PAPER_V11) : 0u,
                    FREEINK_DEVICE_X4PRO ? panelBytes(XTEINK_X4_PRO) : 0u)),
-         cmax(FREEINK_DEVICE_STICKY ? panelBytes(STICKY) : 0u,
-              FREEINK_DEVICE_PAPERMONO ? panelBytes(PAPER_MONO) : 0u)));
+         cmax(cmax(FREEINK_DEVICE_STICKY ? panelBytes(STICKY) : 0u,
+                   FREEINK_DEVICE_PAPERMONO ? panelBytes(PAPER_MONO) : 0u),
+              FREEINK_DEVICE_PAPERS3 ? panelBytes(M5PAPER_S3) : 0u)));
 
 // Compile-time default device — the profile ACTIVE starts as. With a single
 // device in the build this is the only device; with several same-MCU devices it
@@ -1327,6 +1408,8 @@ constexpr BoardProfile DEFAULT_DEVICE = DE_LINK;
 constexpr BoardProfile DEFAULT_DEVICE = LILYGO_T5S3;
 #elif FREEINK_DEVICE_M5PAPER
 constexpr BoardProfile DEFAULT_DEVICE = M5PAPER_V11;
+#elif FREEINK_DEVICE_PAPERS3
+constexpr BoardProfile DEFAULT_DEVICE = M5PAPER_S3;
 #elif FREEINK_DEVICE_STICKY
 constexpr BoardProfile DEFAULT_DEVICE = STICKY;
 #elif FREEINK_DEVICE_X4PRO
@@ -1403,6 +1486,11 @@ inline bool selectDevice(Board which) {
       ACTIVE = PAPER_MONO;
       return true;
 #endif
+#if FREEINK_DEVICE_PAPERS3
+    case Board::M5PaperS3:
+      ACTIVE = M5PAPER_S3;
+      break;
+#endif
     default:
       return false;
   }
@@ -1418,6 +1506,7 @@ inline bool isM5StackPaperColor() { return ACTIVE.board == Board::M5StackPaperCo
 inline bool isMurphyM3() { return ACTIVE.board == Board::MurphyM3; }
 inline bool isDeLink() { return ACTIVE.board == Board::DeLink; }
 inline bool isM5PaperV11() { return ACTIVE.board == Board::M5PaperV11; }
+inline bool isM5PaperS3() { return ACTIVE.board == Board::M5PaperS3; }
 inline bool isSticky() { return ACTIVE.board == Board::Sticky; }
 inline bool isX4Pro() { return ACTIVE.board == Board::XteinkX4Pro; }
 inline bool isPaperMono() { return ACTIVE.board == Board::PaperMono; }
