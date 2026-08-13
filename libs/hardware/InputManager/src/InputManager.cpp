@@ -1015,12 +1015,7 @@ void InputManager::pollFt5x06(const unsigned long now) {
     // But a controller that has stopped answering (rail glitch) must not
     // leave the contact latched — release once samples go stale.
     constexpr unsigned long STALE_RELEASE_MS = 100;
-    if (touchPressed && now - touchPoint.timestamp > STALE_RELEASE_MS) {
-      touchPressed = false;
-      touchPoint.valid = false;
-      touchReleasedEvent = true;
-      lastTouchHeldDurationMs = now - touchDownPoint.timestamp;
-    }
+    if (touchPressed && now - touchPoint.timestamp > STALE_RELEASE_MS) releaseTouch(now);
     return;
   }
   if ((data[0] & 0x0F) == 0) {
@@ -1028,10 +1023,7 @@ void InputManager::pollFt5x06(const unsigned long now) {
     // controller's zero-contact frame as authoritative; waiting only for the
     // GPIO to rise leaves touchPressed latched and drops every later tap.
     if (touchPressed) {
-      touchPressed = false;
-      touchPoint.valid = false;
-      touchReleasedEvent = true;
-      lastTouchHeldDurationMs = now - touchDownPoint.timestamp;
+      releaseTouch(now);
 #ifdef TOUCH_PROBE_DEBUG
       touchDebugPrintf("[touch] FT release via TD_STATUS=0 held=%lums\n", lastTouchHeldDurationMs);
 #endif
@@ -1040,37 +1032,13 @@ void InputManager::pollFt5x06(const unsigned long now) {
   }
   const uint16_t rawX = static_cast<uint16_t>((data[1] & 0x0F) << 8) | data[2];
   const uint16_t rawY = static_cast<uint16_t>((data[3] & 0x0F) << 8) | data[4];
-  const uint16_t sx = t.swapXY ? rawY : rawX;
-  const uint16_t sy = t.swapXY ? rawX : rawY;
-
-  touchPoint.valid = true;
-  touchPoint.x = mapTouchAxis(sx, t.rawMinX, t.rawMaxX, t.rawMaxX - t.rawMinX);
-  touchPoint.y = mapTouchAxis(sy, t.rawMinY, t.rawMaxY, t.rawMaxY - t.rawMinY);
-  if (t.flipX) {
-    touchPoint.x = static_cast<uint16_t>((t.rawMaxX - t.rawMinX) - touchPoint.x);
-  }
-  if (t.flipY) {
-    touchPoint.y = static_cast<uint16_t>((t.rawMaxY - t.rawMinY) - touchPoint.y);
-  }
-  touchPoint.timestamp = now;
-
-  if (!touchPressed) {
-    touchPressed = true;
-    touchPressedEvent = true;
-    touchDownPoint = touchPoint;
-    touchUpPoint = touchPoint;
-    touchMovedBeyondTapSlop = false;
+  const bool firstContact = !touchPressed;
+  updateTouchContact(mapTouchPoint(rawX, rawY, now));
 #ifdef TOUCH_PROBE_DEBUG
+  if (firstContact) {
     touchDebugPrintf("[touch] FT press raw=(%u,%u) panel=(%u,%u)\n", rawX, rawY, touchPoint.x, touchPoint.y);
-#endif
-  } else {
-    touchUpPoint = touchPoint;
-    const int dx = static_cast<int>(touchUpPoint.x) - static_cast<int>(touchDownPoint.x);
-    const int dy = static_cast<int>(touchUpPoint.y) - static_cast<int>(touchDownPoint.y);
-    if (absInt(dx) > TOUCH_TAP_SLOP_PX || absInt(dy) > TOUCH_TAP_SLOP_PX) {
-      touchMovedBeyondTapSlop = true;
-    }
   }
+#endif
 }
 
 // --- FT6336U (Mofei M4) -----------------------------------------------------
@@ -1528,49 +1496,18 @@ void InputManager::pollGt911(const unsigned long now) {
       const uint8_t o = BoardConfig::ACTIVE.touch.gt911CoordsAtByte0 ? 0 : 1;
       const uint16_t rawX = static_cast<uint16_t>(pt[o]) | (static_cast<uint16_t>(pt[o + 1]) << 8);
       const uint16_t rawY = static_cast<uint16_t>(pt[o + 2]) | (static_cast<uint16_t>(pt[o + 3]) << 8);
-      const auto& t = BoardConfig::ACTIVE.touch;
-      touchPoint.valid = true;
-      // Panel-native coordinates (calibrated raw range, touch panel's
-      // orientation); the app maps to its display/logical frame. Correct
-      // digitizer mounting so the touch frame matches the display NATIVE
-      // (panel) frame before any orientation mapping: swap axes first (rotated
-      // 90° sensor), then map with the panel-axis ranges, then per-axis flip.
-      const uint16_t sx = t.swapXY ? rawY : rawX;
-      const uint16_t sy = t.swapXY ? rawX : rawY;
-      touchPoint.x = mapTouchAxis(sx, t.rawMinX, t.rawMaxX, t.rawMaxX - t.rawMinX);
-      touchPoint.y = mapTouchAxis(sy, t.rawMinY, t.rawMaxY, t.rawMaxY - t.rawMinY);
-      if (t.flipX) touchPoint.x = static_cast<uint16_t>((t.rawMaxX - t.rawMinX) - touchPoint.x);
-      if (t.flipY) touchPoint.y = static_cast<uint16_t>((t.rawMaxY - t.rawMinY) - touchPoint.y);
-      touchPoint.timestamp = now;
-      if (!touchPressed) {
-        touchPressedEvent = true;
-        touchDownPoint = touchPoint;  // first contact sample, used for tap
-                                      // routing (wasTouchTap)
-        touchMovedBeyondTapSlop = false;
-      }
-      touchUpPoint = touchPoint;
-      const int dx = static_cast<int>(touchUpPoint.x) - static_cast<int>(touchDownPoint.x);
-      const int dy = static_cast<int>(touchUpPoint.y) - static_cast<int>(touchDownPoint.y);
-      if (absInt(dx) > TOUCH_TAP_SLOP_PX || absInt(dy) > TOUCH_TAP_SLOP_PX) {
-        touchMovedBeyondTapSlop = true;
-      }
+      const bool firstContact = !touchPressed;
+      updateTouchContact(mapTouchPoint(rawX, rawY, now));
 #ifdef TOUCH_PROBE_DEBUG
-      if (!touchPressed)
+      if (firstContact)
         touchDebugPrintf(
             "[touch] press pt=[%02X %02X %02X %02X %02X %02X %02X "
             "%02X] raw=(%u,%u) mapped=(%u,%u)\n",
             pt[0], pt[1], pt[2], pt[3], pt[4], pt[5], pt[6], pt[7], rawX, rawY, touchPoint.x, touchPoint.y);
 #endif
-      touchPressed = true;
     }
   } else {
-    if (touchPressed) {
-      touchReleasedEvent = true;
-      lastTouchHeldDurationMs = now - touchDownPoint.timestamp;
-      touchUpPoint = touchPoint;  // last contact sample, used for swipe routing
-    }
-    touchPressed = false;
-    touchPoint.valid = false;
+    releaseTouch(now);
   }
 
   gt911ClearStatus();  // GT911 requires clearing 0x814E after each read
