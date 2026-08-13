@@ -2569,6 +2569,27 @@ void testTextArea() {
   CHECK(sawCaret);       // caret on the now-visible line 1
 }
 
+void testSwipeGeometry() {
+  CHECK_EQ(swipeDirection(20, 20, 80, 30), SwipeDir::Right);
+  CHECK_EQ(swipeDirection(80, 20, 20, 30), SwipeDir::Left);
+  CHECK_EQ(swipeDirection(20, 80, 30, 20), SwipeDir::Up);
+  CHECK_EQ(swipeDirection(20, 20, 30, 80), SwipeDir::Down);
+  CHECK_EQ(swipeDirection(20, 20, 80, 80), SwipeDir::Right);  // ties are horizontal
+
+  constexpr int width = 800;
+  constexpr int height = 480;
+  CHECK(edgeSwipe(ScreenEdge::Left, 200, 200, 300, 210, width, height));
+  CHECK(!edgeSwipe(ScreenEdge::Left, 201, 200, 301, 210, width, height));
+  CHECK(!edgeSwipe(ScreenEdge::Left, 100, 200, 90, 210, width, height));
+  CHECK(edgeSwipe(ScreenEdge::Right, 600, 200, 500, 210, width, height));
+  CHECK(!edgeSwipe(ScreenEdge::Right, 599, 200, 499, 210, width, height));
+  CHECK(edgeSwipe(ScreenEdge::Top, 200, 67, 210, 167, width, height));
+  CHECK(!edgeSwipe(ScreenEdge::Top, 200, 68, 210, 168, width, height));
+  CHECK(edgeSwipe(ScreenEdge::Bottom, 200, 413, 210, 313, width, height));
+  CHECK(!edgeSwipe(ScreenEdge::Bottom, 200, 412, 210, 312, width, height));
+  CHECK(!edgeSwipe(ScreenEdge::Bottom, 200, 413, 300, 313, width, height));
+}
+
 }  // namespace
 
 int main() {
@@ -2635,6 +2656,7 @@ int main() {
   testFreeInkAppDispatchesScreenActions();
   testFreeInkAppHandlerOverflowFlag();
   testTextArea();
+  testSwipeGeometry();
 
   std::printf("%d checks, %d failed\n", checksRun, checksFailed);
   return checksFailed == 0 ? 0 : 1;
