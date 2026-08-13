@@ -419,6 +419,7 @@ class SecureHttpClient {
       _connHttps = true;
     } else {
       _plain.setTimeout(_timeoutMs);
+      _plain.setConnectionTimeout(_timeoutMs);
       if (!_plain.connect(_host.c_str(), _port)) return false;
       _conn = &_plain;
       _connHttps = false;
