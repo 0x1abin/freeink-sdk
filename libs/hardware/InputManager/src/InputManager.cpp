@@ -39,7 +39,11 @@ const int InputManager::ADC_RANGES_2[] = {ADC_NO_BUTTON, 1120, INT32_MIN};
 const char* InputManager::BUTTON_NAMES[] = {"Back", "Confirm", "Left", "Right", "Up", "Down", "Power"};
 
 namespace {
-int absInt(const int value) { return value < 0 ? -value : value; }
+constexpr int absInt(const int value) { return value < 0 ? -value : value; }
+
+constexpr bool movedBeyondSlop(const int dx, const int dy, const int slop) {
+  return absInt(dx) > slop || absInt(dy) > slop;
+}
 
 #if FREEINK_DEVICE_MOFEI_M4
 constexpr uint8_t FT6336_REG_TD_STATUS = 0x02;
@@ -534,7 +538,7 @@ bool InputManager::wasTouchReleased() const { return touchReleasedEvent; }
 bool InputManager::wasTouchTap(float& nx, float& ny) const {
 #if FREEINK_CAP_TOUCH
   if (!touchReleasedEvent) return false;
-  if (touchMovedBeyondTapSlop) return false;
+  if (touchMovedBeyondTapReleaseSlop) return false;
   // Tap position = the FIRST contact sample (touch-down), not the last: the
   // reported centroid drifts 10-20px as a finger rolls off during lift, which
   // made small targets (steppers) feel unreliable with release-point routing.
@@ -883,13 +887,13 @@ void InputManager::updateTouchContact(const TouchPoint& point) {
     touchPressedEvent = true;
     touchDownPoint = point;
     touchMovedBeyondTapSlop = false;
+    touchMovedBeyondTapReleaseSlop = false;
   }
   touchUpPoint = point;
   const int dx = static_cast<int>(touchUpPoint.x) - static_cast<int>(touchDownPoint.x);
   const int dy = static_cast<int>(touchUpPoint.y) - static_cast<int>(touchDownPoint.y);
-  if (absInt(dx) > TOUCH_TAP_SLOP_PX || absInt(dy) > TOUCH_TAP_SLOP_PX) {
-    touchMovedBeyondTapSlop = true;
-  }
+  if (movedBeyondSlop(dx, dy, TOUCH_TAP_SLOP_PX)) touchMovedBeyondTapSlop = true;
+  if (movedBeyondSlop(dx, dy, TOUCH_TAP_RELEASE_SLOP_PX)) touchMovedBeyondTapReleaseSlop = true;
   touchPressed = true;
 }
 

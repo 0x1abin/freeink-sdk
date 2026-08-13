@@ -293,7 +293,8 @@ class InputManager {
   TouchPoint touchDownPoint = {false, 0, 0, 0};  // first sample of the current contact (tap routing)
   TouchPoint touchUpPoint = {false, 0, 0, 0};    // last sample before release (swipe routing)
   unsigned long lastTouchHeldDurationMs = 0;     // contact duration, latched at release
-  bool touchMovedBeyondTapSlop = false;          // suppresses tap activation after a drag/scroll
+  bool touchMovedBeyondTapSlop = false;          // cancels held tap-candidate classification
+  bool touchMovedBeyondTapReleaseSlop = false;   // cancels tap-on-release once motion reaches swipe distance
 
 #if FREEINK_DEVICE_MOFEI_M4
   // The interrupt line cannot signal usable edges on M4. A fixed-size snapshot
@@ -332,6 +333,11 @@ class InputManager {
   static constexpr unsigned long TOUCH_SAMPLE_DELAY_MS = 8;  // I2C poll cadence
   static constexpr int TOUCH_TAP_SLOP_PX = 28;
   static constexpr int TOUCH_SWIPE_MIN_PX = 60;
+  static constexpr int TOUCH_TAP_RELEASE_SLOP_PX = TOUCH_SWIPE_MIN_PX - 1;
+  static_assert(TOUCH_TAP_SLOP_PX == 28);
+  static_assert(TOUCH_TAP_SLOP_PX + 1 == 29);
+  static_assert(TOUCH_TAP_RELEASE_SLOP_PX == 59);
+  static_assert(TOUCH_SWIPE_MIN_PX == 60);
   static constexpr unsigned long TOUCH_SWIPE_MAX_MS = 700;
   static constexpr uint8_t TOUCH_READ_COMMAND = 0x00;
   static constexpr uint8_t TOUCH_FRAME_SIZE = 16;
