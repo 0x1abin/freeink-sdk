@@ -152,6 +152,52 @@ inline Point touchToLogical(const DeviceContext &device, float nx, float ny,
   return Point{static_cast<int16_t>(x), static_cast<int16_t>(y)};
 }
 
+// Pure geometry over swipe endpoints in logical screen coordinates. The app
+// decides what each direction or edge means.
+enum class SwipeDir : uint8_t { None, Left, Right, Up, Down };
+
+inline SwipeDir swipeDirection(const int sx, const int sy, const int ex,
+                               const int ey) {
+  const int dx = ex - sx;
+  const int dy = ey - sy;
+  const int adx = dx < 0 ? -dx : dx;
+  const int ady = dy < 0 ? -dy : dy;
+  if (adx >= ady)
+    return dx < 0 ? SwipeDir::Left : SwipeDir::Right;
+  return dy < 0 ? SwipeDir::Up : SwipeDir::Down;
+}
+
+enum class ScreenEdge : uint8_t { Left, Right, Top, Bottom };
+
+inline constexpr float EDGE_SWIPE_SIDE_FRAC = 0.25f;
+inline constexpr float EDGE_SWIPE_TOP_BOTTOM_FRAC = 0.14f;
+
+inline bool edgeSwipe(const ScreenEdge edge, const int sx, const int sy,
+                      const int ex, const int ey, const int screenW,
+                      const int screenH, float edgeFrac = -1.0f) {
+  if (edgeFrac < 0.0f)
+    edgeFrac = (edge == ScreenEdge::Left || edge == ScreenEdge::Right)
+                   ? EDGE_SWIPE_SIDE_FRAC
+                   : EDGE_SWIPE_TOP_BOTTOM_FRAC;
+  const int dx = ex - sx;
+  const int dy = ey - sy;
+  const int adx = dx < 0 ? -dx : dx;
+  const int ady = dy < 0 ? -dy : dy;
+  switch (edge) {
+  case ScreenEdge::Left:
+    return sx <= static_cast<int>(screenW * edgeFrac) && dx > 0 && adx > ady;
+  case ScreenEdge::Right:
+    return sx >= screenW - static_cast<int>(screenW * edgeFrac) && dx < 0 &&
+           adx > ady;
+  case ScreenEdge::Top:
+    return sy <= static_cast<int>(screenH * edgeFrac) && dy > 0 && ady > adx;
+  case ScreenEdge::Bottom:
+    return sy >= screenH - static_cast<int>(screenH * edgeFrac) && dy < 0 &&
+           ady > adx;
+  }
+  return false;
+}
+
 enum State : uint8_t {
   StateNormal = 0,
   StateSelected = 1 << 0,

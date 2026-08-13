@@ -1094,6 +1094,16 @@ CONFIRM/BACK mapping per board. Long-press and swipe synthesis stay
 app-owned. Apps with their own input layer write the same few lines against
 it.
 
+`InputManager` uses two motion thresholds: moving more than 28 px cancels the
+held tap candidate used for press highlighting, while a completed contact
+remains a tap through 59 px. Motion from 60 px is eligible for swipe
+classification, so finger roll does not create a tap/swipe dead zone.
+
+Apps that already have swipe endpoints in logical screen coordinates can use
+`swipeDirection()` for axis classification and `edgeSwipe()` for bezel-origin
+checks. These helpers are stateless and allocation-free; the app remains the
+owner of the resulting back, menu, home, or paging action.
+
 Touch hit areas are declarative: `minTouchSize` center-expands small targets,
 `ButtonProps.hitPadding` extends a button's tap band per edge (give adjacent
 controls contiguous, non-overlapping bands instead of overlapping centered
