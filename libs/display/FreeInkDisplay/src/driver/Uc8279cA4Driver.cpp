@@ -191,10 +191,7 @@ void Uc8279cA4Driver::display(EpdBus& bus, const uint8_t* fb, const uint8_t* pre
 uint8_t* Uc8279cA4Driver::allocateGrayBuffer() {
   const size_t bytes = static_cast<size_t>(_widthBytes) * _height;
   uint8_t* result = static_cast<uint8_t*>(heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-  if (!result && Serial) {
-    Serial.printf("[display] EEGO A4 grayscale PSRAM allocation failed (%u bytes); keeping BW output\n",
-                  static_cast<unsigned>(bytes));
-  }
+  if (!result) result = static_cast<uint8_t*>(malloc(bytes));
   return result;
 }
 
@@ -202,14 +199,24 @@ void Uc8279cA4Driver::copyGrayscaleLsb(EpdBus& bus, const uint8_t* lsb) {
   (void)bus;
   if (!lsb) return;
   if (!_grayLsb) _grayLsb = allocateGrayBuffer();
-  if (_grayLsb) memcpy(_grayLsb, lsb, static_cast<size_t>(_widthBytes) * _height);
+  if (_grayLsb) {
+    // The A4 gray LUT maps a set bit to the lighter level (keeps the 0xff seed)
+    // while a cleared bit drives the pixel darker. The BW framebuffer uses the
+    // opposite polarity (set bit == dark text), so complement before storing to
+    // render black text on a light background instead of an inverted black page.
+    const size_t n = static_cast<size_t>(_widthBytes) * _height;
+    for (size_t i = 0; i < n; ++i) _grayLsb[i] = static_cast<uint8_t>(~lsb[i]);
+  }
 }
 
 void Uc8279cA4Driver::copyGrayscaleMsb(EpdBus& bus, const uint8_t* msb) {
   (void)bus;
   if (!msb) return;
   if (!_grayMsb) _grayMsb = allocateGrayBuffer();
-  if (_grayMsb) memcpy(_grayMsb, msb, static_cast<size_t>(_widthBytes) * _height);
+  if (_grayMsb) {
+    const size_t n = static_cast<size_t>(_widthBytes) * _height;
+    for (size_t i = 0; i < n; ++i) _grayMsb[i] = static_cast<uint8_t>(~msb[i]);
+  }
 }
 
 void Uc8279cA4Driver::displayGray(EpdBus& bus, const uint8_t* fb, const bool turnOff, const unsigned char* lut,

@@ -36,9 +36,12 @@ class FrontlightManager {
   bool present() const {
 #if FREEINK_CAP_FRONTLIGHT
     // A PMIC-driven frontlight (Paper Mono: PM1 PWM0 -> AW9967) has no ESP
-    // GPIO, so viaPm1Pwm counts as present alongside the LEDC-pin boards.
+    // GPIO, so viaPm1Pwm counts as present alongside the LEDC-pin boards. An
+    // I2C frontlight (LM3630A on the EEGO A4) may be an unpopulated, optional
+    // circuit — only report it after begin() gets an actual ACK.
     return BoardConfig::ACTIVE.frontlight.gpio != BoardConfig::PIN_UNASSIGNED ||
-           BoardConfig::ACTIVE.frontlight.viaPm1Pwm;
+           BoardConfig::ACTIVE.frontlight.viaPm1Pwm ||
+           (BoardConfig::hasI2cFrontlight() && _begun);
 #else
     return false;  // frontlight code not compiled in (FREEINK_CAP_FRONTLIGHT=0)
 #endif
@@ -62,9 +65,16 @@ class FrontlightManager {
 #if FREEINK_CAP_FRONTLIGHT
   // Recompute and write both channels from _brightness + _warmPercent.
   void apply();
+  // LM3630A (I2C) frontlight helpers — see FrontlightManager.cpp.
+  bool lm3630aWrite(uint8_t reg, uint8_t value);
+  bool lm3630aRead(uint8_t reg, uint8_t& value);
+  bool lm3630aUpdate(uint8_t reg, uint8_t mask, uint8_t value);
+  bool configureLm3630a();
+  void applyLm3630a();
 #endif
 
   bool _begun = false;
+  bool _i2cConfigured = false;
   uint8_t _brightness = 0;
   uint8_t _lastBrightness = 50;
   uint8_t _warmPercent = 50;  // neutral by default
