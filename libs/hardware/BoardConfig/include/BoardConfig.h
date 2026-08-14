@@ -1371,6 +1371,7 @@ constexpr BoardProfile EEGO_A4 = {Board::EegoA4,
                                   {2, 1, 400000, 0x51, 0, 0, 0, RtcType::Pcf8563, ImuType::None},
                                   1.2f,
                                   {4},
+                                  0,  // displayControllerVariant (not probed for UC8279C)
                                   // LM3630A on the shared I2C bus (SDA2/SCL1), enable GPIO12.
                                   // Probed at runtime: some retail A4 units have no frontlight.
                                   {I2cFrontlightController::Lm3630a, 2, 1, 400000, 0x36, 12}};
