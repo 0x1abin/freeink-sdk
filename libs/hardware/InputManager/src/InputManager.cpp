@@ -1353,7 +1353,28 @@ void InputManager::pollGslx680(const unsigned long now) {
 
   const uint16_t rawY = rawYWord & 0x0fff;
   const uint16_t rawX = rawXWord & 0x0fff;
-  updateTouchContact(mapTouchPoint(rawX, rawY, now));
+
+  // EEGO A4 (GSLX680) coordinate calibration. The linear raw-range mapping is
+  // wrong for this panel: the GSL reports a portrait digitizer whose raw axes
+  // run 0..~920 x 0..~680, while the UC8279C framebuffer is landscape 768x552.
+  // Recovered from the official 1.2.7 GSL firmware's FUN_4204c510 (CrossLink
+  // 1.0.10's narrower transform only covered ~536 of the 552 short-axis rows,
+  // making edge/front-key hits inaccurate):
+  //   portraitX = min(rawY, 680) * 551 / 680
+  //   portraitY = (920 - min(rawX, 920)) * 767 / 920
+  // The digitizer is portrait while the framebuffer is landscape, so swap the
+  // calibrated axes when returning panel-native coordinates.
+  const uint16_t limitedY = rawY > 680 ? 680 : rawY;
+  const uint16_t limitedX = rawX > 920 ? 920 : rawX;
+  const uint16_t portraitX = static_cast<uint32_t>(limitedY) * 551 / 680;
+  const uint16_t portraitY = static_cast<uint32_t>(920 - limitedX) * 767 / 920;
+
+  // GfxRenderer's Portrait transform rotates panel-native coordinates clockwise
+  // and therefore computes logical X as (551 - nativeY). The digitizer's raw-Y
+  // axis grows in logical left-to-right order, so nativeY must be mirrored here.
+  // Without this final reflection every horizontal touch target is reversed.
+  const TouchPoint point = {true, portraitY, static_cast<uint16_t>(551 - portraitX), now};
+  updateTouchContact(point);
 }
 #endif
 

@@ -1336,9 +1336,11 @@ constexpr BoardProfile EEGO_A4 = {Board::EegoA4,
                                   11,
                                   1.559f,
                                   PIN_UNASSIGNED,
-                                  // GSL rawY 12..632 maps to panel X; rawX 884..9 maps in reverse to panel Y.
-                                  {TouchController::Gslx680, 2, 1, PIN_UNASSIGNED, 3, 0x40, 12, 632, 9, 884, false, 0,
-                                   false, false, PIN_UNASSIGNED, true, false, true, true},
+                                  // The GSLX680 backend applies the official 1.2.7 calibration
+                                  // (InputManager::pollGslx680) and returns panel-native
+                                  // x=0..767, y=0..551; no raw-range mapping is needed here.
+                                  {TouchController::Gslx680, 2, 1, PIN_UNASSIGNED, 3, 0x40, 0, 767, 0, 551, false, 0,
+                                   false, false, PIN_UNASSIGNED, false, false, false, true, true},
                                   NO_FRONTLIGHT,
                                   NO_AUDIO,
                                   NO_LEDS,
@@ -1401,8 +1403,8 @@ constexpr BoardProfile MOFEI_M4 = {
     1.2f,
     {}};
 
-static_assert(EEGO_A4.touch.swapXY && !EEGO_A4.touch.flipX && EEGO_A4.touch.flipY,
-              "EEGO A4 touch must map raw Y to X and reverse raw X onto Y");
+static_assert(!EEGO_A4.touch.swapXY && !EEGO_A4.touch.flipX && !EEGO_A4.touch.flipY,
+              "EEGO A4 touch backend returns panel-native coordinates; no raw-range mapping");
 static_assert(MOFEI_M4.displayWidth / 8 * MOFEI_M4.displayHeight == 48000,
               "Mofei M4 must use one 48,000-byte framebuffer");
 static_assert(MOFEI_M4.touch.controller == TouchController::Ft6336 && MOFEI_M4.touch.swapXY &&
