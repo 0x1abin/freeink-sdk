@@ -672,6 +672,15 @@ bool InputManager::wasHomeKeyTapped() const { return touchHomeKeyTapEvent; }
 
 bool InputManager::wasHomeKeyLongPressed() const { return touchHomeKeyLongEvent; }
 
+void InputManager::clearTouchTapEvent() {
+  // Drop the one-shot tap/release edges without delivering them. Used on
+  // activity transitions so the new activity does not re-read a tap the
+  // previous activity already consumed within the same frame (these are
+  // cleared in update(), but a pushActivity runs mid-frame).
+  touchPressedEvent = false;
+  touchReleasedEvent = false;
+}
+
 void InputManager::prepareForDeepSleep() {
 #if FREEINK_CAP_TOUCH
   const auto& t = BoardConfig::ACTIVE.touch;

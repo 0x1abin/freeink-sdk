@@ -131,6 +131,11 @@ class InputManager {
   // (~700 ms), while still down — a hold shortcut (e.g. open the reader menu).
   // Cleared each #update().
   bool wasHomeKeyLongPressed() const;
+  // Drop the one-shot touch press/release edges without delivering them. Used
+  // on activity transitions so the incoming activity does not re-read a tap the
+  // outgoing activity already consumed within the same frame (InputManager
+  // clears these in update(), but a pushActivity runs mid-frame).
+  void clearTouchTapEvent();
   // Quiesce board-specific touch activity before deep sleep.
   void prepareForDeepSleep();
 
