@@ -280,16 +280,21 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
       cursorY = static_cast<int16_t>(cursorY + headerH + rowGap);
       continue;
     }
-    // Per-item height: a label or subtitle whose style allows wrapping
-    // (maxLines > 1) and that overflows its slot grows the row by exactly its
-    // extra text lines, keeping the vertical padding a single-line row carries.
-    // Every other row keeps the uniform rowH (styles default to maxLines == 1,
-    // so touch-sized rows are unaffected).
+    // Per-item height: text whose style allows wrapping (maxLines > 1) and
+    // that overflows its slot grows the row by exactly the extra lines it
+    // USES — measured, not maxLines: a two-line title in a three-line budget
+    // costs one extra line, not two. In a subtitle row the label band takes
+    // its wrapped lines and the subtitle, which may itself wrap, moves below
+    // them; vertical padding stays what a single-line row carries. Label-only
+    // rows keep the "would maxLines already fit rowH" gate, so touch-sized
+    // rows stay unaffected; a subtitle row's rowH is sized for one label line
+    // by construction, so any wrap grows it.
     int16_t itemH = rowH;
     int16_t subH = 0;
+    uint8_t labelLines = 1;
     const int16_t labelLh = frame.target().lineHeight(props.labelText.font);
-    // Width the wrapped text is laid out in, shared by this sizing pass and the
-    // draw below: the row content minus the leading icon.
+    // Width the wrapped text is laid out in, shared by this sizing pass and
+    // the draw below: the row content minus the leading icon.
     int16_t contentAvail = static_cast<int16_t>(rowArea.width - sidePad * 2);
     if (item.icon || item.iconAsset) {
       const BitmapRef ic =
@@ -300,24 +305,10 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
       contentAvail =
           static_cast<int16_t>(contentAvail - iconSize - props.textGap);
     }
-    if (item.subtitle) {
-      // The subtitle owns its own line(s) under the label, spanning the full
-      // content width. A maxLines > 1 subtitle reserves its wrapped height so
-      // the row grows to fit the extra lines; the default single-line case
-      // keeps the old lineHeight fast path and leaves rowH unchanged.
-      const int16_t subLh = frame.target().lineHeight(props.subtitleText.font);
-      subH = props.subtitleText.maxLines > 1
-                 ? measureWrappedText(frame.target(), item.subtitle,
-                                      props.subtitleText, contentAvail)
-                       .height
-                 : subLh;
-      const int16_t basePad = static_cast<int16_t>(rowH - labelLh - subLh);
-      const int16_t needed = static_cast<int16_t>(
-          labelLh + subH + (basePad > 0 ? basePad : 0));
-      if (needed > rowH)
-        itemH = needed;
-    } else if (item.label && props.labelText.maxLines > 1 &&
-               static_cast<int16_t>(labelLh * props.labelText.maxLines) > rowH) {
+    if (item.label && props.labelText.maxLines > 1 &&
+        (item.subtitle != nullptr ||
+         static_cast<int16_t>(labelLh * props.labelText.maxLines) > rowH)) {
+      // The label band also loses the trailing value/toggle slot.
       int16_t labelAvail = contentAvail;
       if (item.toggle) {
         labelAvail = static_cast<int16_t>(
@@ -331,12 +322,39 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
                 .width -
             props.valueInset - props.textGap);
       }
-      if (frame.target()
-              .measureText(props.labelText.font, item.label, props.labelText)
-              .width > labelAvail) {
-        itemH =
-            static_cast<int16_t>(rowH + labelLh * (props.labelText.maxLines - 1));
+      // The cheap single-line width check gates the full wrap layout, so
+      // rows whose label fits pay one measure and nothing else.
+      if (labelAvail > 0 &&
+          frame.target()
+                  .measureText(props.labelText.font, item.label,
+                               props.labelText)
+                  .width > labelAvail) {
+        const Size wrapped = measureWrappedText(
+            frame.target(), item.label, props.labelText, labelAvail);
+        const int16_t lines =
+            labelLh > 0 ? static_cast<int16_t>(wrapped.height / labelLh) : 1;
+        if (lines > 1)
+          labelLines = static_cast<uint8_t>(lines);
       }
+    }
+    if (item.subtitle) {
+      // The subtitle owns its own line(s) under the label, spanning the full
+      // content width. A maxLines > 1 subtitle reserves its wrapped height so
+      // the row grows to fit the extra lines; the default single-line case
+      // keeps the old lineHeight fast path.
+      const int16_t subLh = frame.target().lineHeight(props.subtitleText.font);
+      subH = props.subtitleText.maxLines > 1
+                 ? measureWrappedText(frame.target(), item.subtitle,
+                                      props.subtitleText, contentAvail)
+                       .height
+                 : subLh;
+      const int16_t basePad = static_cast<int16_t>(rowH - labelLh - subLh);
+      const int16_t needed = static_cast<int16_t>(
+          labelLh * labelLines + subH + (basePad > 0 ? basePad : 0));
+      if (needed > rowH)
+        itemH = needed;
+    } else if (labelLines > 1) {
+      itemH = static_cast<int16_t>(rowH + labelLh * (labelLines - 1));
     }
     if (static_cast<int16_t>(cursorY + itemH) > rowArea.bottom() ||
         drawnRows >= visible || i >= end)
@@ -390,13 +408,18 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
     TextStyle labelStyle =
         textStyleWithForeground(props.labelText, style.foreground);
     const int16_t labelH = frame.target().lineHeight(labelStyle.font);
+    // The band holds every label line the height pre-pass measured (usually
+    // one); the subtitle and the row's growth both follow it.
+    const int16_t labelBlockH = static_cast<int16_t>(labelH * labelLines);
+    // subH carries over from the sizing pass: the subtitle's wrapped height,
+    // or its single line height, or 0 without a subtitle.
     Rect band = content;
     if (item.subtitle) {
       int16_t bandTop = static_cast<int16_t>(
-          content.y + (content.height - labelH - subH) / 2);
+          content.y + (content.height - labelBlockH - subH) / 2);
       if (bandTop < content.y)
         bandTop = content.y;
-      band = Rect{content.x, bandTop, content.width, labelH};
+      band = Rect{content.x, bandTop, content.width, labelBlockH};
     }
 
     const BitmapRef icon =
@@ -492,8 +515,8 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
       frame.target().text(Rect{band.x, band.y, availW, band.height}, item.label,
                           labelStyle);
       frame.target().text(
-          Rect{content.x, static_cast<int16_t>(band.y + labelH), content.width,
-               subH},
+          Rect{content.x, static_cast<int16_t>(band.y + band.height),
+               content.width, subH},
           item.subtitle,
           textStyleWithForeground(props.subtitleText, style.foreground));
     } else {

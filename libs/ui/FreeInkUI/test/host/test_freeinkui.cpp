@@ -1413,6 +1413,130 @@ void testListSectionHeaders() {
   CHECK_EQ(secondHeaderY, 130);
 }
 
+void testListWrappedLabelHeights() {
+  // Per-item height: a wrapping label grows its row by the lines it USES,
+  // not by maxLines; a subtitle follows the wrapped label band; and the
+  // "would maxLines already fit rowH" gate still protects touch-sized rows.
+  DeviceContext device = makeDevice();
+  InputSnapshot input;
+  InteractionBuffer<16> interactions;
+
+  // 480 wide, sidePadding 10 -> 460px of label width; charWidth 6 fits 7
+  // ten-char words per line, so ten words wrap onto exactly two lines.
+  const char* longLabel =
+      "aaaaaaaaa aaaaaaaaa aaaaaaaaa aaaaaaaaa aaaaaaaaa "
+      "aaaaaaaaa aaaaaaaaa aaaaaaaaa aaaaaaaaa aaaaaaaaa";
+
+  // Label-only, dense e-ink row (20px holds one 12px line): two used lines
+  // out of a three-line budget grow the row by ONE line height (32), not two.
+  {
+    FakeDrawTarget draw;
+    Frame<16> frame(draw, device, input, interactions);
+    ListItem items[2]{};
+    items[0].label = longLabel;
+    items[1].label = "short";
+    ListProps props;
+    props.items = items;
+    props.count = 2;
+    props.rowHeight = 20;
+    props.sidePadding = 10;
+    props.labelText.maxLines = 3;
+    list(frame, Rect{0, 0, 480, 400}, props);
+    int16_t row0H = 0;
+    int16_t row1Y = -1;
+    for (size_t i = 0; i < draw.opCount; ++i) {
+      const FakeDrawTarget::Op& op = draw.ops[i];
+      if (op.kind != FakeDrawTarget::Op::Fill || op.rect.width != 480) continue;
+      if (op.rect.y == 0) row0H = op.rect.height;
+      if (op.rect.y > 0 && row1Y < 0) row1Y = op.rect.y;
+    }
+    CHECK_EQ(row0H, 32);  // 20 + one extra 12px line, not 20 + 24
+    CHECK_EQ(row1Y, 32);  // the next row starts right below the grown one
+  }
+
+  // Label + subtitle: the row grows the same way, the label band holds both
+  // lines, and the subtitle sits under the band instead of under line one.
+  {
+    FakeDrawTarget draw;
+    Frame<16> frame(draw, device, input, interactions);
+    ListItem items[2]{};
+    items[0].label = longLabel;
+    items[0].subtitle = "Author";
+    items[1].label = "short";
+    items[1].subtitle = "Author";
+    ListProps props;
+    props.items = items;
+    props.count = 2;
+    props.rowHeight = 40;
+    props.sidePadding = 10;
+    props.labelText.maxLines = 3;
+    list(frame, Rect{0, 0, 480, 400}, props);
+    int16_t row0H = 0;
+    int16_t row1H = 0;
+    for (size_t i = 0; i < draw.opCount; ++i) {
+      const FakeDrawTarget::Op& op = draw.ops[i];
+      if (op.kind != FakeDrawTarget::Op::Fill || op.rect.width != 480) continue;
+      if (op.rect.y == 0) row0H = op.rect.height;
+      if (op.rect.y == 52) row1H = op.rect.height;
+    }
+    CHECK_EQ(row0H, 52);
+    CHECK_EQ(row1H, 40);  // a fitting label keeps the uniform height
+    // Subtitle of the grown row: band is (52 - 24 - 12) / 2 = 8 from the row
+    // top, so the subtitle's 12px line starts at 8 + 24 = 32.
+    bool subtitleAt32 = false;
+    for (size_t i = 0; i < draw.opCount; ++i) {
+      const FakeDrawTarget::Op& op = draw.ops[i];
+      if (op.kind == FakeDrawTarget::Op::Text && op.rect.y == 32 && op.rect.height == 12) subtitleAt32 = true;
+    }
+    CHECK(subtitleAt32);
+  }
+
+  // Wrapped SUBTITLE: a maxLines > 1 subtitle that overflows grows the row by
+  // its own extra lines while the label keeps one (the complementary case).
+  {
+    FakeDrawTarget draw;
+    Frame<16> frame(draw, device, input, interactions);
+    ListItem items[1]{};
+    items[0].label = "short";
+    items[0].subtitle = longLabel;
+    ListProps props;
+    props.items = items;
+    props.count = 1;
+    props.rowHeight = 40;
+    props.sidePadding = 10;
+    props.subtitleText.maxLines = 2;
+    list(frame, Rect{0, 0, 480, 400}, props);
+    int16_t row0H = 0;
+    for (size_t i = 0; i < draw.opCount; ++i) {
+      const FakeDrawTarget::Op& op = draw.ops[i];
+      if (op.kind == FakeDrawTarget::Op::Fill && op.rect.width == 480 && op.rect.y == 0) row0H = op.rect.height;
+    }
+    CHECK_EQ(row0H, 52);  // 12 label + 24 wrapped subtitle + 16 base padding
+  }
+
+  // Touch-sized gate: without a subtitle, a 44px row already fits two 12px
+  // lines, so a wrapping two-line-budget label does not grow it.
+  {
+    FakeDrawTarget draw;
+    Frame<16> frame(draw, device, input, interactions);
+    ListItem items[1]{};
+    items[0].label = longLabel;
+    ListProps props;
+    props.items = items;
+    props.count = 1;
+    props.rowHeight = 44;
+    props.sidePadding = 10;
+    props.labelText.maxLines = 2;
+    list(frame, Rect{0, 0, 480, 400}, props);
+    int16_t row0H = 0;
+    for (size_t i = 0; i < draw.opCount; ++i) {
+      const FakeDrawTarget::Op& op = draw.ops[i];
+      if (op.kind == FakeDrawTarget::Op::Fill && op.rect.width == 480 && op.rect.y == 0) row0H = op.rect.height;
+    }
+    CHECK_EQ(row0H, 44);
+  }
+}
+
 
 void testCrossInkSleepScreenComposition() {
   // The minimal-stats sleep screen composes from existing pieces: an
@@ -2767,6 +2891,7 @@ int main() {
   testThemePrimitiveParity();
   testRotationAndBitmapSampling();
   testListSectionHeaders();
+  testListWrappedLabelHeights();
   testCrossInkSleepScreenComposition();
   testCoverCarousel();
   testLayoutTextWrapping();
