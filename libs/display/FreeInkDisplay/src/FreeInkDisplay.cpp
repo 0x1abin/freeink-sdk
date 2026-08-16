@@ -859,10 +859,6 @@ bool FreeInkDisplay::supportsStripGrayscale() const {
   return !_inverted && _driver && _driver->supportsStripGrayscale();
 }
 
-bool FreeInkDisplay::supportsFactoryGrayscale() const {
-  return !_inverted && _driver && _driver->supportsFactoryGrayscale();
-}
-
 bool FreeInkDisplay::combinesGrayscaleBase() const { return _driver && _driver->combinesGrayscaleBase(); }
 
 void FreeInkDisplay::cleanupGrayscaleBuffers(const uint8_t* bwBuffer) {
