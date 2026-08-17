@@ -141,8 +141,19 @@ void Ed2208M5Driver::writeFrame(EpdBus& bus, const uint8_t* fb) {
 
   // Accent recoloring rides complete waveforms only: an interrupted refresh
   // cuts long before the color pigments settle, so there accented pixels stay
-  // plain ink and the accent shows up when the standing image is rendered.
-  const uint8_t* accent = _completeNextRefresh ? _accentPlane : nullptr;
+  // plain ink and the accents show up when the standing image is rendered.
+  // Compact the active slots so the per-pixel loop only touches real planes.
+  const uint8_t* accents[MAX_ACCENT_PLANES];
+  uint8_t accentCodes[MAX_ACCENT_PLANES];
+  uint8_t accentCount = 0;
+  if (_completeNextRefresh) {
+    for (uint8_t s = 0; s < MAX_ACCENT_PLANES; ++s) {
+      if (_accentPlanes[s] == nullptr) continue;
+      accents[accentCount] = _accentPlanes[s];
+      accentCodes[accentCount] = _accentColors[s];
+      ++accentCount;
+    }
+  }
 
   bus.beginTxn();
   bus.rawCmd(0x10);
@@ -161,13 +172,20 @@ void Ed2208M5Driver::writeFrame(EpdBus& bus, const uint8_t* fb) {
 
       uint8_t leftCode = leftWhite ? EPD_WHITE : EPD_BLACK;
       uint8_t rightCode = rightWhite ? EPD_WHITE : EPD_BLACK;
-      if (accent) {
-        if (!leftWhite && ((accent[leftOffset + (leftLogicalX >> 3)] >> (7 - (leftLogicalX & 7))) & 0x01)) {
-          leftCode = _accentColor;
+      if (!leftWhite) {
+        for (uint8_t s = 0; s < accentCount; ++s) {
+          if ((accents[s][leftOffset + (leftLogicalX >> 3)] >> (7 - (leftLogicalX & 7))) & 0x01) {
+            leftCode = accentCodes[s];
+            break;
+          }
         }
-        if (!rightWhite &&
-            ((accent[rightOffset + (rightLogicalX >> 3)] >> (7 - (rightLogicalX & 7))) & 0x01)) {
-          rightCode = _accentColor;
+      }
+      if (!rightWhite) {
+        for (uint8_t s = 0; s < accentCount; ++s) {
+          if ((accents[s][rightOffset + (rightLogicalX >> 3)] >> (7 - (rightLogicalX & 7))) & 0x01) {
+            rightCode = accentCodes[s];
+            break;
+          }
         }
       }
       packedRow[panelX >> 1] = static_cast<uint8_t>((leftCode << 4) | rightCode);

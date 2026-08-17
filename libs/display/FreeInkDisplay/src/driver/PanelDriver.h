@@ -198,14 +198,17 @@ class PanelDriver {
   // requestCompleteWaveformNextRefresh() through each call site. Default off:
   // consumers that page with Full (readers) keep the fast behavior.
   virtual void setFullRefreshCompletesWaveform(bool enabled) { (void)enabled; }
-  // Accent color plane (ED2208, Spectra-6): `plane` is a 1-bit buffer with the
-  // same logical geometry and layout as the framebuffer; a SET bit recolors
-  // that pixel's ink (a 0/black framebuffer bit) to `colorCode` on
-  // complete-waveform refreshes. Interrupted refreshes ignore the plane (color
-  // pigments never settle in a cut-off waveform), so accents appear only on
-  // standing images. nullptr disables. The caller owns the buffer and must
-  // keep it valid across refreshes.
-  virtual void setAccentPlane(const uint8_t* plane, uint8_t colorCode) {
+  // Accent color planes (ED2208, Spectra-6): each `plane` is a 1-bit buffer
+  // with the same logical geometry and layout as the framebuffer; a SET bit
+  // recolors that pixel's ink (a 0/black framebuffer bit) to that slot's
+  // `colorCode` on complete-waveform refreshes. Interrupted refreshes ignore
+  // the planes (color pigments never settle in a cut-off waveform), so
+  // accents appear only on standing images. Up to 4 slots; the lowest-
+  // numbered slot with a set bit wins where planes overlap. nullptr clears a
+  // slot. The caller owns the buffers and must keep them valid across
+  // refreshes.
+  virtual void setAccentPlaneSlot(uint8_t slot, const uint8_t* plane, uint8_t colorCode) {
+    (void)slot;
     (void)plane;
     (void)colorCode;
   }

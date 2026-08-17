@@ -44,14 +44,15 @@ class FreeInkDisplay {
   // default (off). No-op on other panels.
   void setFullRefreshCompletesWaveform(bool enabled);
 
-  // M5 PaperColor (Spectra-6) accent color plane: a 1-bit buffer with the same
-  // geometry/layout as the framebuffer. A set bit recolors that pixel's ink
-  // (a 0/black framebuffer bit) to `colorCode` on complete-waveform refreshes;
-  // interrupted refreshes render it as plain ink (color pigments never settle
-  // in a cut-off waveform), so accents appear only on standing images.
-  // nullptr disables; the caller owns the buffer. No-op on other panels.
-  void setAccentPlane(const uint8_t* plane, uint8_t colorCode);
-  // ED2208 Spectra-6 controller color codes for setAccentPlane().
+  // M5 PaperColor (Spectra-6) accent color planes: 1-bit buffers with the
+  // framebuffer's geometry/layout. A set bit recolors that pixel's ink (a
+  // 0/black framebuffer bit) to the slot's `colorCode` on complete-waveform
+  // refreshes; interrupted refreshes render it as plain ink (color pigments
+  // never settle in a cut-off waveform), so accents appear only on standing
+  // images. Up to 4 slots — the lowest slot with a set bit wins on overlap;
+  // nullptr clears a slot; the caller owns the buffers. No-op on other panels.
+  void setAccentPlaneSlot(uint8_t slot, const uint8_t* plane, uint8_t colorCode);
+  // ED2208 Spectra-6 controller color codes for setAccentPlaneSlot().
   static constexpr uint8_t SPECTRA_BLACK = 0x0;
   static constexpr uint8_t SPECTRA_WHITE = 0x1;
   static constexpr uint8_t SPECTRA_YELLOW = 0x2;

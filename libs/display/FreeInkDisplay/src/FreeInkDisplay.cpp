@@ -930,8 +930,8 @@ void FreeInkDisplay::setFullRefreshCompletesWaveform(bool enabled) {
   if (_driver) _driver->setFullRefreshCompletesWaveform(enabled);
 }
 
-void FreeInkDisplay::setAccentPlane(const uint8_t* plane, uint8_t colorCode) {
-  if (_driver) _driver->setAccentPlane(plane, colorCode);
+void FreeInkDisplay::setAccentPlaneSlot(uint8_t slot, const uint8_t* plane, uint8_t colorCode) {
+  if (_driver) _driver->setAccentPlaneSlot(slot, plane, colorCode);
 }
 
 void FreeInkDisplay::setFastRefreshCutoffMs(uint16_t ms) {

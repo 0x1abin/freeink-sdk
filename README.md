@@ -220,12 +220,13 @@ anything whose screens park rather than page):
   truthful render without threading the one-shot request through every call
   site. `HALF`/`FAST` stay interrupted for transient frames (dialogs, alarms,
   key feedback). Off by default — readers keep the fast `FULL`.
-- `setAccentPlane(plane, colorCode)` takes a host-owned 1-bit overlay with the
-  framebuffer's geometry: set bits recolor that pixel's **ink** to a Spectra-6
-  color (`FreeInkDisplay::SPECTRA_RED` etc.) on complete-waveform refreshes.
-  Interrupted refreshes ignore the plane — pigments never settle in a cut-off
-  waveform — so accents appear exactly on the standing images that can render
-  them.
+- `setAccentPlaneSlot(slot, plane, colorCode)` takes host-owned 1-bit overlays
+  with the framebuffer's geometry (up to 4 slots, one color each; the lowest
+  slot with a set bit wins on overlap): set bits recolor that pixel's **ink**
+  to a Spectra-6 color (`FreeInkDisplay::SPECTRA_RED` etc.) on
+  complete-waveform refreshes. Interrupted refreshes ignore the planes —
+  pigments never settle in a cut-off waveform — so accents appear exactly on
+  the standing images that can render them.
 
 Two backends are selectable for this device:
 - **Native ED2208 (default)** — the fast interrupted-refresh path above.
