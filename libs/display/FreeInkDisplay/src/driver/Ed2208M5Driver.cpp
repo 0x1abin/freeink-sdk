@@ -139,6 +139,11 @@ void Ed2208M5Driver::writeFrame(EpdBus& bus, const uint8_t* fb) {
 #endif
   uint8_t packedRow[PANEL_WIDTH / 2];
 
+  // Accent recoloring rides complete waveforms only: an interrupted refresh
+  // cuts long before the color pigments settle, so there accented pixels stay
+  // plain ink and the accent shows up when the standing image is rendered.
+  const uint8_t* accent = _completeNextRefresh ? _accentPlane : nullptr;
+
   bus.beginTxn();
   bus.rawCmd(0x10);
   for (uint16_t panelY = 0; panelY < PANEL_HEIGHT; ++panelY) {
@@ -154,8 +159,18 @@ void Ed2208M5Driver::writeFrame(EpdBus& bus, const uint8_t* fb) {
       const uint32_t rightOffset = static_cast<uint32_t>(rightLogicalY) * LOGICAL_WB;
       const bool rightWhite = (fb[rightOffset + (rightLogicalX >> 3)] >> (7 - (rightLogicalX & 7))) & 0x01;
 
-      packedRow[panelX >> 1] = static_cast<uint8_t>(((leftWhite ? EPD_WHITE : EPD_BLACK) << 4) |
-                                                    (rightWhite ? EPD_WHITE : EPD_BLACK));
+      uint8_t leftCode = leftWhite ? EPD_WHITE : EPD_BLACK;
+      uint8_t rightCode = rightWhite ? EPD_WHITE : EPD_BLACK;
+      if (accent) {
+        if (!leftWhite && ((accent[leftOffset + (leftLogicalX >> 3)] >> (7 - (leftLogicalX & 7))) & 0x01)) {
+          leftCode = _accentColor;
+        }
+        if (!rightWhite &&
+            ((accent[rightOffset + (rightLogicalX >> 3)] >> (7 - (rightLogicalX & 7))) & 0x01)) {
+          rightCode = _accentColor;
+        }
+      }
+      packedRow[panelX >> 1] = static_cast<uint8_t>((leftCode << 4) | rightCode);
     }
     bus.rawWriteBytes(packedRow, sizeof(packedRow));
   }
@@ -321,6 +336,11 @@ void Ed2208M5Driver::refresh(EpdBus& bus, uint16_t dirtyX, uint16_t dirtyY, uint
 
 void Ed2208M5Driver::display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) {
   if (!fb) return;
+
+  // Standing-image policy: promote Full to the complete OTP waveform. Set
+  // before writeFrame so the per-frame polarity pick (dark hack) and the
+  // accent plane both see it; refresh() consumes the flag as usual.
+  if (_fullCompletes && mode == RefreshMode::Full) _completeNextRefresh = true;
 
   uint16_t dirtyX = 0, dirtyY = 0, dirtyW = PANEL_WIDTH, dirtyH = PANEL_HEIGHT;
   const bool forceFullPanelRefresh = (mode == RefreshMode::Full);

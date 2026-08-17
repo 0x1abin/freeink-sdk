@@ -212,6 +212,21 @@ requires running the complete waveform (`requestCompleteWaveformNextRefresh()`).
 > `requestCompleteWaveformNextRefresh()` — roughly hourly works well — timed
 > around their own UX, since the complete waveform blocks for ~15 s.
 
+Two additional facades suit **standing-image consumers** (clocks, dashboards —
+anything whose screens park rather than page):
+
+- `setFullRefreshCompletesWaveform(true)` makes every `FULL_REFRESH` run the
+  complete OTP waveform, so each standing image is a clean, DC-balanced,
+  truthful render without threading the one-shot request through every call
+  site. `HALF`/`FAST` stay interrupted for transient frames (dialogs, alarms,
+  key feedback). Off by default — readers keep the fast `FULL`.
+- `setAccentPlane(plane, colorCode)` takes a host-owned 1-bit overlay with the
+  framebuffer's geometry: set bits recolor that pixel's **ink** to a Spectra-6
+  color (`FreeInkDisplay::SPECTRA_RED` etc.) on complete-waveform refreshes.
+  Interrupted refreshes ignore the plane — pigments never settle in a cut-off
+  waveform — so accents appear exactly on the standing images that can render
+  them.
+
 Two backends are selectable for this device:
 - **Native ED2208 (default)** — the fast interrupted-refresh path above.
 - **M5 official (`-DFREEINK_M5_OFFICIAL=1`)** — wraps M5's own **M5Unified + M5GFX**
