@@ -15,6 +15,15 @@
 namespace {
 constexpr uint32_t maxDuty(uint8_t bits) { return (1u << bits) - 1u; }
 
+// Perception-weighted percent -> duty (gamma ~2, matching the PM1 path and the
+// level curve). Any non-zero percent yields at least the smallest non-zero duty
+// step, so 1% is a genuinely dim night-reading level rather than 1% linear duty.
+constexpr uint32_t perceptualDuty(uint32_t pct, uint32_t full) {
+  if (pct == 0) return 0;
+  const uint32_t duty = (pct * pct * full) / 10000u;
+  return duty ? duty : 1u;
+}
+
 // Paper Mono: the PWM lives in the M5PM1 PMIC, not the ESP. PM1 GPIO3 routed to
 // alt-function PWM0 drives the AW9967 frontlight driver. Duty register is
 // 12-bit; the high byte's bit 4 is the channel-enable bit. Perception-weighted
@@ -163,7 +172,7 @@ void FrontlightManager::apply() {
     const uint32_t n = static_cast<uint32_t>(_brightnessLevel - 1u);
     totalDuty = 1u + (n * n * (full - 1u)) / (254u * 254u);
   } else if (!_useLevel) {
-    totalDuty = (static_cast<uint32_t>(_brightness) * full + 50u) / 100u;
+    totalDuty = perceptualDuty(_brightness, full);
   }
   uint32_t warmDuty = 0;
   uint32_t coolDuty = totalDuty;
