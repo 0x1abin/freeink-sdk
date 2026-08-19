@@ -1589,7 +1589,8 @@ inline bool hasHomeKey() { return ACTIVE.touch.hasHomeKey; }
 inline bool hasPwmFrontlight() { return ACTIVE.frontlight.gpio != PIN_UNASSIGNED || ACTIVE.frontlight.viaPm1Pwm; }
 inline bool hasI2cFrontlight() { return ACTIVE.i2cFrontlight.controller != I2cFrontlightController::None; }
 inline bool hasColorTemperatureFrontlight() {
-  return ACTIVE.frontlight.gpio != PIN_UNASSIGNED && ACTIVE.frontlight.gpioWarm != PIN_UNASSIGNED;
+  return (ACTIVE.frontlight.gpio != PIN_UNASSIGNED && ACTIVE.frontlight.gpioWarm != PIN_UNASSIGNED) ||
+         ACTIVE.i2cFrontlight.controller == I2cFrontlightController::Lm3630a;
 }
 inline bool hasAudio() { return ACTIVE.audio.output != AudioOutput::None; }
 
