@@ -40,21 +40,18 @@ class FrontlightManager {
     // I2C frontlight (LM3630A on the EEGO A4) may be an unpopulated, optional
     // circuit — only report it after begin() gets an actual ACK.
     return BoardConfig::ACTIVE.frontlight.gpio != BoardConfig::PIN_UNASSIGNED ||
-           BoardConfig::ACTIVE.frontlight.viaPm1Pwm ||
-           (BoardConfig::hasI2cFrontlight() && _begun);
+           BoardConfig::ACTIVE.frontlight.viaPm1Pwm || (BoardConfig::hasI2cFrontlight() && _begun);
 #else
     return false;  // frontlight code not compiled in (FREEINK_CAP_FRONTLIGHT=0)
 #endif
   }
 
-  // True when the board wires a second (warm) channel, so setColorTemperature() does
-  // something. False on single-channel frontlights and on boards with none.
+  // True when a detected frontlight supports a warm/cool mix.
   bool hasColorTemperature() const {
-#if FREEINK_CAP_WARMLIGHT
-    return BoardConfig::ACTIVE.frontlight.gpio != BoardConfig::PIN_UNASSIGNED &&
-           BoardConfig::ACTIVE.frontlight.gpioWarm != BoardConfig::PIN_UNASSIGNED;
+#if FREEINK_CAP_FRONTLIGHT
+    return present() && BoardConfig::hasColorTemperatureFrontlight();
 #else
-    return false;  // no warm-channel board in this build (FREEINK_CAP_WARMLIGHT=0)
+    return false;
 #endif
   }
 
