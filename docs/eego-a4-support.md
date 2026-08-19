@@ -44,7 +44,7 @@ a physical unit yet.
 | RTC | **PCF8563** at 0x51, on the **shared touch I2C bus** (SDA 2 / SCL 1), 400 kHz |
 | Power latch | GPIO 4 (held to stay powered) |
 | Deep sleep | send controller `0xE0 = 0x88`, float SDA/SCL, hold GPIO 3 (touch RST) low |
-| Frontlight | **variant-dependent — two A4 hardware versions exist, one with a frontlight and one without.** The frontlit version has a **warm/cool dual-channel** light (IDF `ledc`, cool ch0 / warm ch1, RC_FAST ~10 kHz/10-bit — confirmed by RE of a frontlit unit's dump). The two GPIOs are runtime struct fields, not firmware immediates → recovered by RE / hardware. |
+| Frontlight | **variant-dependent — two A4 versions exist, one frontlit and one not.** The frontlit version's light is a **warm/cool I²C LED-driver chip** (NOT LEDC PWM): driver at **I²C 0x36** on the shared `Wire` bus (with touch 0x40 / RTC 0x51), **enable = GPIO 12** (active-high), **warm = reg 4**, **cold = reg 3**, total clamped to 150. Driven by FrontlightManager's `viaI2cLed` backend. |
 | UI scale | 1.2 |
 
 ### Refresh behaviour
@@ -79,7 +79,15 @@ not new infrastructure:
 ## Open items (need a physical unit)
 
 - Confirm 768×552 and the UC8279C bring-up/LUTs on real glass (ghosting, gray).
-- Recover the warm/cool frontlight GPIO pins (RE of a frontlit-unit dump in progress) and confirm on hardware. Decide how to model the two A4 variants (frontlight / no-frontlight) — one profile with the light inert when absent, or a sibling profile.
+- Validate the **I²C LED-driver frontlight** on hardware (backend implemented:
+  `FrontlightConfig.viaI2cLed`, chip 0x36, enable GPIO 12, cool=reg3 / warm=reg4,
+  total clamp 150). Confirm the init register sequence (`kI2cLedInit` in
+  FrontlightManager.cpp is RE-observed and may need tuning) and the brightness curve.
+- Decide how to model the two A4 variants (frontlit / not) — the non-frontlit unit
+  would use `NO_FRONTLIGHT`.
+- Re-verify the whole pin map on hardware: a frontlit-unit dump did NOT contain the
+  `20 MHz` display clock or the `eego_a4` name the scaffold assumed (both units are
+  pre-freeink community-sdk builds), so the borrowed pin values are provisional.
 - Confirm button GPIOs 5/7/8 and battery divider ×1.559.
 - Confirm the GSL firmware blob matches this unit's digitizer.
 - Standby current with the GPIO4 latch + GPIO3-low sequence.

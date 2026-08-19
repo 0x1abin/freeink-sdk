@@ -2,6 +2,7 @@
 
 #if FREEINK_CAP_FRONTLIGHT
 #include <M5Pm1.h>
+#include <Wire.h>
 #ifdef FREEINK_FRONTLIGHT_LS
 #include <driver/gpio.h>
 #include <driver/ledc.h>
@@ -34,6 +35,38 @@ void pm1FrontlightWrite(uint32_t pct) {
   const uint8_t data[2] = {static_cast<uint8_t>(duty & 0xFF),
                            static_cast<uint8_t>(((duty >> 8) & 0x0F) | (duty ? PM1_PWM_ENABLE : 0))};
   freeink::m5pm1::writeBytes(freeink::m5pm1::REG_PWM0_DUTY_L, data, sizeof(data));
+}
+
+// EEGO A4 (frontlit variant): a dual-channel white-LED driver chip on the shared
+// I2C bus (same wires as touch/RTC), powered by an enable GPIO. Cool and warm
+// brightness are separate registers; the total is clamped to i2cMaxTotal. The init
+// register sequence below is what the stock firmware writes (charge-pump / current
+// limits) — recovered by RE, so it may want tuning against a physical unit.
+struct I2cLedReg {
+  uint8_t reg;
+  uint8_t val;
+};
+constexpr I2cLedReg kI2cLedInit[] = {
+    {0x50, 0x03}, {0x01, 0x07}, {0x02, 0x38}, {0x05, 0x1F}, {0x06, 0x1F},
+};
+
+void i2cLedWriteReg(const BoardConfig::FrontlightConfig& fl, uint8_t reg, uint8_t val) {
+  Wire.beginTransmission(fl.i2cAddr);
+  Wire.write(reg);
+  Wire.write(val);
+  Wire.endTransmission();
+}
+
+void i2cLedAttach(const BoardConfig::FrontlightConfig& fl) {
+  if (fl.i2cEnableGpio != BoardConfig::PIN_UNASSIGNED) {
+    pinMode(fl.i2cEnableGpio, OUTPUT);
+    digitalWrite(fl.i2cEnableGpio, HIGH);  // active-high chip power
+    delay(2);
+  }
+  if (fl.i2cSda != BoardConfig::PIN_UNASSIGNED && fl.i2cScl != BoardConfig::PIN_UNASSIGNED) {
+    Wire.begin(fl.i2cSda, fl.i2cScl);  // shared bus; idempotent if touch/RTC already brought it up
+  }
+  for (const auto& r : kI2cLedInit) i2cLedWriteReg(fl, r.reg, r.val);
 }
 
 // Fixed LEDC channels for the Arduino-ESP32 2.x path (3.x keys by GPIO and allocates
@@ -112,6 +145,12 @@ void FrontlightManager::begin() {
     setBrightness(0);
     return;
   }
+  if (fl.viaI2cLed) {
+    i2cLedAttach(fl);
+    _begun = true;
+    setBrightness(0);
+    return;
+  }
   if (fl.gpio == BoardConfig::PIN_UNASSIGNED) return;
 
   bool attachOk = attachChannel(fl.gpio, LEDC_CH_COOL, fl.pwmFrequency, fl.pwmResolutionBits);
@@ -147,6 +186,23 @@ void FrontlightManager::apply() {
   if (!_begun) return;
   if (fl.viaPm1Pwm) {
     pm1FrontlightWrite(_brightness);
+    return;
+  }
+  if (fl.viaI2cLed) {
+    // Total brightness maps onto the chip's 0..i2cMaxTotal range, then splits into
+    // cool + warm by color temperature (so cool+warm == total <= max).
+    const uint32_t full = fl.i2cMaxTotal ? fl.i2cMaxTotal : 255u;
+    uint32_t total = 0;
+    if (_useLevel && _brightnessLevel > 0) {
+      const uint32_t n = static_cast<uint32_t>(_brightnessLevel - 1u);
+      total = 1u + (n * n * (full - 1u)) / (254u * 254u);
+    } else if (!_useLevel) {
+      total = (static_cast<uint32_t>(_brightness) * full + 50u) / 100u;
+    }
+    const uint32_t warm = (total * _warmPercent + 50u) / 100u;
+    const uint32_t cool = total - warm;
+    i2cLedWriteReg(fl, fl.i2cRegCool, static_cast<uint8_t>(cool));
+    i2cLedWriteReg(fl, fl.i2cRegWarm, static_cast<uint8_t>(warm));
     return;
   }
   if (fl.gpio == BoardConfig::PIN_UNASSIGNED) return;
