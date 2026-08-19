@@ -183,7 +183,7 @@
 #ifndef FREEINK_CAP_FRONTLIGHT
 #define FREEINK_CAP_FRONTLIGHT                                                                        \
   (FREEINK_DEVICE_DELINK || FREEINK_DEVICE_MURPHY || FREEINK_DEVICE_LILYGO || FREEINK_DEVICE_X4PRO || \
-   FREEINK_DEVICE_PAPERMONO || FREEINK_DEVICE_MOFEI_M4)
+   FREEINK_DEVICE_PAPERMONO || FREEINK_DEVICE_MOFEI_M4 || FREEINK_DEVICE_EEGO_A4)
 #endif
 // Warm/cool color-temperature frontlight: a second warm PWM channel on top of
 // the brightness one (FrontlightConfig::gpioWarm). Sub-capability of
@@ -611,6 +611,23 @@ struct DisplayOrientation {
   bool mirrorY;  // reverse gate/row (Y) order
 };
 
+// I2C frontlight controller (LM3630A on the EEGO A4). The controller is driven
+// over a board I2C bus with a separate enable GPIO; the enable is also the
+// hardware probe: an unpopulated optional circuit (some retail A4 units ship
+// without a frontlight) never ACKs, so FrontlightManager only reports present()
+// after a successful probe.
+enum class I2cFrontlightController : uint8_t { None, Lm3630a };
+struct I2cFrontlightConfig {
+  I2cFrontlightController controller;
+  int8_t sda;
+  int8_t scl;
+  uint32_t i2cHz;
+  uint8_t address;
+  int8_t enable;
+};
+constexpr I2cFrontlightConfig NO_I2C_FRONTLIGHT = {I2cFrontlightController::None, PIN_UNASSIGNED, PIN_UNASSIGNED, 0,
+                                                   0, PIN_UNASSIGNED};
+
 // Power-rail latch pins a battery-powered board must drive HIGH early in boot
 // to keep itself on (PWR_HOLD / PWR_LOCK style latches, e.g. the Sticky's
 // GPIO45/46). Board truth lives here; asserting them is firmware policy — see
@@ -661,6 +678,9 @@ struct BoardProfile {
   // matters (UC8279 800x480: VER byte2 LUT_VER, 0x02 vs 0x68 — selects which AA
   // waveform table the driver uploads). 0 = not probed / not applicable.
   uint8_t displayControllerVariant = 0;
+  // I2C frontlight (LM3630A). Defaulted so existing profiles need no change;
+  // a board with one sets it (EEGO A4).
+  I2cFrontlightConfig i2cFrontlight = NO_I2C_FRONTLIGHT;
 };
 
 constexpr TouchConfig NO_TOUCH = {TouchController::None,
@@ -1336,9 +1356,11 @@ constexpr BoardProfile EEGO_A4 = {Board::EegoA4,
                                   11,
                                   1.559f,
                                   PIN_UNASSIGNED,
-                                  // GSL rawY 12..632 maps to panel X; rawX 884..9 maps in reverse to panel Y.
-                                  {TouchController::Gslx680, 2, 1, PIN_UNASSIGNED, 3, 0x40, 12, 632, 9, 884, false, 0,
-                                   false, false, PIN_UNASSIGNED, true, false, true, true},
+                                  // The GSLX680 backend applies the official 1.2.7 calibration
+                                  // (InputManager::pollGslx680) and returns panel-native
+                                  // x=0..767, y=0..551; no raw-range mapping is needed here.
+                                  {TouchController::Gslx680, 2, 1, PIN_UNASSIGNED, 3, 0x40, 0, 767, 0, 551, false, 0,
+                                   false, false, PIN_UNASSIGNED, false, false, false, true, true},
                                   NO_FRONTLIGHT,
                                   NO_AUDIO,
                                   NO_LEDS,
@@ -1348,7 +1370,11 @@ constexpr BoardProfile EEGO_A4 = {Board::EegoA4,
                                   NO_MIC,
                                   {2, 1, 400000, 0x51, 0, 0, 0, RtcType::Pcf8563, ImuType::None},
                                   1.2f,
-                                  {4}};
+                                  {4},
+                                  0,  // displayControllerVariant (not probed for UC8279C)
+                                  // LM3630A on the shared I2C bus (SDA2/SCL1), enable GPIO12.
+                                  // Probed at runtime: some retail A4 units have no frontlight.
+                                  {I2cFrontlightController::Lm3630a, 2, 1, 400000, 0x36, 12}};
 
 // --- Mofei M4 — ESP32-S3 N16R8, SSD1677 + FT6336U --------------------------
 // TOUCH_INT cannot be used reliably on this board, so InputManager polls the
@@ -1401,8 +1427,8 @@ constexpr BoardProfile MOFEI_M4 = {
     1.2f,
     {}};
 
-static_assert(EEGO_A4.touch.swapXY && !EEGO_A4.touch.flipX && EEGO_A4.touch.flipY,
-              "EEGO A4 touch must map raw Y to X and reverse raw X onto Y");
+static_assert(!EEGO_A4.touch.swapXY && !EEGO_A4.touch.flipX && !EEGO_A4.touch.flipY,
+              "EEGO A4 touch backend returns panel-native coordinates; no raw-range mapping");
 static_assert(MOFEI_M4.displayWidth / 8 * MOFEI_M4.displayHeight == 48000,
               "Mofei M4 must use one 48,000-byte framebuffer");
 static_assert(MOFEI_M4.touch.controller == TouchController::Ft6336 && MOFEI_M4.touch.swapXY &&
@@ -1561,8 +1587,10 @@ inline bool isMofeiM4() { return ACTIVE.board == Board::MofeiM4; }
 inline bool hasTouch() { return ACTIVE.touch.controller != TouchController::None; }
 inline bool hasHomeKey() { return ACTIVE.touch.hasHomeKey; }
 inline bool hasPwmFrontlight() { return ACTIVE.frontlight.gpio != PIN_UNASSIGNED || ACTIVE.frontlight.viaPm1Pwm; }
+inline bool hasI2cFrontlight() { return ACTIVE.i2cFrontlight.controller != I2cFrontlightController::None; }
 inline bool hasColorTemperatureFrontlight() {
-  return ACTIVE.frontlight.gpio != PIN_UNASSIGNED && ACTIVE.frontlight.gpioWarm != PIN_UNASSIGNED;
+  return (ACTIVE.frontlight.gpio != PIN_UNASSIGNED && ACTIVE.frontlight.gpioWarm != PIN_UNASSIGNED) ||
+         ACTIVE.i2cFrontlight.controller == I2cFrontlightController::Lm3630a;
 }
 inline bool hasAudio() { return ACTIVE.audio.output != AudioOutput::None; }
 
