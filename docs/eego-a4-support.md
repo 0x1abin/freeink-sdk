@@ -38,7 +38,7 @@ a physical unit yet.
 | MicroSD | dedicated **HSPI** bus: SCLK 39, MISO 40, MOSI 38, CS 47 · 20 MHz |
 | Buttons | UP 5, DOWN 7, POWER 8 — plain active-high digital buttons |
 | Battery | ADC GPIO 10, charge-status GPIO 11, divider ×1.559 |
-| Touch | **GSLX680** — SDA 2, SCL 1, RST 3, addr 0x40 (needs a firmware upload) |
+| Touch | **GSLX680** — SDA 2, SCL 1, RST 3, addr 0x40. Firmware blob uploaded at boot (`gsl/EegoA4GslFirmware.h`, extracted + hash-verified); backend in InputManager. |
 | Touch mapping | rawY 12..632 → display X; rawX 884..9 → display Y (reversed): swapXY + flipY |
 | Screen key | GSL sentinel `rawX=0x03a0, rawY=0x1020`; short press = Back, 700 ms hold = Home |
 | RTC | **PCF8563** at 0x51, on the **shared touch I2C bus** (SDA 2 / SCL 1), 400 kHz |
@@ -71,8 +71,9 @@ not new infrastructure:
    its full/fast/gray LUT tables, modelled on `Uc8279X4Driver`. Handles the
    768→600 RAM padding, bottom-up scan, 4-fast-then-full cadence, and lazy PSRAM
    gray planes.
-3. **InputManager**: GSLX680 touch backend + its firmware blob upload; digital
-   UP/DOWN/POWER buttons; the screen-key → Back/Home gesture.
+3. **InputManager**: GSLX680 touch backend (`beginGslx680`/`pollGslx680`) — resets
+   the chip, uploads `gsl/EegoA4GslFirmware.h`, verifies the 0x5A5A5A5A load magic,
+   then reads reg 0x80 with the GSL nibble-unpack. Digital UP/DOWN/POWER buttons.
 4. **Rtc / SDCardManager / PowerManager**: PCF8563 on the shared bus; HSPI SD
    bus; GPIO4 latch + GPIO3-low deep-sleep sequence.
 
@@ -89,7 +90,9 @@ not new infrastructure:
   `20 MHz` display clock or the `eego_a4` name the scaffold assumed (both units are
   pre-freeink community-sdk builds), so the borrowed pin values are provisional.
 - Confirm button GPIOs 5/7/8 and battery divider ×1.559.
-- Confirm the GSL firmware blob matches this unit's digitizer.
+- Validate GSLX680 touch on hardware: the firmware blob is byte-verified (SHA-256
+  `076ac8…`) and the init/read sequence is RE-derived, but the coordinate
+  orientation (swapXY/flipY) and calibration range need a corner-tap check.
 - Standby current with the GPIO4 latch + GPIO3-low sequence.
 
 ## Provenance
