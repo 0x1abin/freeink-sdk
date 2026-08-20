@@ -52,6 +52,7 @@ struct ListProps {
   ActionId action = NO_ACTION;
   uint16_t inputMask = InputDefault | InputPrev | InputNext;
   TextStyle labelText{};
+  TextStyle emphasizedText{};
   TextStyle subtitleText{};
   TextStyle valueText{};
   StyleSet rowStyles{};
@@ -70,6 +71,8 @@ struct ListProps {
   // trailing chevron/value keeps air from the row edge on themes with tight
   // row padding.
   int16_t valueInset = 0;
+  // -1 = inherit from ThemeTokens; 0 = unlimited.
+  int16_t valueMaxWidth = -1;
   // When a multi-line label would otherwise overlap its trailing value, keep
   // the wrapped title band visually balanced with that value. Callers with a
   // short, secondary value (such as a file extension) can disable this to
@@ -95,6 +98,10 @@ struct ListProps {
   // Inward offset of the scroll track from the band edge (for panels recessed
   // behind a bezel). -1 = inherit the theme's listScrollInset.
   int16_t scrollIndicatorInset = -1;
+  SeparatorStyle separator = SeparatorStyle::Inherit;
+  // -1 = inherit, 0 = keep the selection inside the scroll reservation,
+  // 1 = paint the selected background across the full list width.
+  int8_t selectionCoversScrollReservation = -1;
   bool centerSingleLine = false;
   // Shrink each row's background/hit area to its label width plus side
   // padding instead of the full rect width (hug-content menu rows).
@@ -320,7 +327,9 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
     rowArea.x = static_cast<int16_t>(rowArea.x + rowInset);
     rowArea.width = static_cast<int16_t>(rowArea.width - rowInset * 2);
   }
-  if (props.scrollIndicator && overflows && scrollW > 0) {
+  const bool drawsScrollIndicator =
+      props.scrollIndicator && overflows && scrollW > 0;
+  if (drawsScrollIndicator) {
     // Rows only give up width when the row inset margin doesn't already
     // clear the track (plus its bezel inset) plus 2px of air.
     const int16_t needed = static_cast<int16_t>(scrollW + scrollInset + 2);
@@ -330,8 +339,9 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
       if (scrollLeft)
         rowArea.x = static_cast<int16_t>(rowArea.x + cut);
     }
-    drawListScrollIndicator(frame.target(), rect, props.count, visible, top,
-                            scrollW, scrollLeft ? 1 : 0, scrollInset);
+    if (props.selectionCoversScrollReservation <= 0)
+      drawListScrollIndicator(frame.target(), rect, props.count, visible, top,
+                              scrollW, scrollLeft ? 1 : 0, scrollInset);
   }
 
   // Cursor-based layout: section header rows are shorter than item rows, so
@@ -377,7 +387,10 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
     int16_t itemH = rowH;
     int16_t subH = 0;
     uint8_t labelLines = 1;
-    const int16_t labelLh = frame.target().lineHeight(props.labelText.font);
+    const TextStyle &itemLabelText =
+        hasState(item.state, StateEmphasized) ? props.emphasizedText
+                                              : props.labelText;
+    const int16_t labelLh = frame.target().lineHeight(itemLabelText.font);
     // Width the wrapped text is laid out in, shared by this sizing pass and
     // the draw below: the row content minus the leading icon.
     int16_t contentAvail = static_cast<int16_t>(rowArea.width - sidePad * 2);
@@ -390,9 +403,9 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
       contentAvail =
           static_cast<int16_t>(contentAvail - iconSize - props.textGap);
     }
-    if (item.label && props.labelText.maxLines > 1 &&
+    if (item.label && itemLabelText.maxLines > 1 &&
         (item.subtitle != nullptr ||
-         static_cast<int16_t>(labelLh * props.labelText.maxLines) > rowH)) {
+         static_cast<int16_t>(labelLh * itemLabelText.maxLines) > rowH)) {
       // The label band also loses the trailing value/toggle slot.
       int16_t labelAvail = contentAvail;
       if (item.toggle) {
@@ -400,22 +413,23 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
             labelAvail - (props.toggleWidth < 18 ? 18 : props.toggleWidth) -
             props.valueInset - props.textGap);
       } else if (item.value) {
-        labelAvail = static_cast<int16_t>(
-            labelAvail -
+        int16_t valueW =
             frame.target()
                 .measureText(props.valueText.font, item.value, props.valueText)
-                .width -
-            props.valueInset - props.textGap);
+                .width;
+        if (props.valueMaxWidth > 0 && valueW > props.valueMaxWidth)
+          valueW = props.valueMaxWidth;
+        labelAvail = static_cast<int16_t>(
+            labelAvail - valueW - props.valueInset - props.textGap);
       }
       // The cheap single-line width check gates the full wrap layout, so
       // rows whose label fits pay one measure and nothing else.
       if (labelAvail > 0 &&
           frame.target()
-                  .measureText(props.labelText.font, item.label,
-                               props.labelText)
+                  .measureText(itemLabelText.font, item.label, itemLabelText)
                   .width > labelAvail) {
         const Size wrapped = measureWrappedText(
-            frame.target(), item.label, props.labelText, labelAvail);
+            frame.target(), item.label, itemLabelText, labelAvail);
         const int16_t lines =
             labelLh > 0 ? static_cast<int16_t>(wrapped.height / labelLh) : 1;
         if (lines > 1)
@@ -455,7 +469,7 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
       // selection pill wraps the text instead of spanning the rect.
       const int16_t labelW =
           frame.target()
-              .measureText(props.labelText.font, item.label, props.labelText)
+              .measureText(itemLabelText.font, item.label, itemLabelText)
               .width;
       const int16_t hugW = static_cast<int16_t>(labelW + sidePad * 2);
       if (hugW < row.width)
@@ -482,10 +496,17 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
     if (props.rowRadius > 0)
       setStyleRadius(styles, props.rowRadius);
     const BoxStyle &style = styles.resolve(state);
-    frame.target().fill(row, style.background, style.radius, style.corners);
+    Rect backgroundRow = row;
+    if (hasState(state, StateSelected) &&
+        props.selectionCoversScrollReservation > 0) {
+      backgroundRow.x = rect.x;
+      backgroundRow.width = rect.width;
+    }
+    frame.target().fill(backgroundRow, style.background, style.radius,
+                        style.corners);
     if (style.border.kind != PaintKind::None && style.borderWidth > 0) {
-      frame.target().stroke(row, style.border, style.borderWidth, style.radius,
-                            style.corners);
+      frame.target().stroke(backgroundRow, style.border, style.borderWidth,
+                            style.radius, style.corners);
     }
 
     Rect content = row.inset(Insets{0, sidePad, 0, sidePad});
@@ -494,7 +515,7 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
     // icon and value align to it; the subtitle spans the full content width
     // under the band so it never collides with the value.
     TextStyle labelStyle =
-        textStyleWithForeground(props.labelText, style.foreground);
+        textStyleWithForeground(itemLabelText, style.foreground);
     const int16_t labelH = frame.target().lineHeight(labelStyle.font);
     // The band holds every label line the height pre-pass measured (usually
     // one); the subtitle and the row's growth both follow it.
@@ -572,10 +593,12 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
       TextStyle valueStyle =
           textStyleWithForeground(props.valueText, style.foreground);
       valueStyle.align = TextAlign::Right;
-      const int16_t valueW =
+      int16_t valueW =
           frame.target()
               .measureText(valueStyle.font, item.value, valueStyle)
               .width;
+      if (props.valueMaxWidth > 0 && valueW > props.valueMaxWidth)
+        valueW = props.valueMaxWidth;
       Rect valueRect{
           static_cast<int16_t>(band.x + availW - valueW - props.valueInset),
           band.y, valueW, band.height};
@@ -649,6 +672,10 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
                                 props.markerPaint);
       }
     }
+    drawHorizontalSeparator(
+        frame.target(),
+        Rect{rect.x, static_cast<int16_t>(row.bottom() - 1), rect.width, 1},
+        props.separator);
   }
 
   if (props.nav)
@@ -721,6 +748,10 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
       }
     }
   }
+
+  if (drawsScrollIndicator && props.selectionCoversScrollReservation > 0)
+    drawListScrollIndicator(frame.target(), rect, props.count, visible, top,
+                            scrollW, scrollLeft ? 1 : 0, scrollInset);
 }
 
 } // namespace ui

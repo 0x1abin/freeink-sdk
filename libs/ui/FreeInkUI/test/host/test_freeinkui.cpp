@@ -49,6 +49,8 @@ class FakeDrawTarget : public DrawTarget {
     uint8_t radius;
     uint8_t corners;
     Rotation rotation;
+    FontId font;
+    bool bold;
   };
 
   Op ops[256]{};
@@ -75,7 +77,8 @@ class FakeDrawTarget : public DrawTarget {
     record(Op::Triangle, Rect{a.x, a.y, static_cast<int16_t>(c.x - a.x), static_cast<int16_t>(c.y - a.y)}, paint);
   }
   void text(Rect rect, const char*, TextStyle style) override {
-    record(Op::Text, rect, Paint::solid(style.color), 0, CornersAll, style.rotation);
+    record(Op::Text, rect, Paint::solid(style.color), 0, CornersAll,
+           style.rotation, style.font, style.bold);
   }
   void bitmap(Rect rect, BitmapRef, BitmapMode, Paint foreground, Rotation rotation) override {
     record(Op::Bitmap, rect, foreground, 0, CornersAll, rotation);
@@ -90,9 +93,12 @@ class FakeDrawTarget : public DrawTarget {
 
  private:
   void record(Op::Kind kind, Rect rect, Paint paint, uint8_t radius = 0, uint8_t corners = CornersAll,
-              Rotation rotation = Rotation::None) {
+              Rotation rotation = Rotation::None, FontId font = 0,
+              bool bold = false) {
     if (opCount < sizeof(ops) / sizeof(ops[0]))
-      ops[opCount++] = Op{kind, rect, paint.kind, paint.color, radius, corners, rotation};
+      ops[opCount++] =
+          Op{kind, rect, paint.kind, paint.color, radius, corners, rotation,
+             font, bold};
   }
 };
 
@@ -807,6 +813,82 @@ void testListCanUseFullTitleWidthWithShortValue() {
   CHECK_EQ(fullWidthDraw.ops[2].rect.width, 424);
 }
 
+void testInxListPrimitivesStayOptIn() {
+  FakeDrawTarget draw;
+  DeviceContext device = makeDevice(100, 40);
+  InputSnapshot input;
+  InteractionBuffer<8> interactions;
+  Frame<8> frame(draw, device, input, interactions);
+  ListItem items[3];
+  items[0].label = "Heading";
+  items[0].value = "1234567890";
+  items[0].state = StateEmphasized;
+  items[1].label = "Second";
+  items[2].label = "Third";
+
+  ListProps props;
+  props.items = items;
+  props.count = 3;
+  props.selectedIndex = 0;
+  props.rowHeight = 20;
+  props.rowGap = 0;
+  props.sidePadding = 4;
+  props.scrollIndicatorWidth = 3;
+  props.separator = SeparatorStyle::Dotted;
+  props.valueMaxWidth = 20;
+  props.selectionCoversScrollReservation = 1;
+  props.emphasizedText.font = 9;
+  props.emphasizedText.bold = true;
+  list(frame, Rect{0, 0, 100, 40}, props);
+
+  bool sawFullSelection = false;
+  bool sawDotted0 = false;
+  bool sawDotted3 = false;
+  bool sawEmphasized = false;
+  bool sawValueCap = false;
+  for (size_t i = 0; i < draw.opCount; ++i) {
+    const auto &op = draw.ops[i];
+    if (op.kind == FakeDrawTarget::Op::Fill &&
+        op.paint == PaintKind::Solid && op.color == Color::Black &&
+        op.rect.x == 0 && op.rect.y == 0 && op.rect.width == 100 &&
+        op.rect.height == 20)
+      sawFullSelection = true;
+    if (op.kind == FakeDrawTarget::Op::Fill && op.rect.y == 19 &&
+        op.rect.width == 1 && op.rect.height == 1) {
+      if (op.rect.x == 0)
+        sawDotted0 = true;
+      if (op.rect.x == 3)
+        sawDotted3 = true;
+    }
+    if (op.kind == FakeDrawTarget::Op::Text && op.font == 9 && op.bold)
+      sawEmphasized = true;
+    if (op.kind == FakeDrawTarget::Op::Text && op.rect.width == 20)
+      sawValueCap = true;
+  }
+  CHECK(sawFullSelection);
+  CHECK(sawDotted0 && sawDotted3);
+  CHECK(sawEmphasized);
+  CHECK(sawValueCap);
+
+  FakeDrawTarget defaultsDraw;
+  InteractionBuffer<8> defaultsInteractions;
+  Frame<8> defaultsFrame(defaultsDraw, device, input, defaultsInteractions);
+  props.separator = SeparatorStyle::None;
+  props.valueMaxWidth = 0;
+  props.selectionCoversScrollReservation = 0;
+  list(defaultsFrame, Rect{0, 0, 100, 40}, props);
+  bool defaultSelectionStayedReserved = false;
+  for (size_t i = 0; i < defaultsDraw.opCount; ++i) {
+    const auto &op = defaultsDraw.ops[i];
+    if (op.kind == FakeDrawTarget::Op::Fill &&
+        op.paint == PaintKind::Solid && op.color == Color::Black &&
+        op.rect.x == 0 && op.rect.y == 0 && op.rect.width == 95 &&
+        op.rect.height == 20)
+      defaultSelectionStayedReserved = true;
+  }
+  CHECK(defaultSelectionStayedReserved);
+}
+
 void testButtonRegistersExpandedHit() {
   FakeDrawTarget draw;
   DeviceContext device = makeDevice();
@@ -870,13 +952,14 @@ void testBatteryIndicator() {
   CHECK_EQ(charge.rect.width, 9);  // cavity is 18 wide at 50%
   CHECK(charge.paint == PaintKind::Solid);
 
-  // Charging without an icon keeps the solid fill and overlays a bolt.
+  // Charging without an icon keeps the solid fill and overlays the built-in
+  // bitmap bolt.
   FakeDrawTarget draw2;
   Frame<4> frame2(draw2, device, input, interactions);
   props.charging = true;
   batteryIndicator(frame2, Rect{400, 0, 80, 20}, props);
   CHECK(draw2.ops[2].paint == PaintKind::Solid);
-  CHECK_EQ(draw2.countKind(FakeDrawTarget::Op::Triangle), 2u);
+  CHECK_EQ(draw2.countKind(FakeDrawTarget::Op::Bitmap), 1u);
 
   // Percent above 100 clamps to a full cavity.
   FakeDrawTarget draw3;
@@ -1252,6 +1335,8 @@ void testContentWidthTabBarLayout() {
   bar.gap = 8;
   bar.tabInset = Insets{2, 0, 4, 0};
   bar.contentInset = Insets{2, 8, 2, 8};
+  bar.selectedText.font = 9;
+  bar.selectedText.bold = true;
   tabBar(frame, Rect{0, 0, 480, 40}, bar);
 
   CHECK_EQ(interactions.count(), 2u);
@@ -1261,6 +1346,8 @@ void testContentWidthTabBarLayout() {
   CHECK_EQ(draw.ops[0].rect.width, 34);
   CHECK_EQ(draw.ops[2].rect.x, 62);
   CHECK_EQ(draw.ops[2].rect.width, 52);
+  CHECK_EQ(draw.ops[1].font, 9);
+  CHECK(draw.ops[1].bold);
   InputSnapshot tap;
   tap.touchReleased = true;
   tap.touchX = 70;
@@ -1412,14 +1499,14 @@ void testThemePrimitiveParity() {
   CHECK_EQ(draw4.countKind(FakeDrawTarget::Op::Line), 1u);
   CHECK_EQ(draw4.countKind(FakeDrawTarget::Op::Bitmap), 1u);
 
-  // Charging battery draws a bolt (two triangles) instead of a dithered fill.
+  // Charging battery draws the built-in bolt bitmap.
   FakeDrawTarget draw5;
   Frame<16> frame5(draw5, device, input, interactions);
   BatteryIndicatorProps battery;
   battery.percent = 80;
   battery.charging = true;
   batteryIndicator(frame5, Rect{400, 0, 80, 20}, battery);
-  CHECK_EQ(draw5.countKind(FakeDrawTarget::Op::Triangle), 2u);
+  CHECK_EQ(draw5.countKind(FakeDrawTarget::Op::Bitmap), 1u);
 }
 
 
@@ -2777,7 +2864,15 @@ void testHeaderBorderEdges() {
   // The themed header supplies a 1px divider when the theme's popup style has
   // no border of its own, so default headers match the documented divider.
   screen.header("Top");
-  CHECK_EQ(draw.countKind(FakeDrawTarget::Op::Line), 1u);
+  bool sawBottomRule = false;
+  for (size_t i = 0; i < draw.opCount; ++i) {
+    const auto &op = draw.ops[i];
+    if (op.kind == FakeDrawTarget::Op::Fill && op.rect.x == 0 &&
+        op.rect.y == 19 && op.rect.width == 200 && op.rect.height == 1)
+      sawBottomRule = true;
+  }
+  CHECK(sawBottomRule);
+  CHECK_EQ(draw.countKind(FakeDrawTarget::Op::Line), 0u);
   CHECK_EQ(draw.countKind(FakeDrawTarget::Op::Stroke), 0u);
 
   FakeDrawTarget boxedDraw;
@@ -3044,6 +3139,7 @@ int main() {
   testListNavLayoutFeedback();
   testListNavConvergesThroughRealList();
   testListCanUseFullTitleWidthWithShortValue();
+  testInxListPrimitivesStayOptIn();
   testButtonRegistersExpandedHit();
   testProgressBarClamps();
   testBatteryIndicator();

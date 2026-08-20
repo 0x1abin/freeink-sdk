@@ -250,7 +250,13 @@ public:
     if (textStyleUnset(themed.subtitleText))
       themed.subtitleText = theme_.smallText;
     if (textStyleUnset(themed.valueText))
-      themed.valueText = theme_.smallText;
+      themed.valueText = textStyleUnset(theme_.listValueText)
+                             ? theme_.smallText
+                             : theme_.listValueText;
+    if (textStyleUnset(themed.emphasizedText))
+      themed.emphasizedText = textStyleUnset(theme_.listEmphasizedText)
+                                  ? themed.labelText
+                                  : theme_.listEmphasizedText;
     if (textStyleUnset(themed.headerText))
       themed.headerText = theme_.smallText;
     if (themed.rowStyles.unset()) {
@@ -294,6 +300,13 @@ public:
       themed.scrollIndicatorSide = theme_.listScrollSide;
     if (themed.scrollIndicatorInset < 0)
       themed.scrollIndicatorInset = theme_.listScrollInset;
+    if (themed.separator == SeparatorStyle::Inherit)
+      themed.separator = theme_.listSeparator;
+    if (themed.valueMaxWidth < 0)
+      themed.valueMaxWidth = theme_.listValueMaxWidth;
+    if (themed.selectionCoversScrollReservation < 0)
+      themed.selectionCoversScrollReservation =
+          theme_.listSelectionCoversScrollReservation ? 1 : 0;
     // Rows inset within the band (Lyra pill); the scroll indicator stays at
     // the band's true edge.
     if (themed.rowInset < 0)

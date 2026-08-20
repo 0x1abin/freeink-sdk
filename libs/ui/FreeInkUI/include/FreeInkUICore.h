@@ -273,6 +273,7 @@ enum State : uint8_t {
   StateActive = 1 << 2,
   StateDisabled = 1 << 3,
   StateChecked = 1 << 4,
+  StateEmphasized = 1 << 5,
 };
 
 inline State operator|(State a, State b) {
@@ -626,6 +627,13 @@ enum class SelectionStyle : uint8_t {
   Triangle,   // rows keep their normal style; triangle marker
 };
 
+enum class SeparatorStyle : uint8_t {
+  None,
+  Solid,
+  Dotted,
+  Inherit,
+};
+
 struct ThemeTokens {
   FontId fontSmall = 0;
   FontId fontBody = 0;
@@ -654,6 +662,9 @@ struct ThemeTokens {
   // track hugs the edge); boards whose panel sits recessed behind the bezel set
   // this so the indicator clears the bezel and stays visible.
   int16_t listScrollInset = 0;
+  SeparatorStyle listSeparator = SeparatorStyle::None;
+  int16_t listValueMaxWidth = 0; // 0 = unlimited
+  bool listSelectionCoversScrollReservation = false;
   // Header shape tokens, forwarded by Screen::header() the same way.
   int16_t headerSidePadding = 6;
   uint8_t headerUnderline = 1; // bottom rule thickness; 0 = none
@@ -661,6 +672,8 @@ struct ThemeTokens {
   TextStyle smallText{};
   TextStyle bodyText{};
   TextStyle titleText{};
+  TextStyle listEmphasizedText{};
+  TextStyle listValueText{};
   StyleSet button{};
   StyleSet listRow{};
   StyleSet key{};
@@ -709,6 +722,20 @@ public:
                       Paint foreground = Paint::solid(Color::Black),
                       Rotation rotation = Rotation::None) = 0;
 };
+
+inline void drawHorizontalSeparator(DrawTarget &target, const Rect rect,
+                                    const SeparatorStyle style,
+                                    Paint paint = Paint::solid(Color::Black)) {
+  if (rect.empty() || style == SeparatorStyle::None ||
+      style == SeparatorStyle::Inherit)
+    return;
+  if (style == SeparatorStyle::Solid) {
+    target.fill(rect, paint);
+    return;
+  }
+  for (int16_t x = rect.x; x < rect.right(); x += 3)
+    target.fill(Rect{x, rect.y, 1, rect.height}, paint);
+}
 
 // UTF-8 horizontal ellipsis, appended to truncated lines.
 static constexpr const char *TEXT_ELLIPSIS = "\xE2\x80\xA6";

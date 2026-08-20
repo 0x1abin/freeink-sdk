@@ -37,6 +37,7 @@ struct TabBarProps {
   ActionId action = NO_ACTION;
   uint16_t inputMask = InputDefault | InputPrev | InputNext;
   TextStyle text{};
+  TextStyle selectedText{};
   // selected state drives the pill: set selected.background + radius.
   StyleSet tabStyles{};
   // Inset of each tab pill within its equal-width slot.
@@ -184,7 +185,11 @@ void tabBar(Frame<MaxInteractions>& frame, Rect rect, const TabBarProps& props) 
       if (!drawn && icon) frame.target().bitmap(iconRect, icon, BitmapMode::Center, style.foreground);
     }
     if (hasLabel) {
-      TextStyle label = textStyleWithForeground(props.text, style.foreground);
+      const TextStyle &baseText =
+          tab.selected && !textStyleUnset(props.selectedText)
+              ? props.selectedText
+              : props.text;
+      TextStyle label = textStyleWithForeground(baseText, style.foreground);
       label.align = TextAlign::Center;
       Rect labelRect = content;
       if (hasIcon) {
