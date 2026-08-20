@@ -495,7 +495,13 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
         props.rowStyles.unset() ? defaultListRowStyles() : props.rowStyles;
     if (props.rowRadius > 0)
       setStyleRadius(styles, props.rowRadius);
-    const BoxStyle &style = styles.resolve(state);
+    // A disabled bit carried by an enabled item is visual-only dimming. Keep
+    // it while idle, but let the selected style stay visible for navigation.
+    State visualState = state;
+    if (item.enabled && hasState(visualState, StateSelected))
+      visualState = static_cast<State>(
+          static_cast<int>(visualState) & ~static_cast<int>(StateDisabled));
+    const BoxStyle &style = styles.resolve(visualState);
     Rect backgroundRow = row;
     if (hasState(state, StateSelected) &&
         props.selectionCoversScrollReservation > 0) {

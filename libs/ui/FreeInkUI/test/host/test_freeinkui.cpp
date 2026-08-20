@@ -889,6 +889,38 @@ void testInxListPrimitivesStayOptIn() {
   CHECK(defaultSelectionStayedReserved);
 }
 
+void testSelectedVisualOnlyDisabledListRow() {
+  FakeDrawTarget draw;
+  DeviceContext device = makeDevice(100, 40);
+  InputSnapshot input;
+  InteractionBuffer<4> interactions;
+  Frame<4> frame(draw, device, input, interactions);
+  ListItem item{};
+  item.label = "Installed";
+  item.state = StateDisabled;
+  item.actionValue = 7;
+
+  ListProps props;
+  props.items = &item;
+  props.count = 1;
+  props.selectedIndex = 0;
+  props.action = 9;
+  props.rowHeight = 20;
+  list(frame, Rect{0, 0, 100, 20}, props);
+
+  bool sawSelectedFill = false;
+  for (size_t i = 0; i < draw.opCount; ++i) {
+    const auto &op = draw.ops[i];
+    if (op.kind == FakeDrawTarget::Op::Fill && op.paint == PaintKind::Solid &&
+        op.color == Color::Black && op.rect.x == 0 && op.rect.y == 0 &&
+        op.rect.width == 100 && op.rect.height == 20)
+      sawSelectedFill = true;
+  }
+  CHECK(sawSelectedFill);
+  CHECK_EQ(interactions.count(), 1u);
+  CHECK(!hasState(interactions.data()[0].state, StateDisabled));
+}
+
 void testButtonRegistersExpandedHit() {
   FakeDrawTarget draw;
   DeviceContext device = makeDevice();
@@ -3140,6 +3172,7 @@ int main() {
   testListNavConvergesThroughRealList();
   testListCanUseFullTitleWidthWithShortValue();
   testInxListPrimitivesStayOptIn();
+  testSelectedVisualOnlyDisabledListRow();
   testButtonRegistersExpandedHit();
   testProgressBarClamps();
   testBatteryIndicator();
