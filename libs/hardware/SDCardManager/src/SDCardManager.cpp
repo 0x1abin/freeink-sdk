@@ -107,8 +107,9 @@ bool SDCardManager::begin() {
 #if FREEINK_MCU_S3 || FREEINK_MCU_ESP32
   if (BoardConfig::ACTIVE.sd.separateSpi && SD_SCLK >= 0 && SD_MOSI >= 0 && SD_MISO >= 0) {
     static SPIClass dedicatedSdSpi(HSPI);
+    // End each transaction in the task that started it; the bus itself remains dedicated HSPI.
     cardReady = dedicatedSdSpi.begin(SD_SCLK, SD_MISO, SD_MOSI, SD_CS) &&
-                sd.begin(SdSpiConfig(SD_CS, DEDICATED_SPI | USER_SPI_BEGIN, SPI_FQ, &dedicatedSdSpi));
+                sd.begin(SdSpiConfig(SD_CS, SHARED_SPI | USER_SPI_BEGIN, SPI_FQ, &dedicatedSdSpi));
   } else {
 #endif
     if (SD_SCLK >= 0 && SD_MOSI >= 0 && SD_MISO >= 0) {
