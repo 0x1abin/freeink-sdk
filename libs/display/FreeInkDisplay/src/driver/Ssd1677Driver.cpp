@@ -118,6 +118,22 @@ static const Ssd1677Config& ssd1677MofeiM4Config() {
   return cfg;
 }
 
+// Waveshare ESP32-S3 ePaper 3.97. Inherit the default FULL/HALF sequences;
+// override only the panel-specific partial, grayscale, and sleep behavior.
+static const Ssd1677Config& ssd1677Waveshare397Config() {
+  static const Ssd1677Config cfg = [] {
+    Ssd1677Config value = ssd1677DefaultConfig();
+    value.halfRefreshTemp = 0x6A;
+    value.grayLut = lut_grayscale_waveshare;
+    value.fastSeqOverride = 0xFF;
+    value.grayPowerUpFirst = true;
+    value.borderWaveformGray = 0x80;
+    value.deepSleepMode = 0x01;
+    return value;
+  }();
+  return cfg;
+}
+
 // ── Reusable per-board waveform shortcuts ────────────────────────────────────
 // Opt-in optimizations a board can layer onto a base Ssd1677Config when its
 // specific panel is known to tolerate them. Each is a pure copy-and-tweak so a
@@ -662,11 +678,12 @@ void Ssd1677Driver::deepSleep(EpdBus& bus) {
     bus.waitBusy(" display power-down");
     _isScreenOn = false;
   }
-  // Stock parity: deep sleep mode 2 (0x03) discards controller RAM. Nothing may
-  // treat RAM as a valid diff baseline after wake — initController() re-arms
+  // Most boards use deep sleep mode 2 (0x03); boards with a vendor-specific
+  // requirement override it in their config. Nothing may treat controller RAM
+  // as a valid diff baseline after wake — initController() re-arms
   // _needsInitialFull, so the first paint is an absolute clean anyway.
   bus.cmd(CMD_DEEP_SLEEP);
-  bus.data(0x03);
+  bus.data(_cfg.deepSleepMode);
 }
 
 // Per-board waveform/LUT injection: a board supplies its own SSD1677 config
@@ -687,6 +704,8 @@ static const Ssd1677Config& ssd1677ActiveConfig() {
       return ssd1677StickyConfig();
     case BoardConfig::Board::MofeiM4:
       return ssd1677MofeiM4Config();
+    case BoardConfig::Board::WaveshareEpaper397:
+      return ssd1677Waveshare397Config();
     // X4 Pro runs on the stock X4/GDEQ0426T82 config — same controller and panel
     // class, confirmed painting on hardware. No custom LUT or drive voltages needed.
     case BoardConfig::Board::XteinkX4Pro:

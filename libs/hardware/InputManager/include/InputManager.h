@@ -17,6 +17,8 @@
 #endif
 #include <freertos/task.h>
 
+#include "FunctionButtonGesture.h"
+
 class InputManager {
  public:
   InputManager();
@@ -47,7 +49,12 @@ class InputManager {
   // sleep-sliced idle loop) should re-poll quickly while this is set —
   // otherwise a press shorter than the poll period lands in a single sample and
   // is dropped.
-  bool isDebouncePending() const { return lastState != currentState; }
+  bool isDebouncePending() const {
+    if (BoardConfig::ACTIVE.inputStyle == BoardConfig::InputStyle::DigitalFunctionMultiGesture) {
+      return functionButtonGesture.isDebouncePending();
+    }
+    return lastState != currentState;
+  }
 
   // Duration between the first button press and final release.
   unsigned long getHeldTime() const;
@@ -217,6 +224,7 @@ class InputManager {
   void updateConfirmBackHold(unsigned long currentTime);
   void updateConfirmPowerHold(unsigned long currentTime);
   void updateDigitalTwoButton(unsigned long currentTime);
+  void updateFunctionMultiGesture(unsigned long currentTime);
   void applyStateChange(uint8_t state, unsigned long currentTime);
 
   // Touch backend. Compiled only when FREEINK_CAP_TOUCH is set; dispatches on
@@ -277,6 +285,7 @@ class InputManager {
   uint8_t twoButtonPhysicalState;
   unsigned long twoButtonPressStart;
   bool twoButtonLongPressActive;
+  freeink::input::FunctionButtonGesture functionButtonGesture;
 
   bool touchDataEnabled = false;         // I2C up, controller present
   uint8_t gt911Addr = 0;                 // resolved GT911 address (0 until probed)

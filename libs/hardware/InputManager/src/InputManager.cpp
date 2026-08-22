@@ -429,6 +429,36 @@ void InputManager::updateDigitalTwoButton(const unsigned long currentTime) {
   if (pressedEvents & (1u << BTN_POWER)) powerButtonPressStart = twoButtonPressStart;
 }
 
+void InputManager::updateFunctionMultiGesture(const unsigned long currentTime) {
+  using Gesture = freeink::input::FunctionButtonGesture;
+  static_assert(Gesture::BACK == (1u << BTN_BACK) && Gesture::CONFIRM == (1u << BTN_CONFIRM) &&
+                    Gesture::LEFT == (1u << BTN_LEFT) && Gesture::RIGHT == (1u << BTN_RIGHT) &&
+                    Gesture::UP == (1u << BTN_UP) && Gesture::DOWN == (1u << BTN_DOWN),
+                "Function gesture button bits must match InputManager");
+
+  uint8_t raw = 0;
+  if (isDigitalPressed(BoardConfig::ACTIVE.input.back)) raw |= Gesture::BACK;
+  if (isDigitalPressed(BoardConfig::ACTIVE.input.left)) raw |= Gesture::LEFT;
+  if (isDigitalPressed(BoardConfig::ACTIVE.input.right)) raw |= Gesture::RIGHT;
+  if (isDigitalPressed(BoardConfig::ACTIVE.input.confirm)) raw |= Gesture::CONFIRM;
+
+  const auto state = functionButtonGesture.update(raw, currentTime);
+  const uint8_t auxiliaryState = s_buttonHook ? s_buttonHook() : 0;
+  applyStateChange(state.down | auxiliaryState, currentTime);
+  pressedEvents |= state.pressed;
+  releasedEvents |= state.released;
+
+  const uint8_t direction = Gesture::LEFT | Gesture::RIGHT | Gesture::UP | Gesture::DOWN;
+  if (state.pressed & direction) buttonPressStart = state.startedMs;
+  if (state.released & direction) buttonPressFinish = currentTime;
+  if (state.pressed & Gesture::CONFIRM) buttonPressStart = state.startedMs;
+  const uint8_t click = Gesture::BACK | Gesture::CONFIRM;
+  if ((state.pressed & click) && (state.released & click)) {
+    buttonPressStart = state.startedMs;
+    buttonPressFinish = currentTime;
+  }
+}
+
 void InputManager::update() {
   const unsigned long currentTime = millis();
 
@@ -450,6 +480,10 @@ void InputManager::update() {
   }
   if (BoardConfig::ACTIVE.inputStyle == BoardConfig::InputStyle::DigitalTwoButton) {
     updateDigitalTwoButton(currentTime);
+    return;
+  }
+  if (BoardConfig::ACTIVE.inputStyle == BoardConfig::InputStyle::DigitalFunctionMultiGesture) {
+    updateFunctionMultiGesture(currentTime);
     return;
   }
 

@@ -66,13 +66,17 @@
 #ifndef FREEINK_DEVICE_MOFEI_M4
 #define FREEINK_DEVICE_MOFEI_M4 0
 #endif
+#ifndef FREEINK_DEVICE_WAVESHARE_EPAPER_397
+#define FREEINK_DEVICE_WAVESHARE_EPAPER_397 0
+#endif
 
 // --- 2) Coherence: exactly one MCU family, at least one device ---------------
 #if !(FREEINK_DEVICE_X4 || FREEINK_DEVICE_X3 || FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_M5 || FREEINK_DEVICE_MURPHY || \
       FREEINK_DEVICE_DELINK || FREEINK_DEVICE_LILYGO || FREEINK_DEVICE_M5PAPER || FREEINK_DEVICE_STICKY ||            \
-      FREEINK_DEVICE_PAPERMONO || FREEINK_DEVICE_EEGO_A4 || FREEINK_DEVICE_MOFEI_M4)
+      FREEINK_DEVICE_PAPERMONO || FREEINK_DEVICE_EEGO_A4 || FREEINK_DEVICE_MOFEI_M4 ||                                \
+      FREEINK_DEVICE_WAVESHARE_EPAPER_397)
 #error \
-    "FreeInk: no device selected. Pass at least one -DFREEINK_DEVICE_<NAME> (X4, X3, X4PRO, M5, MURPHY, DELINK, LILYGO, M5PAPER, STICKY, PAPERMONO, EEGO_A4, MOFEI_M4) in your build env — see platformio.sample.ini."
+    "FreeInk: no device selected. Pass at least one -DFREEINK_DEVICE_<NAME> (X4, X3, X4PRO, M5, MURPHY, DELINK, LILYGO, M5PAPER, STICKY, PAPERMONO, EEGO_A4, MOFEI_M4, WAVESHARE_EPAPER_397) in your build env — see platformio.sample.ini."
 #endif
 // Each device belongs to one MCU family; a binary targets exactly one. X3/X4 are
 // ESP32-C3; M5 PaperColor/Murphy/de-link/LilyGo are ESP32-S3; M5Paper v1.1 is the
@@ -82,7 +86,7 @@
 #define FREEINK_MCU_S3                                                                                    \
   (FREEINK_DEVICE_M5 || FREEINK_DEVICE_MURPHY || FREEINK_DEVICE_DELINK || FREEINK_DEVICE_LILYGO ||        \
    FREEINK_DEVICE_STICKY || FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_PAPERMONO || FREEINK_DEVICE_EEGO_A4 || \
-   FREEINK_DEVICE_MOFEI_M4)
+   FREEINK_DEVICE_MOFEI_M4 || FREEINK_DEVICE_WAVESHARE_EPAPER_397)
 #define FREEINK_MCU_ESP32 (FREEINK_DEVICE_M5PAPER)
 #if (FREEINK_MCU_C3 + FREEINK_MCU_S3 + FREEINK_MCU_ESP32) != 1
 #error \
@@ -97,7 +101,7 @@
 // 800x480 panel as X4/de-link/Sticky, recovered from its OEM firmware dump — see
 // docs/xteink-x4pro-support.md.
 #if FREEINK_DEVICE_X4 || FREEINK_DEVICE_DELINK || FREEINK_DEVICE_STICKY || FREEINK_DEVICE_X4PRO || \
-    FREEINK_DEVICE_MOFEI_M4
+    FREEINK_DEVICE_MOFEI_M4 || FREEINK_DEVICE_WAVESHARE_EPAPER_397
 #define FREEINK_DRIVER_SSD1677 1
 #else
 #define FREEINK_DRIVER_SSD1677 0
@@ -261,7 +265,7 @@
 #ifndef FREEINK_CAP_RTC
 #define FREEINK_CAP_RTC                                                                              \
   (FREEINK_DEVICE_X3 || FREEINK_DEVICE_STICKY || FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_PAPERMONO || \
-   FREEINK_DEVICE_EEGO_A4 || FREEINK_DEVICE_MOFEI_M4)
+   FREEINK_DEVICE_EEGO_A4 || FREEINK_DEVICE_MOFEI_M4 || FREEINK_DEVICE_WAVESHARE_EPAPER_397)
 #endif
 #ifndef FREEINK_CAP_TEMP_HUMIDITY
 #define FREEINK_CAP_TEMP_HUMIDITY (FREEINK_DEVICE_STICKY)
@@ -302,8 +306,9 @@
 // must define USE_BLOCK_DEVICE_INTERFACE=1 for the SdFat FsVolume these mount on.
 // Override with -DFREEINK_SD_SDMMC=0/1.
 #ifndef FREEINK_SD_SDMMC
-#define FREEINK_SD_SDMMC \
-  (FREEINK_DEVICE_DELINK || FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_PAPERMONO || FREEINK_DEVICE_MOFEI_M4)
+#define FREEINK_SD_SDMMC                                                                                   \
+  (FREEINK_DEVICE_DELINK || FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_PAPERMONO || FREEINK_DEVICE_MOFEI_M4 || \
+   FREEINK_DEVICE_WAVESHARE_EPAPER_397)
 #endif
 
 // Serial log transport hint for consumer firmware. Boards can share the same MCU
@@ -356,6 +361,7 @@ enum class Board : uint8_t {
   PaperMono,
   EegoA4,
   MofeiM4,
+  WaveshareEpaper397,
 };
 
 // How the board reports button presses.
@@ -366,6 +372,7 @@ enum class InputStyle : uint8_t {
   DigitalConfirmPowerHold,  // confirm click, power hold on a shared GPIO
   DigitalFiveKey,           // 3 physical GPIO keys + synthesized events (Murphy M3)
   DigitalTwoButton,         // short up/down; holds synthesize back/confirm/power
+  DigitalFunctionMultiGesture,  // function click/double/hold plus direction-key hold gestures
 };
 
 // Panel controller silicon. Drivers are selected from this at begin().
@@ -584,7 +591,7 @@ struct MicConfig {
   bool enableActiveHigh;
 };
 
-enum class RtcType : uint8_t { None, Pcf8563, Ds3231, Rx8130, Rx8010 };
+enum class RtcType : uint8_t { None, Pcf8563, Pcf85063, Ds3231, Rx8130, Rx8010 };
 enum class ImuType : uint8_t { None, Lsm6ds3, Qmi8658 };
 
 // On-board I2C sensors sharing one bus (e.g. the Sticky's RTC + temp/humidity +
@@ -1427,6 +1434,36 @@ constexpr BoardProfile MOFEI_M4 = {
     1.2f,
     {}};
 
+// --- Waveshare ESP32-S3 ePaper 3.97 — SSD1677 + AXP2101 -------------------
+// The AXP2101 is owned by the consumer HAL. The profile exposes only the
+// direct panel, SDMMC, buttons, and PCF85063A RTC wiring.
+constexpr BoardProfile WAVESHARE_EPAPER_397 = {
+    Board::WaveshareEpaper397,
+    "waveshare_epaper_397",
+    InputStyle::DigitalFunctionMultiGesture,
+    DisplayController::SSD1677,
+    800,
+    480,
+    {11, 12, 10, 9, 46, 3, PIN_UNASSIGNED},
+    20000000,
+    {PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, false, 0},
+    {0, 5, 4, 6, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, false},
+    PIN_UNASSIGNED,
+    PIN_UNASSIGNED,
+    1.0f,
+    PIN_UNASSIGNED,
+    NO_TOUCH,
+    NO_FRONTLIGHT,
+    NO_AUDIO,
+    NO_LEDS,
+    NO_FLIP,
+    {16, 17, 15, 7, 8, 18, 4},
+    NO_GAUGE,
+    NO_MIC,
+    {41, 42, 400000, 0x51, 0, 0, 0, RtcType::Pcf85063, ImuType::None},
+    1.0f,
+    {}};
+
 static_assert(!EEGO_A4.touch.swapXY && !EEGO_A4.touch.flipX && !EEGO_A4.touch.flipY,
               "EEGO A4 touch backend returns panel-native coordinates; no raw-range mapping");
 static_assert(MOFEI_M4.displayWidth / 8 * MOFEI_M4.displayHeight == 48000,
@@ -1436,6 +1473,11 @@ static_assert(MOFEI_M4.touch.controller == TouchController::Ft6336 && MOFEI_M4.t
               "Mofei M4 FT6336 profile must swap axes and use active-low touch power");
 static_assert(MOFEI_M4.sdmmc.busWidth == 4 && !MOFEI_M4.sd.powerActiveHigh,
               "Mofei M4 SD must use 4-bit SDMMC with active-low rail power");
+static_assert(WAVESHARE_EPAPER_397.displayWidth / 8 * WAVESHARE_EPAPER_397.displayHeight == 48000,
+              "Waveshare 3.97 must use one 48,000-byte framebuffer");
+static_assert(WAVESHARE_EPAPER_397.sdmmc.busWidth == 4, "Waveshare 3.97 SD must use 4-bit SDMMC");
+static_assert(WAVESHARE_EPAPER_397.input.confirm == 5 && WAVESHARE_EPAPER_397.input.power == PIN_UNASSIGNED,
+              "Waveshare 3.97 GPIO5 must be confirm-only; power is reported by the AXP2101");
 
 // Largest framebuffer (bytes) over the devices compiled into this build, derived
 // from the profiles above. The display facade sizes its static framebuffer to
@@ -1456,8 +1498,9 @@ constexpr uint32_t MAX_FRAMEBUFFER_BYTES =
                         FREEINK_DEVICE_X4PRO ? panelBytes(XTEINK_X4_PRO) : 0u)),
               cmax(cmax(FREEINK_DEVICE_STICKY ? panelBytes(STICKY) : 0u,
                         FREEINK_DEVICE_PAPERMONO ? panelBytes(PAPER_MONO) : 0u),
-                   cmax(FREEINK_DEVICE_EEGO_A4 ? panelBytes(EEGO_A4) : 0u,
-                        FREEINK_DEVICE_MOFEI_M4 ? panelBytes(MOFEI_M4) : 0u))));
+                   cmax(cmax(FREEINK_DEVICE_EEGO_A4 ? panelBytes(EEGO_A4) : 0u,
+                             FREEINK_DEVICE_MOFEI_M4 ? panelBytes(MOFEI_M4) : 0u),
+                        FREEINK_DEVICE_WAVESHARE_EPAPER_397 ? panelBytes(WAVESHARE_EPAPER_397) : 0u))));
 
 // Compile-time default device — the profile ACTIVE starts as. With a single
 // device in the build this is the only device; with several same-MCU devices it
@@ -1482,6 +1525,8 @@ constexpr BoardProfile DEFAULT_DEVICE = XTEINK_X4_PRO;
 constexpr BoardProfile DEFAULT_DEVICE = EEGO_A4;
 #elif FREEINK_DEVICE_MOFEI_M4
 constexpr BoardProfile DEFAULT_DEVICE = MOFEI_M4;
+#elif FREEINK_DEVICE_WAVESHARE_EPAPER_397
+constexpr BoardProfile DEFAULT_DEVICE = WAVESHARE_EPAPER_397;
 #elif FREEINK_DEVICE_X3 && !FREEINK_DEVICE_X4
 constexpr BoardProfile DEFAULT_DEVICE = XTEINK_X3;  // X3-only binary
 #else
@@ -1564,6 +1609,11 @@ inline bool selectDevice(Board which) {
       ACTIVE = MOFEI_M4;
       break;
 #endif
+#if FREEINK_DEVICE_WAVESHARE_EPAPER_397
+    case Board::WaveshareEpaper397:
+      ACTIVE = WAVESHARE_EPAPER_397;
+      break;
+#endif
     default:
       return false;
   }
@@ -1584,6 +1634,7 @@ inline bool isX4Pro() { return ACTIVE.board == Board::XteinkX4Pro; }
 inline bool isPaperMono() { return ACTIVE.board == Board::PaperMono; }
 inline bool isEegoA4() { return ACTIVE.board == Board::EegoA4; }
 inline bool isMofeiM4() { return ACTIVE.board == Board::MofeiM4; }
+inline bool isWaveshareEpaper397() { return ACTIVE.board == Board::WaveshareEpaper397; }
 inline bool hasTouch() { return ACTIVE.touch.controller != TouchController::None; }
 inline bool hasHomeKey() { return ACTIVE.touch.hasHomeKey; }
 inline bool hasPwmFrontlight() { return ACTIVE.frontlight.gpio != PIN_UNASSIGNED || ACTIVE.frontlight.viaPm1Pwm; }

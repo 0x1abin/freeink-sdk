@@ -18,6 +18,10 @@ constexpr uint8_t PCF8563_REG_CLKOUT = 0x0D;
 constexpr uint8_t PCF8563_CLKOUT_DISABLED = 0x00;
 constexpr uint8_t PCF8563_VL_FLAG = 0x80;  // seconds reg bit7: oscillator stopped / voltage-low
 
+// PCF85063A register map (Waveshare ESP32-S3 ePaper 3.97).
+constexpr uint8_t PCF85063_REG_TIME = 0x04;
+constexpr uint8_t PCF85063_VL_FLAG = 0x80;
+
 // DS3231 register map.
 constexpr uint8_t DS3231_REG_TIME = 0x00;  // seconds, minutes, hours, day, date, month, year
 constexpr uint8_t DS3231_REG_CONTROL = 0x0E;
@@ -98,6 +102,9 @@ bool Rtc::begin() {
       if (!readRegs(addr, PCF8563_REG_CONTROL_STATUS1, &status, 1)) return false;
       writeReg(addr, PCF8563_REG_CLKOUT, PCF8563_CLKOUT_DISABLED);  // we don't use the 32 kHz CLKOUT
       break;
+    case BoardConfig::RtcType::Pcf85063:
+      if (!readRegs(addr, PCF85063_REG_TIME, &status, 1)) return false;
+      break;
     case BoardConfig::RtcType::Ds3231:
       if (!readRegs(addr, DS3231_REG_STATUS, &status, 1)) return false;
       writeReg(addr, DS3231_REG_CONTROL, DS3231_CONTROL_INTCN);  // disable square-wave output
@@ -132,6 +139,18 @@ bool Rtc::now(DateTime& out) {
       out.month = bcdToDec(raw[5] & 0x1FU);
       const uint8_t yy = bcdToDec(raw[6]);
       out.year = (raw[5] & 0x80U) ? static_cast<uint16_t>(1900 + yy) : static_cast<uint16_t>(2000 + yy);
+      return true;
+    }
+    case BoardConfig::RtcType::Pcf85063: {
+      if (!readRegs(addr, PCF85063_REG_TIME, raw, sizeof(raw))) return false;
+      if (raw[0] & PCF85063_VL_FLAG) return false;
+      out.second = bcdToDec(raw[0] & 0x7FU);
+      out.minute = bcdToDec(raw[1] & 0x7FU);
+      out.hour = bcdToDec(raw[2] & 0x3FU);
+      out.day = bcdToDec(raw[3] & 0x3FU);
+      out.weekday = bcdToDec(raw[4] & 0x07U);
+      out.month = bcdToDec(raw[5] & 0x1FU);
+      out.year = static_cast<uint16_t>(2000 + bcdToDec(raw[6]));
       return true;
     }
     case BoardConfig::RtcType::Ds3231: {
@@ -200,6 +219,7 @@ bool Rtc::set(const DateTime& dt) {
   const uint8_t addr = BoardConfig::ACTIVE.sensors.rtcAddr;
   if (!begun_ || addr == 0) return false;
   const auto& s = BoardConfig::ACTIVE.sensors;
+  if (s.rtcType == BoardConfig::RtcType::Pcf85063 && (dt.year < 2000 || dt.year > 2099)) return false;
   const uint8_t centuryBit = dt.year < 2000 ? 0x80U : 0x00U;
   ensureWire();
   auto& wire = sensorWire();
@@ -223,39 +243,73 @@ bool Rtc::set(const DateTime& dt) {
     const bool restarted = writeReg(addr, RX8130_REG_CONTROL0, static_cast<uint8_t>(control & ~RX8130_STOP));
     return written && restarted;
   }
-  const uint8_t timeReg = s.rtcType == BoardConfig::RtcType::Rx8010
-                              ? RX8010_REG_TIME
-                              : (s.rtcType == BoardConfig::RtcType::Pcf8563 ? PCF8563_REG_TIME : DS3231_REG_TIME);
+  uint8_t timeReg = 0;
+  switch (s.rtcType) {
+    case BoardConfig::RtcType::Pcf8563:
+      timeReg = PCF8563_REG_TIME;
+      break;
+    case BoardConfig::RtcType::Pcf85063:
+      timeReg = PCF85063_REG_TIME;
+      break;
+    case BoardConfig::RtcType::Ds3231:
+      timeReg = DS3231_REG_TIME;
+      break;
+    case BoardConfig::RtcType::Rx8010:
+      timeReg = RX8010_REG_TIME;
+      break;
+    case BoardConfig::RtcType::Rx8130:
+    case BoardConfig::RtcType::None:
+      return false;
+  }
   wire.beginTransmission(addr);
   wire.write(timeReg);
   wire.write(decToBcd(dt.second));  // also clears VL once a valid time is written
   wire.write(decToBcd(dt.minute));
   wire.write(decToBcd(dt.hour));
-  if (s.rtcType == BoardConfig::RtcType::Pcf8563) {
-    wire.write(decToBcd(dt.day));
-    wire.write(decToBcd(dt.weekday));
-    wire.write(static_cast<uint8_t>(decToBcd(dt.month) | centuryBit));
-  } else if (s.rtcType == BoardConfig::RtcType::Ds3231) {
-    wire.write(decToBcd(dt.weekday == 0 ? 7 : dt.weekday));
-    wire.write(decToBcd(dt.day));
-    wire.write(decToBcd(dt.month));
-  } else {
-    wire.write(static_cast<uint8_t>(1u << (dt.weekday % 7u)));
-    wire.write(decToBcd(dt.day));
-    wire.write(decToBcd(dt.month));
+  switch (s.rtcType) {
+    case BoardConfig::RtcType::Pcf8563:
+      wire.write(decToBcd(dt.day));
+      wire.write(decToBcd(dt.weekday));
+      wire.write(static_cast<uint8_t>(decToBcd(dt.month) | centuryBit));
+      break;
+    case BoardConfig::RtcType::Pcf85063:
+      wire.write(decToBcd(dt.day));
+      wire.write(decToBcd(dt.weekday));
+      wire.write(decToBcd(dt.month));
+      break;
+    case BoardConfig::RtcType::Ds3231:
+      wire.write(decToBcd(dt.weekday == 0 ? 7 : dt.weekday));
+      wire.write(decToBcd(dt.day));
+      wire.write(decToBcd(dt.month));
+      break;
+    case BoardConfig::RtcType::Rx8010:
+      wire.write(static_cast<uint8_t>(1u << (dt.weekday % 7u)));
+      wire.write(decToBcd(dt.day));
+      wire.write(decToBcd(dt.month));
+      break;
+    case BoardConfig::RtcType::Rx8130:
+    case BoardConfig::RtcType::None:
+      return false;
   }
   wire.write(decToBcd(static_cast<uint8_t>(dt.year % 100)));
   if (wire.endTransmission() != 0) return false;
-  if (s.rtcType == BoardConfig::RtcType::Ds3231) {
-    uint8_t status = 0;
-    if (readRegs(addr, DS3231_REG_STATUS, &status, 1)) {
-      writeReg(addr, DS3231_REG_STATUS, static_cast<uint8_t>(status & ~DS3231_STATUS_OSF));
-    }
-  } else if (s.rtcType == BoardConfig::RtcType::Rx8010) {
-    uint8_t status = 0;
-    if (readRegs(addr, RX8010_REG_FLAG, &status, 1)) {
-      writeReg(addr, RX8010_REG_FLAG, static_cast<uint8_t>(status & ~RX8010_FLAG_VLF));
-    }
+  uint8_t status = 0;
+  switch (s.rtcType) {
+    case BoardConfig::RtcType::Ds3231:
+      if (readRegs(addr, DS3231_REG_STATUS, &status, 1)) {
+        writeReg(addr, DS3231_REG_STATUS, static_cast<uint8_t>(status & ~DS3231_STATUS_OSF));
+      }
+      break;
+    case BoardConfig::RtcType::Rx8010:
+      if (readRegs(addr, RX8010_REG_FLAG, &status, 1)) {
+        writeReg(addr, RX8010_REG_FLAG, static_cast<uint8_t>(status & ~RX8010_FLAG_VLF));
+      }
+      break;
+    case BoardConfig::RtcType::Pcf8563:
+    case BoardConfig::RtcType::Pcf85063:
+    case BoardConfig::RtcType::Rx8130:
+    case BoardConfig::RtcType::None:
+      break;
   }
   return true;
 }
