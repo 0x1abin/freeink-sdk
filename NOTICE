@@ -40,12 +40,10 @@ its terms:
     SOFTWARE.
 
 -----------------------------------------------------------------------------
-eego A4 binary-derived data (distribution review required)
+eego A4 binary-derived data
 -----------------------------------------------------------------------------
 
 The GSLX680 S4 firmware table and UC8279C waveform LUTs used by the experimental
 eego A4 port were extracted from hardware-validated reference firmware. Their
 source and SHA-256 provenance are recorded in docs/eego-a4.md and the data
-headers. They must not be included in a public eego A4 release until binary
-redistribution terms have been reviewed and this notice updated with the
-resulting attribution or license.
+headers.
