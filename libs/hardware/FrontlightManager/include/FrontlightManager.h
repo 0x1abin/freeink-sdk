@@ -40,22 +40,22 @@ class FrontlightManager {
   bool present() const {
 #if FREEINK_CAP_FRONTLIGHT
     // A PMIC-driven frontlight (Paper Mono: PM1 PWM0 -> AW9967) has no ESP
-    // GPIO, so viaPm1Pwm counts as present alongside the LEDC-pin boards.
+    // GPIO, so viaPm1Pwm counts as present alongside the LEDC-pin boards. An
+    // I2C frontlight (LM3630A on the EEGO A4) may be an unpopulated, optional
+    // circuit — only report it after begin() gets an actual ACK.
     return BoardConfig::ACTIVE.frontlight.gpio != BoardConfig::PIN_UNASSIGNED ||
-           BoardConfig::ACTIVE.frontlight.viaPm1Pwm;
+           BoardConfig::ACTIVE.frontlight.viaPm1Pwm || (BoardConfig::hasI2cFrontlight() && _begun);
 #else
     return false;  // frontlight code not compiled in (FREEINK_CAP_FRONTLIGHT=0)
 #endif
   }
 
-  // True when the board wires a second (warm) channel, so setColorTemperature() does
-  // something. False on single-channel frontlights and on boards with none.
+  // True when a detected frontlight supports a warm/cool mix.
   bool hasColorTemperature() const {
-#if FREEINK_CAP_WARMLIGHT
-    return BoardConfig::ACTIVE.frontlight.gpio != BoardConfig::PIN_UNASSIGNED &&
-           BoardConfig::ACTIVE.frontlight.gpioWarm != BoardConfig::PIN_UNASSIGNED;
+#if FREEINK_CAP_FRONTLIGHT
+    return present() && BoardConfig::hasColorTemperatureFrontlight();
 #else
-    return false;  // no warm-channel board in this build (FREEINK_CAP_WARMLIGHT=0)
+    return false;
 #endif
   }
 
@@ -67,6 +67,12 @@ class FrontlightManager {
 #if FREEINK_CAP_FRONTLIGHT
   // Recompute and write both channels from _brightness + _warmPercent.
   void apply();
+  // LM3630A (I2C) frontlight helpers — see FrontlightManager.cpp.
+  bool lm3630aWrite(uint8_t reg, uint8_t value);
+  bool lm3630aRead(uint8_t reg, uint8_t& value);
+  bool lm3630aUpdate(uint8_t reg, uint8_t mask, uint8_t value);
+  bool configureLm3630a();
+  void applyLm3630a();
 #endif
 #ifdef FREEINK_FRONTLIGHT_LS
   // Keep RC_FAST powered through light sleep only while the light is actually
@@ -81,6 +87,7 @@ class FrontlightManager {
 #endif
 
   bool _begun = false;
+  bool _i2cConfigured = false;
   uint8_t _brightness = 0;
   uint8_t _brightnessLevel = 0;
   bool _useLevel = false;
