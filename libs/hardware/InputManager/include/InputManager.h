@@ -12,9 +12,13 @@
 #include <BoardConfig.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
+#if FREEINK_DEVICE_MURPHY_M4
+#include <freertos/semphr.h>
+#endif
 #include <freertos/task.h>
 
 #include <cstdint>
+#include "FunctionButtonGesture.h"
 
 class InputManager {
  public:
@@ -46,7 +50,12 @@ class InputManager {
   // sleep-sliced idle loop) should re-poll quickly while this is set —
   // otherwise a press shorter than the poll period lands in a single sample and
   // is dropped.
-  bool isDebouncePending() const { return lastState != currentState; }
+  bool isDebouncePending() const {
+    if (BoardConfig::ACTIVE.inputStyle == BoardConfig::InputStyle::DigitalFunctionMultiGesture) {
+      return functionButtonGesture.isDebouncePending();
+    }
+    return lastState != currentState;
+  }
 
   // Duration between the first button press and final release.
   unsigned long getHeldTime() const;
@@ -175,6 +184,13 @@ class InputManager {
   // (~700 ms), while still down — a hold shortcut (e.g. open the reader menu).
   // Cleared each #update().
   bool wasHomeKeyLongPressed() const;
+  // Drop the one-shot touch press/release edges without delivering them. Used
+  // on activity transitions so the incoming activity does not re-read a tap the
+  // outgoing activity already consumed within the same frame (InputManager
+  // clears these in update(), but a pushActivity runs mid-frame).
+  void clearTouchTapEvent();
+  // Quiesce board-specific touch activity before deep sleep.
+  void prepareForDeepSleep();
 
   // Optional board hook for buttons that aren't direct GPIOs — e.g. a key
   // behind an I2C IO-expander (the LilyGo T5 S3 user button on its PCA9535). It
@@ -271,6 +287,7 @@ class InputManager {
   void updateConfirmBackHold(unsigned long currentTime);
   void updateConfirmPowerHold(unsigned long currentTime);
   void updateDigitalTwoButton(unsigned long currentTime);
+  void updateFunctionMultiGesture(unsigned long currentTime);
   void applyStateChange(uint8_t state, unsigned long currentTime);
 
   // Touch backend. Compiled only when FREEINK_CAP_TOUCH is set; dispatches on
@@ -287,12 +304,12 @@ class InputManager {
   bool readChsc6xPoint(TouchPoint& point);
   bool decodeChsc6xFrame(const uint8_t* data, size_t len, TouchPoint& point) const;
   uint16_t mapTouchAxis(uint16_t raw, uint16_t rawMin, uint16_t rawMax, uint16_t outMax) const;
+  TouchPoint mapTouchPoint(uint16_t rawX, uint16_t rawY, unsigned long now) const;
+  void updateTouchContact(const TouchPoint& point);
+  void releaseTouch(unsigned long now);
   void beginGt911();
   bool gt911ReadReg(uint16_t reg, uint8_t* buf, uint8_t len);
   void gt911ClearStatus();
-  void beginFt6336u();
-  void pollFt6336u(unsigned long now);
-
   enum class MultiTouchGestureState : uint8_t { Idle, Tracking, Blocked };
   struct TrackedTouchContact {
     uint8_t id;
@@ -313,6 +330,25 @@ class InputManager {
   bool hasStableMultiTouchGeometry() const;
   bool isMultiTouchTranslation(unsigned long now) const;
   void normalizeTouchPoint(uint16_t x, uint16_t y, float& nx, float& ny) const;
+#if FREEINK_DEVICE_EEGO_A4
+  void beginGslx680();
+  void pollGslx680(unsigned long now);
+  bool gslx680Read(uint8_t reg, uint8_t* data, uint8_t len);
+  bool gslx680Write(uint8_t reg, const uint8_t* data, uint8_t len);
+  bool gslx680Write32(uint8_t reg, uint32_t value);
+  void gslx680ClearRegisters();
+  void gslx680ResetChip();
+  void gslx680StartChip();
+  bool gslx680LoadFirmware();
+  bool gslx680Check();
+#endif
+#if FREEINK_DEVICE_MURPHY_M4
+  void beginFt6336();
+  void pollFt6336(unsigned long now);
+  bool ft6336ReadReg(uint8_t reg, uint8_t* data, uint8_t len);
+  static void ft6336TaskTrampoline(void* self);
+  void ft6336TaskLoop();
+#endif
 
   uint8_t currentState;
   uint8_t lastState;
@@ -332,6 +368,7 @@ class InputManager {
   uint8_t twoButtonPhysicalState;
   unsigned long twoButtonPressStart;
   bool twoButtonLongPressActive;
+  freeink::input::FunctionButtonGesture functionButtonGesture;
 
   bool touchDataEnabled = false;         // I2C up, controller present
   uint8_t gt911Addr = 0;                 // resolved GT911 address (0 until probed)
@@ -373,6 +410,25 @@ class InputManager {
                                                  // the release-edge frame, cleared in
                                                  // serviceTouch() once the contact is over
 
+#if FREEINK_DEVICE_MURPHY_M4
+  // The interrupt line cannot signal usable edges on M4. A fixed-size snapshot
+  // bridges a 10 ms poll task to update() without allocating an event queue.
+  struct Ft6336TaskState {
+    bool contact = false;
+    bool pressLatched = false;
+    bool releaseLatched = false;
+    uint16_t rawX = 0;
+    uint16_t rawY = 0;
+    uint16_t downRawX = 0;
+    uint16_t downRawY = 0;
+    uint16_t releaseRawX = 0;
+    uint16_t releaseRawY = 0;
+  };
+  Ft6336TaskState ft6336State;
+  SemaphoreHandle_t ft6336Mutex = nullptr;
+  TaskHandle_t ft6336Task = nullptr;
+#endif
+
   static constexpr int NUM_BUTTONS_1 = 4;
   static const int ADC_RANGES_1[];
 
@@ -392,6 +448,10 @@ class InputManager {
   static constexpr int TOUCH_TAP_SLOP_PX = 28;
   static constexpr int TOUCH_SWIPE_MIN_PX = 60;
   static constexpr int TOUCH_TAP_RELEASE_SLOP_PX = TOUCH_SWIPE_MIN_PX - 1;
+  static_assert(TOUCH_TAP_SLOP_PX == 28);
+  static_assert(TOUCH_TAP_SLOP_PX + 1 == 29);
+  static_assert(TOUCH_TAP_RELEASE_SLOP_PX == 59);
+  static_assert(TOUCH_SWIPE_MIN_PX == 60);
   static constexpr unsigned long TOUCH_SWIPE_MAX_MS = 700;
   static constexpr unsigned long TOUCH_MULTI_SWIPE_MAX_MS = 2000;
   static constexpr int TOUCH_MULTI_CONTACT_SEPARATION_SLOP_PX = 45;
