@@ -22,7 +22,7 @@ void assignField(std::string_view key, std::string_view value, Credential* out) 
   else if (key == "privateLicenseKey") field = &out->privateLicenseKey;
   else if (key == "devicesalt") field = &out->deviceSalt;
   // signingKeyPem / signingCertPem / future fields: accepted, ignored here
-  if (field) field->assign(value.data(), value.size());
+  if (field) field->assign(value.begin(), value.end());
 }
 
 // Slices the text in place. The only allocations left are the credential's own
@@ -60,15 +60,20 @@ bool parseCredential(ByteSource& source, Credential* out) {
   if (size == 0 || size > kMaxBundleBytes) return false;
 
   // Nothrow, because this runs on targets built with -fno-exceptions, where a
-  // failed operator new calls abort() rather than returning. Reading the bundle
-  // into a std::string took a throwing allocation of up to the cap above on a
-  // heap that, on an ESP32-C3 during a library rescan, can be down to ~12KB.
-  auto buf = std::unique_ptr<char[]>(new (std::nothrow) char[static_cast<size_t>(size)]);
+  // failed operator new calls abort() rather than returning. Reading the
+  // bundle into a std::string took a throwing allocation of up to the cap above,
+  // which on a small-RAM target is taken against whatever heap happens to be left.
+  const size_t capacity = static_cast<size_t>(size);
+  auto buf = std::unique_ptr<char[]>(new (std::nothrow) char[capacity]);
   if (!buf) return false;
 
-  const int32_t n = source.readAt(0, buf.get(), static_cast<uint32_t>(size));
+  const int32_t n = source.readAt(0, buf.get(), static_cast<uint32_t>(capacity));
   if (n <= 0) return false;
-  return parseText(std::string_view(buf.get(), static_cast<size_t>(n)), out);
+  // ByteSource is implemented by the caller, so treat a length longer than the
+  // buffer as the source over-reporting rather than reading past the end.
+  size_t got = static_cast<size_t>(n);
+  if (got > capacity) got = capacity;
+  return parseText(std::string_view(buf.get(), got), out);
 }
 
 }  // namespace content

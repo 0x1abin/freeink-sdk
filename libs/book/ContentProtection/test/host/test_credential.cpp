@@ -136,6 +136,23 @@ void testShortRead() {
   assert(c.privateLicenseKey == "BASE64KEY==");
 }
 
+// A ByteSource that over-reports how much it read must not make the parser
+// walk past the end of its buffer.
+class LyingSource : public ByteSource {
+ public:
+  int32_t readAt(uint64_t, void* dst, uint32_t len) override {
+    memset(dst, 'A', len);
+    return static_cast<int32_t>(len) + 4096;  // claims more than it wrote
+  }
+  uint64_t size() const override { return 64; }
+};
+
+void testOverReportedRead() {
+  LyingSource src;
+  Credential c;
+  assert(!parseCredential(src, &c));  // garbage, but must not read out of bounds
+}
+
 }  // namespace
 
 int main() {
@@ -148,6 +165,7 @@ int main() {
   testByteSource();
   testByteSourceSizeGuards();
   testShortRead();
+  testOverReportedRead();
   printf("credential: all tests passed\n");
   return 0;
 }
