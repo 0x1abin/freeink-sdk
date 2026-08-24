@@ -408,7 +408,14 @@ enum class DisplayController : uint8_t {
 };
 
 // Optional capacitive touch controller.
-enum class TouchController : uint8_t { None, Chsc6x, Gt911, Ft5x06, Gslx680, Ft6336u };
+enum class TouchController : uint8_t {
+  None,
+  Chsc6x,
+  Gt911,
+  Ft5x06,
+  Gslx680,
+  Ft6336u
+};
 
 // Optional audio output path. Murphy M3 ships an ES8388-compatible stereo
 // codec (I2S slave, control over the shared touch I2C bus) — the contract was
@@ -1491,7 +1498,8 @@ constexpr BoardProfile MURPHY_M4 = {
     480,
     {4, 3, 5, 6, 7, 8, PIN_UNASSIGNED},
     20000000,
-    {PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, 10, false, 0, false},
+    {PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, 10, false,
+     0, false},
     {PIN_UNASSIGNED, 0, PIN_UNASSIGNED, PIN_UNASSIGNED, 1, 2, 0, false},
     9,
     43,
@@ -1565,25 +1573,36 @@ static_assert(!EEGO_A4.touch.swapXY && !EEGO_A4.touch.flipX && !EEGO_A4.touch.fl
               "EEGO A4 touch backend returns panel-native coordinates; no raw-range mapping");
 static_assert(MURPHY_M4.displayWidth / 8 * MURPHY_M4.displayHeight == 48000,
               "Murphy M4 must use one 48,000-byte framebuffer");
-static_assert(MURPHY_M4.inputStyle == InputStyle::DigitalConfirmPowerHold && MURPHY_M4.input.confirm == 0 &&
-                  MURPHY_M4.input.power == 0 && MURPHY_M4.input.up == 1 && MURPHY_M4.input.down == 2,
-              "Murphy M4 GPIO0 must use the shared confirm/power state machine");
-static_assert(MURPHY_M4.touch.controller == TouchController::Ft6336u && MURPHY_M4.touch.irq == 44 &&
-                  MURPHY_M4.touch.reset == 7 && MURPHY_M4.touch.sda == 13 && MURPHY_M4.touch.scl == 12 &&
-                  MURPHY_M4.touch.i2cAddress == 0x2E && MURPHY_M4.touch.powerEnable == 45 &&
-                  MURPHY_M4.touch.irqActiveLow && MURPHY_M4.touch.swapXY && !MURPHY_M4.touch.powerEnableActiveHigh,
-              "Murphy M4 FT6336U profile must use official IRQ/reset/power wiring");
-static_assert(MURPHY_M4.sensors.i2cSda == 13 && MURPHY_M4.sensors.i2cScl == 12 &&
-                  MURPHY_M4.sensors.rtcAddr == 0x32 && MURPHY_M4.sensors.rtcType == RtcType::Rx8010 &&
-                  MURPHY_M4.sensors.i2cBus == 1 && MURPHY_M4.sensors.i2cHz == 400000,
-              "Murphy M4 RX8010 must use the shared native I2C1 bus at 400 kHz");
-static_assert(MURPHY_M4.frontlight.gpio == 47 && MURPHY_M4.frontlight.gpioWarm == 48 &&
-                  MURPHY_M4.frontlight.pwmFrequency == 25000 && MURPHY_M4.frontlight.pwmResolutionBits == 10 &&
-                  MURPHY_M4.frontlight.activeHigh,
-              "Murphy M4 frontlight must use official GPIO47/48 25 kHz 10-bit PWM");
-static_assert(MURPHY_M4.sdmmc.clk == 16 && MURPHY_M4.sdmmc.cmd == 15 && MURPHY_M4.sdmmc.d0 == 17 &&
-                  MURPHY_M4.sdmmc.d1 == 18 && MURPHY_M4.sdmmc.d2 == 11 && MURPHY_M4.sdmmc.d3 == 14 &&
-                  MURPHY_M4.sdmmc.busWidth == 4 && MURPHY_M4.sd.powerEnable == 10 &&
+static_assert(
+    MURPHY_M4.inputStyle == InputStyle::DigitalConfirmPowerHold &&
+        MURPHY_M4.input.confirm == 0 && MURPHY_M4.input.power == 0 &&
+        MURPHY_M4.input.up == 1 && MURPHY_M4.input.down == 2,
+    "Murphy M4 GPIO0 must use the shared confirm/power state machine");
+static_assert(
+    MURPHY_M4.touch.controller == TouchController::Ft6336u &&
+        MURPHY_M4.touch.irq == 44 && MURPHY_M4.touch.reset == 7 &&
+        MURPHY_M4.touch.sda == 13 && MURPHY_M4.touch.scl == 12 &&
+        MURPHY_M4.touch.i2cAddress == 0x2E &&
+        MURPHY_M4.touch.powerEnable == 45 && MURPHY_M4.touch.irqActiveLow &&
+        MURPHY_M4.touch.swapXY && !MURPHY_M4.touch.powerEnableActiveHigh,
+    "Murphy M4 FT6336U profile must use official IRQ/reset/power wiring");
+static_assert(
+    MURPHY_M4.sensors.i2cSda == 13 && MURPHY_M4.sensors.i2cScl == 12 &&
+        MURPHY_M4.sensors.rtcAddr == 0x32 &&
+        MURPHY_M4.sensors.rtcType == RtcType::Rx8010 &&
+        MURPHY_M4.sensors.i2cBus == 1 && MURPHY_M4.sensors.i2cHz == 400000,
+    "Murphy M4 RX8010 must use the shared native I2C1 bus at 400 kHz");
+static_assert(
+    MURPHY_M4.frontlight.gpio == 47 && MURPHY_M4.frontlight.gpioWarm == 48 &&
+        MURPHY_M4.frontlight.pwmFrequency == 25000 &&
+        MURPHY_M4.frontlight.pwmResolutionBits == 10 &&
+        MURPHY_M4.frontlight.activeHigh,
+    "Murphy M4 frontlight must use official GPIO47/48 25 kHz 10-bit PWM");
+static_assert(MURPHY_M4.sdmmc.clk == 16 && MURPHY_M4.sdmmc.cmd == 15 &&
+                  MURPHY_M4.sdmmc.d0 == 17 && MURPHY_M4.sdmmc.d1 == 18 &&
+                  MURPHY_M4.sdmmc.d2 == 11 && MURPHY_M4.sdmmc.d3 == 14 &&
+                  MURPHY_M4.sdmmc.busWidth == 4 &&
+                  MURPHY_M4.sd.powerEnable == 10 &&
                   !MURPHY_M4.sd.powerActiveHigh,
               "Murphy M4 SD must use 4-bit SDMMC with active-low rail power");
 static_assert(WAVESHARE_EPAPER_397.displayWidth / 8 * WAVESHARE_EPAPER_397.displayHeight == 48000,

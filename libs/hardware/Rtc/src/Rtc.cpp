@@ -64,7 +64,8 @@ TwoWire& sensorWire() {
 }
 
 void ensureWire() {
-  if (usesM4NativeRtc()) return;
+  if (usesM4NativeRtc())
+    return;
   const auto& s = BoardConfig::ACTIVE.sensors;
   const uint8_t bus =
 #if SOC_I2C_NUM > 1
@@ -82,15 +83,20 @@ constexpr uint8_t bcdToDec(uint8_t v) { return static_cast<uint8_t>((v >> 4) * 1
 constexpr uint8_t decToBcd(uint8_t v) { return static_cast<uint8_t>((v / 10U) << 4 | (v % 10U)); }
 static_assert(bcdToDec(0x59) == 59 && decToBcd(59) == 0x59, "RTC BCD conversion must round-trip");
 
-bool writeRegs(const uint8_t addr, const uint8_t reg, const uint8_t* data, const uint8_t len) {
+bool writeRegs(const uint8_t addr, const uint8_t reg, const uint8_t *data,
+               const uint8_t len) {
 #if FREEINK_DEVICE_MURPHY_M4
   if (usesM4NativeRtc()) {
-    if (len > 7) return false;
+    if (len > 7)
+      return false;
     uint8_t payload[8] = {reg};
-    for (uint8_t i = 0; i < len; ++i) payload[i + 1] = data[i];
-    const auto& s = BoardConfig::ACTIVE.sensors;
-    const auto device = freeink::murphy_m4_i2c::rtcDevice(s.i2cSda, s.i2cScl, addr);
-    return freeink::murphy_m4_i2c::write(device, payload, static_cast<size_t>(len) + 1);
+    for (uint8_t i = 0; i < len; ++i)
+      payload[i + 1] = data[i];
+    const auto &s = BoardConfig::ACTIVE.sensors;
+    const auto device =
+        freeink::murphy_m4_i2c::rtcDevice(s.i2cSda, s.i2cScl, addr);
+    return freeink::murphy_m4_i2c::write(device, payload,
+                                         static_cast<size_t>(len) + 1);
   }
 #endif
   ensureWire();
@@ -101,13 +107,17 @@ bool writeRegs(const uint8_t addr, const uint8_t reg, const uint8_t* data, const
   return wire.endTransmission() == 0;
 }
 
-bool writeReg(const uint8_t addr, const uint8_t reg, const uint8_t value) { return writeRegs(addr, reg, &value, 1); }
+bool writeReg(const uint8_t addr, const uint8_t reg, const uint8_t value) {
+  return writeRegs(addr, reg, &value, 1);
+}
 
-bool readRegs(const uint8_t addr, const uint8_t reg, uint8_t* dst, const uint8_t len) {
+bool readRegs(const uint8_t addr, const uint8_t reg, uint8_t *dst,
+              const uint8_t len) {
 #if FREEINK_DEVICE_MURPHY_M4
   if (usesM4NativeRtc()) {
-    const auto& s = BoardConfig::ACTIVE.sensors;
-    const auto device = freeink::murphy_m4_i2c::rtcDevice(s.i2cSda, s.i2cScl, addr);
+    const auto &s = BoardConfig::ACTIVE.sensors;
+    const auto device =
+        freeink::murphy_m4_i2c::rtcDevice(s.i2cSda, s.i2cScl, addr);
     return freeink::murphy_m4_i2c::read(device, reg, dst, len);
   }
 #endif
@@ -290,7 +300,12 @@ bool Rtc::set(const DateTime& dt) {
     case BoardConfig::RtcType::None:
       return false;
   }
-  uint8_t time[7] = {decToBcd(dt.second), decToBcd(dt.minute), decToBcd(dt.hour), 0, 0, 0,
+  uint8_t time[7] = {decToBcd(dt.second),
+                     decToBcd(dt.minute),
+                     decToBcd(dt.hour),
+                     0,
+                     0,
+                     0,
                      decToBcd(static_cast<uint8_t>(dt.year % 100))};
   switch (s.rtcType) {
     case BoardConfig::RtcType::Pcf8563:
@@ -317,7 +332,8 @@ bool Rtc::set(const DateTime& dt) {
     case BoardConfig::RtcType::None:
       return false;
   }
-  if (!writeRegs(addr, timeReg, time, sizeof(time))) return false;
+  if (!writeRegs(addr, timeReg, time, sizeof(time)))
+    return false;
   uint8_t status = 0;
   switch (s.rtcType) {
     case BoardConfig::RtcType::Ds3231:

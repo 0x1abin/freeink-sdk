@@ -20,7 +20,8 @@ inline bool touchAttempted = false;
 inline bool rtcAttempted = false;
 
 inline bool beginBus(const int sda, const int scl) {
-  if (busAttempted) return bus != nullptr;
+  if (busAttempted)
+    return bus != nullptr;
   busAttempted = true;
 
   i2c_master_bus_config_t config = {};
@@ -32,18 +33,23 @@ inline bool beginBus(const int sda, const int scl) {
   config.flags.enable_internal_pullup = 1;
   const esp_err_t err = i2c_new_master_bus(&config, &bus);
   if (err != ESP_OK) {
-    esp_rom_printf("[i2c] M4 I2C1 init failed: %s (%d)\r\n", esp_err_to_name(err), static_cast<int>(err));
+    esp_rom_printf("[i2c] M4 I2C1 init failed: %s (%d)\r\n",
+                   esp_err_to_name(err), static_cast<int>(err));
     bus = nullptr;
   }
   return bus != nullptr;
 }
 
-inline i2c_master_dev_handle_t addDevice(i2c_master_dev_handle_t& handle, bool& attempted, const char* name,
-                                         const int sda, const int scl, const uint8_t address,
+inline i2c_master_dev_handle_t addDevice(i2c_master_dev_handle_t &handle,
+                                         bool &attempted, const char *name,
+                                         const int sda, const int scl,
+                                         const uint8_t address,
                                          const uint32_t frequency) {
-  if (attempted) return handle;
+  if (attempted)
+    return handle;
   attempted = true;
-  if (!beginBus(sda, scl)) return nullptr;
+  if (!beginBus(sda, scl))
+    return nullptr;
 
   i2c_device_config_t config = {};
   config.dev_addr_length = I2C_ADDR_BIT_LEN_7;
@@ -51,29 +57,35 @@ inline i2c_master_dev_handle_t addDevice(i2c_master_dev_handle_t& handle, bool& 
   config.scl_speed_hz = frequency;
   const esp_err_t err = i2c_master_bus_add_device(bus, &config, &handle);
   if (err != ESP_OK) {
-    esp_rom_printf("[i2c] M4 %s device init failed: %s (%d)\r\n", name, esp_err_to_name(err),
-                   static_cast<int>(err));
+    esp_rom_printf("[i2c] M4 %s device init failed: %s (%d)\r\n", name,
+                   esp_err_to_name(err), static_cast<int>(err));
     handle = nullptr;
   }
   return handle;
 }
 
-inline i2c_master_dev_handle_t touchDevice(const int sda, const int scl, const uint8_t address) {
+inline i2c_master_dev_handle_t touchDevice(const int sda, const int scl,
+                                           const uint8_t address) {
   return addDevice(touch, touchAttempted, "touch", sda, scl, address, 100000);
 }
 
-inline i2c_master_dev_handle_t rtcDevice(const int sda, const int scl, const uint8_t address) {
+inline i2c_master_dev_handle_t rtcDevice(const int sda, const int scl,
+                                         const uint8_t address) {
   return addDevice(rtc, rtcAttempted, "RTC", sda, scl, address, 400000);
 }
 
-inline bool write(i2c_master_dev_handle_t device, const uint8_t* data, const size_t length) {
-  return device != nullptr && i2c_master_transmit(device, data, length, 20) == ESP_OK;
+inline bool write(i2c_master_dev_handle_t device, const uint8_t *data,
+                  const size_t length) {
+  return device != nullptr &&
+         i2c_master_transmit(device, data, length, 20) == ESP_OK;
 }
 
-inline bool read(i2c_master_dev_handle_t device, const uint8_t reg, uint8_t* data, const size_t length) {
-  return device != nullptr && i2c_master_transmit_receive(device, &reg, 1, data, length, 20) == ESP_OK;
+inline bool read(i2c_master_dev_handle_t device, const uint8_t reg,
+                 uint8_t *data, const size_t length) {
+  return device != nullptr && i2c_master_transmit_receive(device, &reg, 1, data,
+                                                          length, 20) == ESP_OK;
 }
 
-}  // namespace freeink::murphy_m4_i2c
+} // namespace freeink::murphy_m4_i2c
 
 #endif
