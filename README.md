@@ -276,7 +276,8 @@ Notable behaviors on this board:
 polled, raw register reads + the reset/address dance, including the capacitive home
 key), the **FT5x06 family** (Paper Mono's FT6336 — polled point reads gated on
 the active-low IRQ line), and **FT6336U** (Murphy M4 — GPIO44 IRQ-assisted reads
-on native I²C1). The InputManager exposes `hasTouch/isTouchPressed/wasTouchPressed/
+on native I²C1, with volatile register readback and invalid-frame rejection).
+The InputManager exposes `hasTouch/isTouchPressed/wasTouchPressed/
 wasTouchReleased/getTouchPoint`; it delivers coordinates raw-panel-oriented and the
 app owns rotation. The GT911 boards set their `TouchConfig` in the board profile
 (e.g. `BoardConfig::LILYGO_T5_PRO_GT911`).
