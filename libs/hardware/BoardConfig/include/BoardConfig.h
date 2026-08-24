@@ -408,7 +408,7 @@ enum class DisplayController : uint8_t {
 };
 
 // Optional capacitive touch controller.
-enum class TouchController : uint8_t { None, Chsc6x, Gt911, Ft5x06, Gslx680, Ft6336 };
+enum class TouchController : uint8_t { None, Chsc6x, Gt911, Ft5x06, Gslx680, Ft6336u };
 
 // Optional audio output path. Murphy M3 ships an ES8388-compatible stereo
 // codec (I2S slave, control over the shared touch I2C bus) — the contract was
@@ -1481,31 +1481,30 @@ constexpr BoardProfile EEGO_A4 = {Board::EegoA4,
                                   // Probed at runtime: some retail A4 units have no frontlight.
                                   {I2cFrontlightController::Lm3630a, 2, 1, 400000, 0x36, 12}};
 
-// --- Murphy M4 — ESP32-S3 N16R8, SSD1677 + FT6336 --------------------------
-// TOUCH_INT cannot be used reliably on this board, so InputManager polls the
-// controller while the touch rail is enabled.
+// --- Murphy M4 — ESP32-S3 N16R8, SSD1677 + FT6336U -------------------------
 constexpr BoardProfile MURPHY_M4 = {
     Board::MurphyM4,
     "murphy_m4",
-    InputStyle::DigitalButtons,
+    InputStyle::DigitalConfirmPowerHold,
     DisplayController::SSD1677,
     800,
     480,
     {4, 3, 5, 6, 7, 8, PIN_UNASSIGNED},
     20000000,
     {PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, 10, false, 0, false},
-    {PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, 1, 2, 0, false},
+    {PIN_UNASSIGNED, 0, PIN_UNASSIGNED, PIN_UNASSIGNED, 1, 2, 0, false},
     9,
     43,
     2.0f,
     PIN_UNASSIGNED,
     // The portrait controller frame is swapped into the 800x480 panel frame.
-    // GPIO45 powers the touch controller while LOW.
-    {TouchController::Ft6336,
+    // GPIO44 is active-low IRQ, GPIO7 shares reset with the display, and GPIO45
+    // powers the touch controller while LOW.
+    {TouchController::Ft6336u,
      13,
      12,
-     46,
-     PIN_UNASSIGNED,
+     44,
+     7,
      0x2E,
      0,
      799,
@@ -1513,7 +1512,7 @@ constexpr BoardProfile MURPHY_M4 = {
      479,
      false,
      0,
-     false,
+     true,
      false,
      45,
      true,
@@ -1521,14 +1520,14 @@ constexpr BoardProfile MURPHY_M4 = {
      true,
      false,
      false},
-    {47, 1000, 8, true, 48},
+    {47, 25000, 10, true, 48},
     NO_AUDIO,
     NO_LEDS,
     NO_FLIP,
     {16, 15, 17, 18, 11, 14, 4},
     NO_GAUGE,
     NO_MIC,
-    {13, 12, 400000, 0x32, 0, 0, 0, RtcType::Rx8010, ImuType::None},
+    {13, 12, 400000, 0x32, 0, 0, 1, RtcType::Rx8010, ImuType::None},
     1.2f,
     {}};
 
@@ -1566,10 +1565,26 @@ static_assert(!EEGO_A4.touch.swapXY && !EEGO_A4.touch.flipX && !EEGO_A4.touch.fl
               "EEGO A4 touch backend returns panel-native coordinates; no raw-range mapping");
 static_assert(MURPHY_M4.displayWidth / 8 * MURPHY_M4.displayHeight == 48000,
               "Murphy M4 must use one 48,000-byte framebuffer");
-static_assert(MURPHY_M4.touch.controller == TouchController::Ft6336 && MURPHY_M4.touch.swapXY &&
-                  !MURPHY_M4.touch.powerEnableActiveHigh,
-              "Murphy M4 FT6336 profile must swap axes and use active-low touch power");
-static_assert(MURPHY_M4.sdmmc.busWidth == 4 && !MURPHY_M4.sd.powerActiveHigh,
+static_assert(MURPHY_M4.inputStyle == InputStyle::DigitalConfirmPowerHold && MURPHY_M4.input.confirm == 0 &&
+                  MURPHY_M4.input.power == 0 && MURPHY_M4.input.up == 1 && MURPHY_M4.input.down == 2,
+              "Murphy M4 GPIO0 must use the shared confirm/power state machine");
+static_assert(MURPHY_M4.touch.controller == TouchController::Ft6336u && MURPHY_M4.touch.irq == 44 &&
+                  MURPHY_M4.touch.reset == 7 && MURPHY_M4.touch.sda == 13 && MURPHY_M4.touch.scl == 12 &&
+                  MURPHY_M4.touch.i2cAddress == 0x2E && MURPHY_M4.touch.powerEnable == 45 &&
+                  MURPHY_M4.touch.irqActiveLow && MURPHY_M4.touch.swapXY && !MURPHY_M4.touch.powerEnableActiveHigh,
+              "Murphy M4 FT6336U profile must use official IRQ/reset/power wiring");
+static_assert(MURPHY_M4.sensors.i2cSda == 13 && MURPHY_M4.sensors.i2cScl == 12 &&
+                  MURPHY_M4.sensors.rtcAddr == 0x32 && MURPHY_M4.sensors.rtcType == RtcType::Rx8010 &&
+                  MURPHY_M4.sensors.i2cBus == 1 && MURPHY_M4.sensors.i2cHz == 400000,
+              "Murphy M4 RX8010 must use the shared native I2C1 bus at 400 kHz");
+static_assert(MURPHY_M4.frontlight.gpio == 47 && MURPHY_M4.frontlight.gpioWarm == 48 &&
+                  MURPHY_M4.frontlight.pwmFrequency == 25000 && MURPHY_M4.frontlight.pwmResolutionBits == 10 &&
+                  MURPHY_M4.frontlight.activeHigh,
+              "Murphy M4 frontlight must use official GPIO47/48 25 kHz 10-bit PWM");
+static_assert(MURPHY_M4.sdmmc.clk == 16 && MURPHY_M4.sdmmc.cmd == 15 && MURPHY_M4.sdmmc.d0 == 17 &&
+                  MURPHY_M4.sdmmc.d1 == 18 && MURPHY_M4.sdmmc.d2 == 11 && MURPHY_M4.sdmmc.d3 == 14 &&
+                  MURPHY_M4.sdmmc.busWidth == 4 && MURPHY_M4.sd.powerEnable == 10 &&
+                  !MURPHY_M4.sd.powerActiveHigh,
               "Murphy M4 SD must use 4-bit SDMMC with active-low rail power");
 static_assert(WAVESHARE_EPAPER_397.displayWidth / 8 * WAVESHARE_EPAPER_397.displayHeight == 48000,
               "Waveshare 3.97 must use one 48,000-byte framebuffer");

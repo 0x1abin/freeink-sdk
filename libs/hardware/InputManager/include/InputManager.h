@@ -12,9 +12,6 @@
 #include <BoardConfig.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
-#if FREEINK_DEVICE_MURPHY_M4
-#include <freertos/semphr.h>
-#endif
 #include <freertos/task.h>
 
 #include <cstdint>
@@ -191,6 +188,9 @@ class InputManager {
   void clearTouchTapEvent();
   // Quiesce board-specific touch activity before deep sleep.
   void prepareForDeepSleep();
+  // Reapply volatile FT6336U registers after Murphy M4 display initialization
+  // toggles the reset line shared by the panel and touch controller.
+  bool reinitializeTouchAfterSharedReset();
 
   // Optional board hook for buttons that aren't direct GPIOs — e.g. a key
   // behind an I2C IO-expander (the LilyGo T5 S3 user button on its PCA9535). It
@@ -291,7 +291,7 @@ class InputManager {
   void applyStateChange(uint8_t state, unsigned long currentTime);
 
   // Touch backend. Compiled only when FREEINK_CAP_TOUCH is set; dispatches on
-  // BoardConfig::ACTIVE.touch.controller (CHSC6x, GT911, or FT5x06/FT6336).
+  // BoardConfig::ACTIVE.touch.controller (CHSC6x, GT911, or FT5x06/FT6336U).
   void beginTouch();
   uint8_t serviceTouch();  // runs the machine; returns synthesized button mask
   void updateTouchFromIrq(unsigned long now,
@@ -343,11 +343,8 @@ class InputManager {
   bool gslx680Check();
 #endif
 #if FREEINK_DEVICE_MURPHY_M4
-  void beginFt6336();
-  void pollFt6336(unsigned long now);
-  bool ft6336ReadReg(uint8_t reg, uint8_t* data, uint8_t len);
-  static void ft6336TaskTrampoline(void* self);
-  void ft6336TaskLoop();
+  bool beginFt6336u(bool powerCycle);
+  void pollFt6336u(unsigned long now);
 #endif
 
   uint8_t currentState;
@@ -409,25 +406,6 @@ class InputManager {
   bool touchSuppressed = false;                  // suppressTouchContact() latch; holds through
                                                  // the release-edge frame, cleared in
                                                  // serviceTouch() once the contact is over
-
-#if FREEINK_DEVICE_MURPHY_M4
-  // The interrupt line cannot signal usable edges on M4. A fixed-size snapshot
-  // bridges a 10 ms poll task to update() without allocating an event queue.
-  struct Ft6336TaskState {
-    bool contact = false;
-    bool pressLatched = false;
-    bool releaseLatched = false;
-    uint16_t rawX = 0;
-    uint16_t rawY = 0;
-    uint16_t downRawX = 0;
-    uint16_t downRawY = 0;
-    uint16_t releaseRawX = 0;
-    uint16_t releaseRawY = 0;
-  };
-  Ft6336TaskState ft6336State;
-  SemaphoreHandle_t ft6336Mutex = nullptr;
-  TaskHandle_t ft6336Task = nullptr;
-#endif
 
   static constexpr int NUM_BUTTONS_1 = 4;
   static const int ADC_RANGES_1[];

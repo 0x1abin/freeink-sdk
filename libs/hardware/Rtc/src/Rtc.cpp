@@ -7,6 +7,9 @@
 
 #include <Wire.h>
 #include <soc/soc_caps.h>
+#if FREEINK_DEVICE_MURPHY_M4
+#include <MurphyM4I2c.h>
+#endif
 
 namespace freeink {
 namespace {
@@ -41,6 +44,16 @@ constexpr uint8_t RX8010_REG_FLAG = 0x1E;
 constexpr uint8_t RX8010_FLAG_VLF = 0x02;
 
 bool g_wireReady[2] = {false, false};
+
+bool usesM4NativeRtc() {
+#if FREEINK_DEVICE_MURPHY_M4
+  return BoardConfig::ACTIVE.board == BoardConfig::Board::MurphyM4 &&
+         BoardConfig::ACTIVE.sensors.rtcType == BoardConfig::RtcType::Rx8010;
+#else
+  return false;
+#endif
+}
+
 TwoWire& sensorWire() {
   const auto& s = BoardConfig::ACTIVE.sensors;
 #if SOC_I2C_NUM > 1
@@ -51,6 +64,7 @@ TwoWire& sensorWire() {
 }
 
 void ensureWire() {
+  if (usesM4NativeRtc()) return;
   const auto& s = BoardConfig::ACTIVE.sensors;
   const uint8_t bus =
 #if SOC_I2C_NUM > 1
@@ -68,16 +82,35 @@ constexpr uint8_t bcdToDec(uint8_t v) { return static_cast<uint8_t>((v >> 4) * 1
 constexpr uint8_t decToBcd(uint8_t v) { return static_cast<uint8_t>((v / 10U) << 4 | (v % 10U)); }
 static_assert(bcdToDec(0x59) == 59 && decToBcd(59) == 0x59, "RTC BCD conversion must round-trip");
 
-bool writeReg(uint8_t addr, uint8_t reg, uint8_t value) {
+bool writeRegs(const uint8_t addr, const uint8_t reg, const uint8_t* data, const uint8_t len) {
+#if FREEINK_DEVICE_MURPHY_M4
+  if (usesM4NativeRtc()) {
+    if (len > 7) return false;
+    uint8_t payload[8] = {reg};
+    for (uint8_t i = 0; i < len; ++i) payload[i + 1] = data[i];
+    const auto& s = BoardConfig::ACTIVE.sensors;
+    const auto device = freeink::murphy_m4_i2c::rtcDevice(s.i2cSda, s.i2cScl, addr);
+    return freeink::murphy_m4_i2c::write(device, payload, static_cast<size_t>(len) + 1);
+  }
+#endif
   ensureWire();
   auto& wire = sensorWire();
   wire.beginTransmission(addr);
   wire.write(reg);
-  wire.write(value);
+  wire.write(data, len);
   return wire.endTransmission() == 0;
 }
 
-bool readRegs(uint8_t addr, uint8_t reg, uint8_t* dst, uint8_t len) {
+bool writeReg(const uint8_t addr, const uint8_t reg, const uint8_t value) { return writeRegs(addr, reg, &value, 1); }
+
+bool readRegs(const uint8_t addr, const uint8_t reg, uint8_t* dst, const uint8_t len) {
+#if FREEINK_DEVICE_MURPHY_M4
+  if (usesM4NativeRtc()) {
+    const auto& s = BoardConfig::ACTIVE.sensors;
+    const auto device = freeink::murphy_m4_i2c::rtcDevice(s.i2cSda, s.i2cScl, addr);
+    return freeink::murphy_m4_i2c::read(device, reg, dst, len);
+  }
+#endif
   ensureWire();
   auto& wire = sensorWire();
   wire.beginTransmission(addr);
@@ -221,8 +254,6 @@ bool Rtc::set(const DateTime& dt) {
   const auto& s = BoardConfig::ACTIVE.sensors;
   if (s.rtcType == BoardConfig::RtcType::Pcf85063 && (dt.year < 2000 || dt.year > 2099)) return false;
   const uint8_t centuryBit = dt.year < 2000 ? 0x80U : 0x00U;
-  ensureWire();
-  auto& wire = sensorWire();
   if (s.rtcType == BoardConfig::RtcType::None) return false;
   if (s.rtcType == BoardConfig::RtcType::Rx8130) {
     uint8_t control = 0;
@@ -230,16 +261,14 @@ bool Rtc::set(const DateTime& dt) {
         !writeReg(addr, RX8130_REG_CONTROL0, static_cast<uint8_t>(control | RX8130_STOP))) {
       return false;
     }
-    wire.beginTransmission(addr);
-    wire.write(RX8130_REG_TIME);
-    wire.write(decToBcd(dt.second));
-    wire.write(decToBcd(dt.minute));
-    wire.write(decToBcd(dt.hour));
-    wire.write(static_cast<uint8_t>(1u << (dt.weekday % 7u)));
-    wire.write(decToBcd(dt.day));
-    wire.write(decToBcd(dt.month));
-    wire.write(decToBcd(static_cast<uint8_t>(dt.year % 100)));
-    const bool written = wire.endTransmission() == 0;
+    const uint8_t time[] = {decToBcd(dt.second),
+                            decToBcd(dt.minute),
+                            decToBcd(dt.hour),
+                            static_cast<uint8_t>(1u << (dt.weekday % 7u)),
+                            decToBcd(dt.day),
+                            decToBcd(dt.month),
+                            decToBcd(static_cast<uint8_t>(dt.year % 100))};
+    const bool written = writeRegs(addr, RX8130_REG_TIME, time, sizeof(time));
     const bool restarted = writeReg(addr, RX8130_REG_CONTROL0, static_cast<uint8_t>(control & ~RX8130_STOP));
     return written && restarted;
   }
@@ -261,38 +290,34 @@ bool Rtc::set(const DateTime& dt) {
     case BoardConfig::RtcType::None:
       return false;
   }
-  wire.beginTransmission(addr);
-  wire.write(timeReg);
-  wire.write(decToBcd(dt.second));  // also clears VL once a valid time is written
-  wire.write(decToBcd(dt.minute));
-  wire.write(decToBcd(dt.hour));
+  uint8_t time[7] = {decToBcd(dt.second), decToBcd(dt.minute), decToBcd(dt.hour), 0, 0, 0,
+                     decToBcd(static_cast<uint8_t>(dt.year % 100))};
   switch (s.rtcType) {
     case BoardConfig::RtcType::Pcf8563:
-      wire.write(decToBcd(dt.day));
-      wire.write(decToBcd(dt.weekday));
-      wire.write(static_cast<uint8_t>(decToBcd(dt.month) | centuryBit));
+      time[3] = decToBcd(dt.day);
+      time[4] = decToBcd(dt.weekday);
+      time[5] = static_cast<uint8_t>(decToBcd(dt.month) | centuryBit);
       break;
     case BoardConfig::RtcType::Pcf85063:
-      wire.write(decToBcd(dt.day));
-      wire.write(decToBcd(dt.weekday));
-      wire.write(decToBcd(dt.month));
+      time[3] = decToBcd(dt.day);
+      time[4] = decToBcd(dt.weekday);
+      time[5] = decToBcd(dt.month);
       break;
     case BoardConfig::RtcType::Ds3231:
-      wire.write(decToBcd(dt.weekday == 0 ? 7 : dt.weekday));
-      wire.write(decToBcd(dt.day));
-      wire.write(decToBcd(dt.month));
+      time[3] = decToBcd(dt.weekday == 0 ? 7 : dt.weekday);
+      time[4] = decToBcd(dt.day);
+      time[5] = decToBcd(dt.month);
       break;
     case BoardConfig::RtcType::Rx8010:
-      wire.write(static_cast<uint8_t>(1u << (dt.weekday % 7u)));
-      wire.write(decToBcd(dt.day));
-      wire.write(decToBcd(dt.month));
+      time[3] = static_cast<uint8_t>(1u << (dt.weekday % 7u));
+      time[4] = decToBcd(dt.day);
+      time[5] = decToBcd(dt.month);
       break;
     case BoardConfig::RtcType::Rx8130:
     case BoardConfig::RtcType::None:
       return false;
   }
-  wire.write(decToBcd(static_cast<uint8_t>(dt.year % 100)));
-  if (wire.endTransmission() != 0) return false;
+  if (!writeRegs(addr, timeReg, time, sizeof(time))) return false;
   uint8_t status = 0;
   switch (s.rtcType) {
     case BoardConfig::RtcType::Ds3231:
