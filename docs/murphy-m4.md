@@ -20,6 +20,18 @@ must call `InputManager::reinitializeTouchAfterSharedReset()` after
 `FreeInkDisplay::begin()` to restore the FT6336U's volatile mode, threshold, and
 report-rate registers.
 
-Batch 2 with R13 is the default display configuration. Define
-`FREEINK_MURPHY_M4_BATCH1=1` for the first no-R13 batch. AHT20 and SC7A20 are
-not part of the initial reader profile.
+The consumer detects the two production batches from the GPIO1/KEY1 RC network
+before `InputManager::begin()`, then calls `InputManager::setMurphyM4Batch()`
+and `FreeInkDisplay::setMurphyM4Batch()` before display initialization. The
+display facade retains the selection and constructs the SSD1677 singleton from
+one of two immutable configurations; it does not mutate shared driver config.
+Batch 1 (no R13) uses HALF/window
+pseudo-temperature `0x3C` and touch short-axis range `[-52,553]`; batch 2 (R13
+fitted) uses `0x50` and `[-47,514]`. Batch 2 remains the inconclusive-probe
+fallback. Define `FREEINK_MURPHY_M4_BATCH1=1` only for recovery or diagnostics.
+First-batch hardware produced a 6008 µs median across 101 samples
+(6004–6059 µs, 0.379% coefficient of variation), satisfying the batch-1 and
+stability thresholds. Runtime detection uses seven `uint32_t` samples (28 bytes)
+on the caller's stack and adds no heap allocation. Second-batch hardware
+validation remains pending.
+AHT20 and SC7A20 are not part of the initial reader profile.

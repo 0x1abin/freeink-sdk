@@ -191,6 +191,9 @@ class InputManager {
   // Reapply volatile FT6336U registers after Murphy M4 display initialization
   // toggles the reset line shared by the panel and touch controller.
   bool reinitializeTouchAfterSharedReset();
+#if FREEINK_DEVICE_MURPHY_M4
+  void setMurphyM4Batch(const freeink::MurphyM4Batch batch) { murphyM4Batch = batch; }
+#endif
 
   // Optional board hook for buttons that aren't direct GPIOs — e.g. a key
   // behind an I2C IO-expander (the LilyGo T5 S3 user button on its PCA9535). It
@@ -345,6 +348,7 @@ class InputManager {
 #if FREEINK_DEVICE_MURPHY_M4
   bool beginFt6336u(bool powerCycle);
   void pollFt6336u(unsigned long now);
+  freeink::MurphyM4Batch murphyM4Batch = freeink::defaultMurphyM4Batch();
 #endif
 
   uint8_t currentState;

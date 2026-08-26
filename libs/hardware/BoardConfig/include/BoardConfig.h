@@ -1,5 +1,7 @@
 #pragma once
 
+#include "MurphyM4Batch.h"
+
 // FreeInk SDK — board hardware profiles + build composition.
 //
 // A BoardProfile describes a device's pinout, screen, and capabilities. The

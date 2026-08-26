@@ -1331,7 +1331,11 @@ InputManager::TouchPoint InputManager::mapTouchPoint(const uint16_t rawX, const 
   const uint16_t width = t.rawMaxX > t.rawMinX ? t.rawMaxX - t.rawMinX : 1;
   const uint16_t height = t.rawMaxY > t.rawMinY ? t.rawMaxY - t.rawMinY : 1;
   uint16_t x = mapTouchAxis(sx, t.rawMinX, t.rawMaxX, width);
+#if FREEINK_DEVICE_MURPHY_M4
+  uint16_t y = freeink::mapMurphyM4TouchShortAxis(sy, murphyM4Batch, height);
+#else
   uint16_t y = mapTouchAxis(sy, t.rawMinY, t.rawMaxY, height);
+#endif
   if (t.flipX) x = static_cast<uint16_t>(width - x);
   if (t.flipY) y = static_cast<uint16_t>(height - y);
   return {true, x, y, now};
