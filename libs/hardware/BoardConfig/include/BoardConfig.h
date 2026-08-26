@@ -681,6 +681,12 @@ struct BoardProfile {
   // Bezel-covered edge insets. Defaulted so existing profiles need no change;
   // a measured board overrides it.
   ViewableInsets viewableInsets = {};
+  // Polarity of batteryChargeStatus. Default is the MCP73832-style /STAT that
+  // every earlier board uses: open-drain, LOW = charging, read with the internal
+  // pull-up. true = the line is push-pull driven HIGH while charging and carries
+  // no pull (the X4 Pro's GPIO21, recovered from the stock Cw2017PowerHal —
+  // stock configures it input/no-pull and reports the raw level).
+  bool batteryChargeStatusActiveHigh = false;
 };
 
 constexpr TouchConfig NO_TOUCH = {TouchController::None,
@@ -1425,7 +1431,12 @@ constexpr BoardProfile XTEINK_X4_PRO = {
     // {back, confirm, left, right, up, down, power, powerActiveHigh}
     {PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, 0, 7, 3, false},
     PIN_UNASSIGNED,  // batteryAdc: monitoring exists ("Battery Meter"/"Low battery") but pin not isolated
-    PIN_UNASSIGNED,  // batteryChargeStatus
+    // Charger STAT on GPIO21, ACTIVE-HIGH (batteryChargeStatusActiveHigh at the
+    // profile tail): stock's Cw2017PowerHal configures GPIO21 input/no-pull and
+    // reports the raw level as "charging" (vtable slot 3 -> FUN_4214f67c;
+    // gpio object configured pin=0x15 in board init FUN_4214eeb0). This is the
+    // OEM battery-icon source — the CW2017 itself cannot observe charging.
+    21,
     2.0f,
     PIN_UNASSIGNED,  // usbDetect: USB-MSC/VBUS-detect present; GPIO10 is a candidate (unconfirmed)
     // GT911 touch on the SHARED I2C bus SDA39/SCL38 (with RTC 0x51 + CW2017 gauge 0x63), addr 0x5D
@@ -1501,7 +1512,8 @@ constexpr BoardProfile XTEINK_X4_PRO = {
     // side inset that keeps an edge-hugging scroll indicator visible (was the
     // firmware's hardcoded X4 Pro scrollbar inset); top/bottom keep the X4
     // historical values pending measurement.
-    {9, 7, 3, 7}};
+    {9, 7, 3, 7},
+    true};  // batteryChargeStatusActiveHigh: GPIO21 STAT is driven HIGH while charging
 
 // Largest framebuffer (bytes) over the devices compiled into this build, derived
 // from the profiles above. The display facade sizes its static framebuffer to
