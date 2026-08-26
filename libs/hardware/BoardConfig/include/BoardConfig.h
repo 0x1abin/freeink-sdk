@@ -616,6 +616,14 @@ struct DisplayOrientation {
 struct PowerConfig {
   int8_t latch0 = PIN_UNASSIGNED;
   int8_t latch1 = PIN_UNASSIGNED;
+  // Battery-charger enable input (e.g. the Sticky's EN_BAT_CHGn -> BQ25616 /CE
+  // on GPIO39). holdPowerRails() drives it to its active level and latches it
+  // with gpio_hold_en so the charger stays enabled awake AND through deep sleep.
+  // Left unmapped, an S3 JTAG-group pin like GPIO39 keeps its reset-default weak
+  // pull-up while the firmware runs — /CE sits high and the device won't charge
+  // until sleep isolates the pad and lets the line float back to enabled.
+  int8_t chargeEnable = PIN_UNASSIGNED;
+  bool chargeEnableActiveHigh = false;  // "n"-suffixed enables are active-low
 };
 
 // Panel rows/columns the device's bezel physically overlaps, in the panel's
@@ -1360,7 +1368,11 @@ constexpr BoardProfile STICKY = {
     1.2f,  // uiScale: touch device, 3.97" 800x480 — bump chrome to finger size
     // Power latch: PWR_HOLD GPIO45 + PWR_LOCK GPIO46, driven HIGH first thing in
     // boot (the vendor demo's first init step) — see holdPowerRails().
-    {45, 46}};
+    // chargeEnable: EN_BAT_CHGn GPIO39 -> BQ25616 /CE, active-low (confirmed by
+    // Seeed's firmware team; native firmware drives it). Without it the pin's
+    // JTAG reset-default pull-up disables charging the whole time we're awake
+    // (~0.06 A USB input awake vs ~0.5 A once sleep isolates the pad).
+    {45, 46, 39, false}};
 
 // --- Xteink X4 Pro — ESP32-S3, 800x480 EPD + GT911 touch + warm/cold frontlight ---
 // Recovered from the OEM flash dump (x4pro_flash_dump.bin); full evidence and confidence
@@ -1682,6 +1694,17 @@ inline void holdPowerRails() {
     gpio_hold_dis(static_cast<gpio_num_t>(pin));
     pinMode(pin, OUTPUT);
     digitalWrite(pin, HIGH);
+  }
+  // Charger enable (see PowerConfig::chargeEnable). Held with gpio_hold_en so the
+  // level survives esp_sleep_config_gpio_isolate() and deep sleep (PowerManager
+  // calls gpio_deep_sleep_hold_en() before sleeping) — the charger must stay
+  // enabled whether the firmware is awake or asleep.
+  if (const int8_t ce = ACTIVE.power.chargeEnable; ce >= 0 && !latchConflictsWithBus(ce)) {
+    const auto g = static_cast<gpio_num_t>(ce);
+    gpio_hold_dis(g);
+    pinMode(ce, OUTPUT);
+    digitalWrite(ce, ACTIVE.power.chargeEnableActiveHigh ? HIGH : LOW);
+    gpio_hold_en(g);
   }
 }
 
