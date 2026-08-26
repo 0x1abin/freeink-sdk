@@ -356,6 +356,79 @@ void testDisabledSkipsTouch() {
   CHECK(!buffer.route(tap));
 }
 
+void testDragRouting() {
+  InteractionBuffer<8> buffer;
+  // 0: slider, 1: plain button below it.
+  buffer.addInteraction(
+      Interaction{Rect{0, 0, 201, 40}, 1, 0, static_cast<uint16_t>(InputTouch | InputDrag), StateNormal, 0});
+  buffer.addInteraction(Interaction{Rect{0, 40, 100, 40}, 2, 0, InputTouch, StateNormal, 0});
+
+  // A drag that starts moving at once never reads as a tap, so it arrives as
+  // a bare held frame with no press edge.
+  const auto contactAt = [](int16_t x, int16_t y) {
+    InputSnapshot snap;
+    snap.touchHeld = true;
+    snap.touchX = x;
+    snap.touchY = y;
+    return snap;
+  };
+  ActionEvent event = buffer.route(contactAt(100, 20));
+  CHECK_EQ(event.action, 1);
+  CHECK_EQ(event.dragPermille, 500);
+
+  // Grab semantics: later frames follow the finger, even off the rect.
+  const InputSnapshot held = contactAt(260, 300);
+  event = buffer.route(held);
+  CHECK_EQ(event.action, 1);
+  CHECK_EQ(event.dragPermille, 1000);
+
+  InputSnapshot release;
+  release.touchReleased = true;
+  release.touchX = -1;
+  release.touchY = -1;
+  CHECK(!buffer.route(release));
+
+  // The landing point decides, not the live one: a contact beginning off the
+  // slider never grabs it, however far it then travels across it. The button
+  // it landed on is not bound either — InputDrag is not part of the InputTouch
+  // fallback, so activeIndex stays clear.
+  CHECK(!buffer.route(contactAt(50, 60)));
+  CHECK_EQ(buffer.activeIndex(), -1);
+  CHECK(!buffer.route(held));
+  buffer.route(release);
+
+  // Touch-only elements are never bound, so the button keeps its press edge.
+  InputSnapshot press;
+  press.touchPressed = true;
+  press.touchX = 50;
+  press.touchY = 60;
+  CHECK(!buffer.route(press));
+  CHECK_EQ(buffer.activeIndex(), 1);
+  buffer.route(release);
+
+  // A repaint routes a default-constructed snapshot through the same buffer.
+  // It must not end the contact: the drag stays bound across it and keeps
+  // following the finger off the rect.
+  CHECK(buffer.route(contactAt(100, 20)));
+  buffer.route(InputSnapshot{});
+  ActionEvent stillHeld = buffer.route(contactAt(400, 300));
+  CHECK_EQ(stillHeld.action, 1);
+  CHECK_EQ(stillHeld.dragPermille, 1000);
+  buffer.route(release);
+
+  // The release edge is what opens the latch, so the next contact binds fresh
+  // rather than inheriting what the last one held.
+  CHECK(!buffer.route(contactAt(50, 60)));
+  CHECK_EQ(buffer.activeIndex(), -1);
+  buffer.route(release);
+
+  // A disabled slider is inert on the contact edge too.
+  buffer.clear();
+  buffer.addInteraction(
+      Interaction{Rect{0, 0, 201, 40}, 1, 0, static_cast<uint16_t>(InputTouch | InputDrag), StateDisabled, 0});
+  CHECK(!buffer.route(contactAt(100, 20)));
+}
+
 void testLongPressRouting() {
   InteractionBuffer<8> buffer;
   buffer.addInteraction(Interaction{Rect{0, 0, 100, 100}, 1, 5,
@@ -3321,6 +3394,7 @@ int main() {
   testTouchRouting();
   testDisabledSkipsTouch();
   testLongPressRouting();
+  testDragRouting();
   testFocusNavigationWrapsAndSkips();
   testConfirmIgnoresStaleFocus();
   testConfirmRespectsInputMask();
