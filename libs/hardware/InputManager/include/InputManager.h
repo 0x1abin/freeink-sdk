@@ -15,7 +15,11 @@
 #include <freertos/task.h>
 
 #include <cstdint>
+
 #include "FunctionButtonGesture.h"
+#if FREEINK_DEVICE_MURPHY_M4
+#include "MurphyM4TouchPolling.h"
+#endif
 
 class InputManager {
  public:
@@ -348,6 +352,12 @@ class InputManager {
 #if FREEINK_DEVICE_MURPHY_M4
   bool beginFt6336u(bool powerCycle);
   void pollFt6336u(unsigned long now);
+  bool readFt6336uFrame(freeink::murphy_m4_touch::FrameState& state, uint16_t& rawX, uint16_t& rawY);
+  void applyFt6336uSnapshot(const freeink::murphy_m4_touch::Snapshot& snapshot);
+  bool startFt6336uPolling();
+  void pauseFt6336uPolling();
+  static void ft6336uTaskTrampoline(void* self);
+  void ft6336uTaskLoop();
   freeink::MurphyM4Batch murphyM4Batch = freeink::defaultMurphyM4Batch();
 #endif
 
@@ -410,6 +420,19 @@ class InputManager {
   bool touchSuppressed = false;                  // suppressTouchContact() latch; holds through
                                                  // the release-edge frame, cleared in
                                                  // serviceTouch() once the contact is over
+
+#if FREEINK_DEVICE_MURPHY_M4
+  static constexpr uint32_t FT6336U_POLL_MS = 10;
+  static constexpr uint32_t FT6336U_STALE_RELEASE_MS = 100;
+  static constexpr uint32_t FT6336U_TASK_STACK_BYTES = 3072;
+  freeink::murphy_m4_touch::PollState ft6336uPollState{};
+  portMUX_TYPE ft6336uPollMux = portMUX_INITIALIZER_UNLOCKED;
+  bool ft6336uPollingEnabled = false;
+  bool ft6336uPollInFlight = false;
+  TaskHandle_t ft6336uTask = nullptr;
+  StaticTask_t ft6336uTaskTcb{};
+  StackType_t ft6336uTaskStack[FT6336U_TASK_STACK_BYTES]{};
+#endif
 
   static constexpr int NUM_BUTTONS_1 = 4;
   static const int ADC_RANGES_1[];

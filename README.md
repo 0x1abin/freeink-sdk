@@ -132,7 +132,7 @@ so the SD manager itself stays device-agnostic.
 | **M5Stack Paper Mono** | ESP32-S3 | SSD1677 | 800×480 B/W | non-flashing fast refresh + 3-level grayscale (host-authored LUTs), FT6336 touch, PMIC-PWM frontlight (AW9967), RX8130 RTC, PDM microphone, LEDC buzzer, discrete RGB LED, native 1-bit SDMMC, M5PM1 battery/charging telemetry; power/reset rails sequenced through the on-board M5PM1 PMIC + M5IOE1 expander |
 | **M5Stack PaperS3** | ESP32-S3 | ED047TC1 (raw parallel) | 960×540 16-gray | same LovyanGFX EPD driver class as the LilyGo T5 S3 (plain-GPIO EPD rails, no PMIC), GT911 touch (touch-only navigation — no GPIO buttons), BM8563 RTC, GPIO3 ADC battery, LEDC buzzer, SPI MicroSD; power-off is a GPIO44 pulse to the PMS150G latch (`BoardPaperS3::powerOff()`); rotation/touch-flip pending hardware validation |
 | **EEGO A4** | ESP32-S3 N16R8 | UC8279C | 768×552 | GSLX680 touch, PCF8563 RTC, SPI MicroSD, 4-level grayscale in PSRAM |
-| **Murphy M4** | ESP32-S3 N16R8 | SSD1677 | 800×480 | shared GPIO0 confirm/power, FT6336U IRQ-assisted touch + RX8010 on shared native I²C1, 25 kHz 10-bit dual warm/cool frontlight, native 4-bit SDMMC |
+| **Murphy M4** | ESP32-S3 N16R8 | SSD1677 | 800×480 | GPIO0 power + GPIO1/2 navigation, background-polled FT6336U touch + RX8010 on shared native I²C1, 25 kHz 10-bit dual warm/cool frontlight, native 4-bit SDMMC |
 
 X3 and X4 share the ESP32-C3 and a pinout, so **one firmware binary drives both**:
 it carries both board profiles (`XTEINK_X4` and `XTEINK_X3`) and picks one at
@@ -275,8 +275,9 @@ Notable behaviors on this board:
 **CHSC6x** (Murphy M3 — IRQ-driven), **GT911** (LilyGo T5 S3 and M5Paper v1.1 —
 polled, raw register reads + the reset/address dance, including the capacitive home
 key), the **FT5x06 family** (Paper Mono's FT6336 — polled point reads gated on
-the active-low IRQ line), and **FT6336U** (Murphy M4 — GPIO44 IRQ-assisted reads
-on native I²C1, with volatile register readback and invalid-frame rejection).
+the active-low IRQ line), and **FT6336U** (Murphy M4 — 10 ms background reads
+on native I²C1 because GPIO46 TOUCH_INT is unusable, with volatile register
+readback, invalid-frame rejection, and complete gesture latching).
 The InputManager exposes `hasTouch/isTouchPressed/wasTouchPressed/
 wasTouchReleased/getTouchPoint`; it delivers coordinates raw-panel-oriented and the
 app owns rotation. The GT911 boards set their `TouchConfig` in the board profile
