@@ -35,6 +35,9 @@
 #if FREEINK_DRIVER_UC8279_X4
 #include "driver/Uc8279X4Driver.h"
 #endif
+#if FREEINK_DRIVER_UC8279C
+#include "driver/Uc8279cA4Driver.h"
+#endif
 #if FREEINK_DRIVER_ED2208
 #include "driver/Ed2208M5Driver.h"
 #endif
@@ -158,7 +161,9 @@ void FreeInkDisplay::selectDriver() {
         break;
       }
 #endif
-#if FREEINK_DRIVER_SSD1677
+#if FREEINK_DRIVER_UC8279C
+      _driver = &uc8279cA4Driver();
+#elif FREEINK_DRIVER_SSD1677
       _driver = &ssd1677Driver();
 #elif FREEINK_DRIVER_PAPER_MONO
       _driver = &paperMonoDriver();

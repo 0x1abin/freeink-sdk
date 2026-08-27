@@ -66,13 +66,16 @@
 #ifndef FREEINK_DEVICE_MURPHY_M4
 #define FREEINK_DEVICE_MURPHY_M4 0
 #endif
+#ifndef FREEINK_DEVICE_EEGO_A4
+#define FREEINK_DEVICE_EEGO_A4 0
+#endif
 
 // --- 2) Coherence: exactly one MCU family, at least one device ---------------
 #if !(FREEINK_DEVICE_X4 || FREEINK_DEVICE_X3 || FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_M5 || FREEINK_DEVICE_MURPHY || \
       FREEINK_DEVICE_DELINK || FREEINK_DEVICE_LILYGO || FREEINK_DEVICE_M5PAPER || FREEINK_DEVICE_STICKY ||            \
-      FREEINK_DEVICE_PAPERMONO || FREEINK_DEVICE_PAPERS3 || FREEINK_DEVICE_MURPHY_M4)
+      FREEINK_DEVICE_PAPERMONO || FREEINK_DEVICE_PAPERS3 || FREEINK_DEVICE_MURPHY_M4 || FREEINK_DEVICE_EEGO_A4)
 #error \
-    "FreeInk: no device selected. Pass at least one -DFREEINK_DEVICE_<NAME> (X4, X3, X4PRO, M5, MURPHY, DELINK, LILYGO, M5PAPER, STICKY, PAPERMONO, PAPERS3, MURPHY_M4) in your build env — see platformio.sample.ini."
+    "FreeInk: no device selected. Pass at least one -DFREEINK_DEVICE_<NAME> (X4, X3, X4PRO, M5, MURPHY, DELINK, LILYGO, M5PAPER, STICKY, PAPERMONO, PAPERS3, MURPHY_M4, EEGO_A4) in your build env — see platformio.sample.ini."
 #endif
 // Each device belongs to one MCU family; a binary targets exactly one. X3/X4 are
 // ESP32-C3; M5 PaperColor/Murphy/de-link/LilyGo are ESP32-S3; M5Paper v1.1 is the
@@ -82,7 +85,7 @@
 #define FREEINK_MCU_S3                                                                                    \
   (FREEINK_DEVICE_M5 || FREEINK_DEVICE_MURPHY || FREEINK_DEVICE_DELINK || FREEINK_DEVICE_LILYGO ||        \
    FREEINK_DEVICE_STICKY || FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_PAPERMONO || FREEINK_DEVICE_PAPERS3 ||  \
-   FREEINK_DEVICE_MURPHY_M4)
+   FREEINK_DEVICE_MURPHY_M4 || FREEINK_DEVICE_EEGO_A4)
 #define FREEINK_MCU_ESP32 (FREEINK_DEVICE_M5PAPER)
 #if (FREEINK_MCU_C3 + FREEINK_MCU_S3 + FREEINK_MCU_ESP32) != 1
 #error \
@@ -170,17 +173,26 @@
 #else
 #define FREEINK_DRIVER_PAPER_MONO 0
 #endif
+// EEGO Reader A4: UC8279C (768x552), UC81xx KW-family sibling of the UC8279 X4 driver.
+#if FREEINK_DEVICE_EEGO_A4
+#define FREEINK_DRIVER_UC8279C 1
+#else
+#define FREEINK_DRIVER_UC8279C 0
+#endif
 
 // --- 4) Derive default capabilities (override with -DFREEINK_CAP_*=0/1) -------
 #ifndef FREEINK_CAP_TOUCH
 #define FREEINK_CAP_TOUCH                                                                               \
   (FREEINK_DEVICE_MURPHY || FREEINK_DEVICE_LILYGO || FREEINK_DEVICE_M5PAPER || FREEINK_DEVICE_STICKY || \
-   FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_PAPERMONO || FREEINK_DEVICE_PAPERS3 || FREEINK_DEVICE_MURPHY_M4)
+   FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_PAPERMONO || FREEINK_DEVICE_PAPERS3 || FREEINK_DEVICE_MURPHY_M4 || \
+   FREEINK_DEVICE_EEGO_A4)
 #endif
 #ifndef FREEINK_CAP_FRONTLIGHT
+// EEGO A4's frontlight is an I2C LED driver (viaI2cLed), not LEDC PWM — the
+// FrontlightManager I2C backend drives it.
 #define FREEINK_CAP_FRONTLIGHT                                                                        \
   (FREEINK_DEVICE_DELINK || FREEINK_DEVICE_MURPHY || FREEINK_DEVICE_LILYGO || FREEINK_DEVICE_X4PRO || \
-   FREEINK_DEVICE_PAPERMONO || FREEINK_DEVICE_MURPHY_M4)
+   FREEINK_DEVICE_PAPERMONO || FREEINK_DEVICE_MURPHY_M4 || FREEINK_DEVICE_EEGO_A4)
 #endif
 // Warm/cool color-temperature frontlight: a second warm PWM channel on top of
 // the brightness one (FrontlightConfig::gpioWarm). Sub-capability of
@@ -188,7 +200,7 @@
 // builds (Paper Mono, de-link, Murphy, LilyGo). Within a multi-device build
 // the profile's gpioWarm stays the runtime truth (hasColorTemperature()).
 #ifndef FREEINK_CAP_WARMLIGHT
-#define FREEINK_CAP_WARMLIGHT (FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_MURPHY_M4)
+#define FREEINK_CAP_WARMLIGHT (FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_MURPHY_M4 || FREEINK_DEVICE_EEGO_A4)
 #endif
 // USB Mass Storage ("USB Transfer" mode): exposes the SD card to a host over
 // USB-MSC. OPT-IN (default off), NOT board-derived: it forces the build into
@@ -258,7 +270,7 @@
 #ifndef FREEINK_CAP_RTC
 #define FREEINK_CAP_RTC                                                                             \
   (FREEINK_DEVICE_X3 || FREEINK_DEVICE_STICKY || FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_PAPERMONO || \
-   FREEINK_DEVICE_PAPERS3 || FREEINK_DEVICE_LILYGO)
+   FREEINK_DEVICE_PAPERS3 || FREEINK_DEVICE_LILYGO || FREEINK_DEVICE_EEGO_A4)
 #endif
 #ifndef FREEINK_CAP_TEMP_HUMIDITY
 #define FREEINK_CAP_TEMP_HUMIDITY (FREEINK_DEVICE_STICKY)
@@ -355,6 +367,7 @@ enum class Board : uint8_t {
   Sticky,
   PaperMono,
   M5PaperS3,  // ESP32-S3 sibling of M5Paper v1.1: same ED047TC1 glass, no IT8951 — raw parallel via LovyanGFX
+  EegoA4,     // EEGO Reader A4: ESP32-S3, UC8279C 768x552 SPI panel, GSLX680 touch, PCF8563 RTC
 };
 
 // How the board reports button presses.
@@ -386,11 +399,12 @@ enum class DisplayController : uint8_t {
   LgfxEpd = 4,
   IT8951 = 5,
   UC8279 = 6,
-  UC8179 = 7
+  UC8179 = 7,
+  UC8279C = 8  // EEGO A4 768x552 sibling of the UC8279 family (Uc8279cA4Driver)
 };
 
 // Optional capacitive touch controller.
-enum class TouchController : uint8_t { None, Chsc6x, Gt911, Ft5x06, Ft6336u };
+enum class TouchController : uint8_t { None, Chsc6x, Gt911, Ft5x06, Ft6336u, Gslx680 };
 
 // Optional audio output path. Murphy M3 ships an ES8388-compatible stereo
 // codec (I2S slave, control over the shared touch I2C bus) — the contract was
@@ -541,6 +555,19 @@ struct FrontlightConfig {
   // on. pwmFrequency still applies (PM1 PWM_FREQ register); resolution is the
   // PM1's fixed 12 bits.
   bool viaPm1Pwm = false;
+  // EEGO A4 (frontlit variant): the frontlight is a dual-channel white-LED driver
+  // chip on a shared I2C bus, not LEDC PWM. `gpio`/`gpioWarm` stay PIN_UNASSIGNED;
+  // FrontlightManager powers the chip via `i2cEnableGpio` (active-high) and writes
+  // brightness to `i2cRegCool` / `i2cRegWarm`, keeping cool+warm <= `i2cMaxTotal`.
+  // pwm* fields are unused on this path.
+  bool viaI2cLed = false;
+  uint8_t i2cAddr = 0;                    // 7-bit driver address (EEGO: 0x36)
+  int8_t i2cSda = PIN_UNASSIGNED;         // shared with touch/RTC (EEGO: SDA2)
+  int8_t i2cScl = PIN_UNASSIGNED;         // (EEGO: SCL1)
+  uint8_t i2cRegCool = 0;                 // cold-channel brightness register (EEGO: 3)
+  uint8_t i2cRegWarm = 0;                 // warm-channel brightness register (EEGO: 4)
+  uint8_t i2cMaxTotal = 0;                // clamp on cool+warm; 0 = 255 (EEGO: 150)
+  int8_t i2cEnableGpio = PIN_UNASSIGNED;  // chip power/enable, active-high (EEGO: GPIO12)
 };
 
 // Audio output description (AudioOutput::None disables it).
@@ -717,6 +744,12 @@ constexpr TouchConfig LILYGO_T5_PRO_GT911 = {
     TouchController::Gt911, 39,   40,    3,    9, 0x5D, 0, 959, 0, 539, false, 0x14, false, true,
     PIN_UNASSIGNED,         true, false, true, true};  // powerEnable, swapXY, flipX, flipY, hasHomeKey
 constexpr FrontlightConfig NO_FRONTLIGHT = {PIN_UNASSIGNED, 0, 0, true};
+// EEGO A4 (frontlit variant): I2C LED driver at 0x36 on the touch/RTC bus (SDA2/SCL1),
+// enable GPIO12, cool=reg3 / warm=reg4, total clamp 150. gpio/gpioWarm unused.
+constexpr FrontlightConfig EEGO_A4_FRONTLIGHT = {
+    PIN_UNASSIGNED, 0, 0, true, PIN_UNASSIGNED, false,
+    /*viaI2cLed=*/true, /*i2cAddr=*/0x36, /*i2cSda=*/2, /*i2cScl=*/1,
+    /*i2cRegCool=*/3, /*i2cRegWarm=*/4, /*i2cMaxTotal=*/150, /*i2cEnableGpio=*/12};
 constexpr AudioConfig NO_AUDIO = {AudioOutput::None,
                                   PIN_UNASSIGNED,
                                   PIN_UNASSIGNED,
@@ -1306,6 +1339,55 @@ constexpr BoardProfile M5PAPER_S3 = {
     1.2f,  // uiScale: 4.7" 960x540 touch (~234 PPI) — finger-sized chrome, like LilyGo/M5Paper
     {}};   // no power latch: the PMS150G self-latches; off = GPIO44 pulse (BoardPaperS3::powerOff)
 
+// --- EEGO Reader A4 — ESP32-S3 N16R8, UC8279C (768x552) + GSLX680 touch -------
+// CrossPoint fork device; pins/resolution/calibration from stock-firmware RE,
+// none hardware-confirmed. See docs/eego-a4-support.md.
+constexpr BoardProfile EEGO_A4 = {
+    Board::EegoA4,
+    "eego_a4",
+    InputStyle::DigitalButtons,
+    DisplayController::UC8279C,
+    768,
+    552,
+    {42, 45, 21, 14, 13, 41, 6},                       // SCLK MOSI CS DC RST BUSY PWR-EN
+    20000000,
+    {39, 40, 38, 47, PIN_UNASSIGNED, true, 20000000},  // dedicated HSPI SD: SCLK MISO MOSI CS
+    // UP DOWN POWER. Power is active-HIGH (press drives 3V3) with a weak
+    // external pull-down; INPUT_PULLDOWN required (InputManager honors the
+    // polarity for pinMode). An internal pull-up leaves the pin mid-rail and
+    // phantom-pressed.
+    {PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, 5, 7, 8, true},
+    10,      // batteryAdc
+    11,      // batteryChargeStatus
+    1.559f,  // divider
+    PIN_UNASSIGNED,
+    // GSLX680: pollGslx680 applies the 1.2.7 calibration and returns panel-native
+    // x=0..767, y=0..551, so no raw-range/swap/flip mapping is needed here.
+    {TouchController::Gslx680, 2, 1, PIN_UNASSIGNED, 3, 0x40, 0, 767, 0, 551, false, 0, false, false,
+     PIN_UNASSIGNED, false, false, false, true, true},  // powerEnable, swapXY, flipX, flipY, hasHomeKey, pwrEnActiveHigh
+    EEGO_A4_FRONTLIGHT,  // I2C LED driver @0x36, enable GPIO12, cool=reg3/warm=reg4 (frontlit variant)
+    NO_AUDIO,
+    NO_LEDS,
+    NO_FLIP,
+    NO_SDMMC,
+    NO_GAUGE,
+    NO_MIC,
+    {2, 1, 400000, 0x51, 0, 0, 0, RtcType::Pcf8563, ImuType::None},  // PCF8563 on the shared touch bus
+    1.2f,
+    {4},  // power latch GPIO4
+    0,    // displayControllerVariant (UC8279C, not probed)
+    // Rounded-corner panel: pull the sides (left/right in the portrait frame) in a
+    // lot so text/status icons aren't clipped by the curved bezel. Tune on hardware.
+    // {top, right, bottom, left}
+    {24, 24, 8, 24},
+    // Charger STAT GPIO11 is driven HIGH while charging, like the X4 Pro
+    // (hardware verified: with the active-low default the charging indicator
+    // lit only when USB was unplugged).
+    true};
+
+static_assert(EEGO_A4.displayWidth / 8 * EEGO_A4.displayHeight == 52992,
+              "EEGO A4 framebuffer must be 52,992 bytes (768/8 x 552)");
+
 // --- Sticky (Seeed Sticky) — ESP32-S3R8, SSD1677 + GT911 touch ---------------
 // 3.97" 800x480 B/W e-paper on a 24-pin FPC, controller confirmed SSD1677 by the
 // vendor peripheral demo (pin_config.h: "E-paper SSD1677 (SPI)") — same driver,
@@ -1534,14 +1616,17 @@ constexpr uint32_t MAX_FRAMEBUFFER_BYTES = cmax(
                    FREEINK_DEVICE_X4PRO ? panelBytes(XTEINK_X4_PRO) : 0u)),
          cmax(cmax(FREEINK_DEVICE_STICKY ? panelBytes(STICKY) : 0u,
                    FREEINK_DEVICE_PAPERMONO ? panelBytes(PAPER_MONO) : 0u),
-              cmax(FREEINK_DEVICE_PAPERS3 ? panelBytes(M5PAPER_S3) : 0u,
-                   FREEINK_DEVICE_MURPHY_M4 ? panelBytes(MURPHY_M4) : 0u))));
+              cmax(cmax(FREEINK_DEVICE_PAPERS3 ? panelBytes(M5PAPER_S3) : 0u,
+                        FREEINK_DEVICE_MURPHY_M4 ? panelBytes(MURPHY_M4) : 0u),
+                   FREEINK_DEVICE_EEGO_A4 ? panelBytes(EEGO_A4) : 0u))));
 
 // Compile-time default device — the profile ACTIVE starts as. With a single
 // device in the build this is the only device; with several same-MCU devices it
 // is the boot default until the consumer calls selectDevice().
 #if FREEINK_DEVICE_PAPERMONO
 constexpr BoardProfile DEFAULT_DEVICE = PAPER_MONO;
+#elif FREEINK_DEVICE_EEGO_A4
+constexpr BoardProfile DEFAULT_DEVICE = EEGO_A4;
 #elif FREEINK_DEVICE_M5
 constexpr BoardProfile DEFAULT_DEVICE = M5STACK_PAPER_COLOR;
 #elif FREEINK_DEVICE_MURPHY_M4
@@ -1642,6 +1727,11 @@ inline bool selectDevice(Board which) {
       ACTIVE = M5PAPER_S3;
       break;
 #endif
+#if FREEINK_DEVICE_EEGO_A4
+    case Board::EegoA4:
+      ACTIVE = EEGO_A4;
+      break;
+#endif
     default:
       return false;
   }
@@ -1661,6 +1751,7 @@ inline bool isM5PaperS3() { return ACTIVE.board == Board::M5PaperS3; }
 inline bool isSticky() { return ACTIVE.board == Board::Sticky; }
 inline bool isX4Pro() { return ACTIVE.board == Board::XteinkX4Pro; }
 inline bool isPaperMono() { return ACTIVE.board == Board::PaperMono; }
+inline bool isEegoA4() { return ACTIVE.board == Board::EegoA4; }
 inline bool hasTouch() { return ACTIVE.touch.controller != TouchController::None; }
 inline bool hasHomeKey() { return ACTIVE.touch.hasHomeKey; }
 inline bool hasPwmFrontlight() { return ACTIVE.frontlight.gpio != PIN_UNASSIGNED || ACTIVE.frontlight.viaPm1Pwm; }

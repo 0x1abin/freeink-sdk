@@ -41,10 +41,11 @@ class FrontlightManager {
 
   bool present() const {
 #if FREEINK_CAP_FRONTLIGHT
-    // A PMIC-driven frontlight (Paper Mono: PM1 PWM0 -> AW9967) has no ESP
-    // GPIO, so viaPm1Pwm counts as present alongside the LEDC-pin boards.
+    // A PMIC-driven frontlight (Paper Mono: PM1 PWM0 -> AW9967) or an I2C LED
+    // driver (EEGO A4: chip at 0x36) has no ESP LEDC pin, so those flags count as
+    // present alongside the LEDC-pin boards.
     return BoardConfig::ACTIVE.frontlight.gpio != BoardConfig::PIN_UNASSIGNED ||
-           BoardConfig::ACTIVE.frontlight.viaPm1Pwm;
+           BoardConfig::ACTIVE.frontlight.viaPm1Pwm || BoardConfig::ACTIVE.frontlight.viaI2cLed;
 #else
     return false;  // frontlight code not compiled in (FREEINK_CAP_FRONTLIGHT=0)
 #endif
@@ -54,8 +55,9 @@ class FrontlightManager {
   // something. False on single-channel frontlights and on boards with none.
   bool hasColorTemperature() const {
 #if FREEINK_CAP_WARMLIGHT
-    return BoardConfig::ACTIVE.frontlight.gpio != BoardConfig::PIN_UNASSIGNED &&
-           BoardConfig::ACTIVE.frontlight.gpioWarm != BoardConfig::PIN_UNASSIGNED;
+    const auto& fl = BoardConfig::ACTIVE.frontlight;
+    if (fl.viaI2cLed) return fl.i2cRegWarm != 0 && fl.i2cRegCool != 0;  // warm/cool on separate regs
+    return fl.gpio != BoardConfig::PIN_UNASSIGNED && fl.gpioWarm != BoardConfig::PIN_UNASSIGNED;
 #else
     return false;  // no warm-channel board in this build (FREEINK_CAP_WARMLIGHT=0)
 #endif
