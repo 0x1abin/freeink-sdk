@@ -101,21 +101,25 @@ static const Ssd1677Config& ssd1677StickyConfig() {
 }
 
 // Murphy M4 keeps the generic SSD1677 waveform but its two panel batches need
-// different pseudo-temperature values for HALF refresh. Batch 2 (R13 fitted)
-// is the shipping default; define FREEINK_MURPHY_M4_BATCH1=1 for the earlier
-// no-R13 panel. Keep this compile-time until both batches are hardware-verified.
-static const Ssd1677Config& ssd1677MurphyM4Config() {
-  static const Ssd1677Config cfg = [] {
-    Ssd1677Config value = ssd1677DefaultConfig();
-#if defined(FREEINK_MURPHY_M4_BATCH1) && FREEINK_MURPHY_M4_BATCH1
-    value.halfRefreshTemp = 0x3C;  // batch 1: 60°C
-#else
-    value.halfRefreshTemp = 0x50;  // batch 2: 80°C
-#endif
-    value.halfSeqOverride = 0xD4;
-    return value;
-  }();
-  return cfg;
+// different pseudo-temperature values for HALF and window refresh.
+static Ssd1677Config makeSsd1677MurphyM4Config(const uint8_t halfRefreshTemp) {
+  Ssd1677Config value = ssd1677DefaultConfig();
+  value.halfRefreshTemp = halfRefreshTemp;
+  value.halfSeqOverride = 0xD4;
+  value.windowRefreshUsesHalfTemp = true;
+  return value;
+}
+
+static const Ssd1677Config& ssd1677MurphyM4Config(const MurphyM4Batch batch = defaultMurphyM4Batch()) {
+  static const Ssd1677Config first = makeSsd1677MurphyM4Config(0x3C);
+  static const Ssd1677Config second = makeSsd1677MurphyM4Config(0x50);
+  switch (batch) {
+    case MurphyM4Batch::First:
+      return first;
+    case MurphyM4Batch::Second:
+      return second;
+  }
+  return second;
 }
 
 // Waveshare ESP32-S3 ePaper 3.97. Inherit the default FULL/HALF sequences;
@@ -588,6 +592,10 @@ void Ssd1677Driver::displayWindow(EpdBus& bus, const uint8_t* fb, const uint8_t*
     writeRam(bus, CMD_WRITE_RAM_RED, previousWindow.data(), windowBufferSize);
   }
 
+  if (_cfg.windowRefreshUsesHalfTemp) {
+    bus.cmd(CMD_WRITE_TEMP);
+    bus.data(_cfg.halfRefreshTemp);
+  }
   refresh(bus, RefreshMode::Fast, turnOff);
 
   if (prev == nullptr) {
@@ -769,9 +777,16 @@ static const Ssd1677Config& ssd1677ActiveConfig() {
 }
 #endif
 
+#if FREEINK_DEVICE_MURPHY_M4
+PanelDriver& ssd1677Driver(const MurphyM4Batch batch) {
+  static Ssd1677Driver instance(ssd1677MurphyM4Config(batch));
+  return instance;
+}
+#else
 PanelDriver& ssd1677Driver() {
   static Ssd1677Driver instance(ssd1677ActiveConfig());
   return instance;
 }
+#endif
 
 }  // namespace freeink

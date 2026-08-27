@@ -52,49 +52,6 @@ constexpr bool movedBeyondSlop(const int dx, const int dy, const int slop) {
   return absInt(dx) > slop || absInt(dy) > slop;
 }
 
-#if FREEINK_DEVICE_MURPHY_M4
-enum class Ft6336uFrameState : uint8_t {
-  Contact,
-  Released,
-  Invalid,
-};
-
-constexpr uint16_t ft6336uAxis(const uint8_t high, const uint8_t low) {
-  return static_cast<uint16_t>(high & 0x0F) << 8 | low;
-}
-
-constexpr Ft6336uFrameState classifyFt6336uFrame(const uint8_t status, const uint8_t xHigh, const uint8_t xLow,
-                                                 const uint8_t yHigh, const uint8_t yLow) {
-  const uint8_t pointCount = status & 0x0F;
-  if (status >= 0x10 || pointCount > 2) return Ft6336uFrameState::Invalid;
-  if (pointCount == 0) return Ft6336uFrameState::Released;
-
-  const uint8_t event = xHigh >> 6;
-  if (event == 3) return Ft6336uFrameState::Invalid;
-
-  if (status == 0x01 && xHigh == 0x01 && xLow == 0x01 && yHigh == 0x01 && yLow == 0x01)
-    return Ft6336uFrameState::Invalid;
-  return event == 1 ? Ft6336uFrameState::Released : Ft6336uFrameState::Contact;
-}
-
-constexpr bool ft6336uPointInBounds(const uint8_t xHigh, const uint8_t xLow, const uint8_t yHigh, const uint8_t yLow,
-                                    const uint16_t maxX, const uint16_t maxY, const bool swapXY) {
-  const uint16_t rawX = ft6336uAxis(xHigh, xLow);
-  const uint16_t rawY = ft6336uAxis(yHigh, yLow);
-  return (swapXY ? rawY : rawX) <= maxX && (swapXY ? rawX : rawY) <= maxY;
-}
-
-static_assert(ft6336uAxis(0x41, 0x23) == 0x0123, "FT6336U coordinate decoding must ignore event/id bits");
-static_assert(classifyFt6336uFrame(1, 0x01, 0x23, 0x00, 0x42) == Ft6336uFrameState::Contact);
-static_assert(classifyFt6336uFrame(1, 0x81, 0x23, 0x00, 0x42) == Ft6336uFrameState::Contact);
-static_assert(classifyFt6336uFrame(1, 0x41, 0x23, 0x00, 0x42) == Ft6336uFrameState::Released);
-static_assert(classifyFt6336uFrame(0, 0, 0, 0, 0) == Ft6336uFrameState::Released);
-static_assert(classifyFt6336uFrame(0x10, 0, 0, 0, 0) == Ft6336uFrameState::Invalid);
-static_assert(classifyFt6336uFrame(3, 0, 0, 0, 0) == Ft6336uFrameState::Invalid);
-static_assert(classifyFt6336uFrame(1, 0xC1, 0x23, 0x00, 0x42) == Ft6336uFrameState::Invalid);
-static_assert(classifyFt6336uFrame(1, 1, 1, 1, 1) == Ft6336uFrameState::Invalid);
-#endif
-
 #if defined(TOUCH_PROBE_DEBUG)
 void touchDebugPrintf(const char* format, ...) {
   char buf[192];
@@ -1205,13 +1162,14 @@ void InputManager::prepareForDeepSleep() {
 #if FREEINK_CAP_TOUCH
   const auto& t = BoardConfig::ACTIVE.touch;
   switch (t.controller) {
-  case BoardConfig::TouchController::Ft6336u:
+    case BoardConfig::TouchController::Ft6336u:
 #if FREEINK_DEVICE_MURPHY_M4
-    if (t.powerEnable >= 0) {
-      pinMode(t.powerEnable, OUTPUT);
-      digitalWrite(t.powerEnable, t.powerEnableActiveHigh ? LOW : HIGH);
-    }
-    touchDataEnabled = false;
+      pauseFt6336uPolling();
+      if (t.powerEnable >= 0) {
+        pinMode(t.powerEnable, OUTPUT);
+        digitalWrite(t.powerEnable, t.powerEnableActiveHigh ? LOW : HIGH);
+      }
+      touchDataEnabled = false;
 #endif
       return;
     case BoardConfig::TouchController::Gslx680:
@@ -1241,9 +1199,12 @@ void InputManager::prepareForDeepSleep() {
 
 bool InputManager::reinitializeTouchAfterSharedReset() {
 #if FREEINK_DEVICE_MURPHY_M4
-  if (BoardConfig::ACTIVE.touch.controller ==
-      BoardConfig::TouchController::Ft6336u) {
-    return beginFt6336u(false);
+  if (BoardConfig::ACTIVE.touch.controller == BoardConfig::TouchController::Ft6336u) {
+    if (!beginFt6336u(false)) return false;
+    if (!startFt6336uPolling()) {
+      esp_rom_printf("[touch] M4 static polling task unavailable; using synchronous polling\r\n");
+    }
+    return true;
   }
 #endif
   return true;
@@ -1420,7 +1381,11 @@ InputManager::TouchPoint InputManager::mapTouchPoint(const uint16_t rawX, const 
   const uint16_t width = t.rawMaxX > t.rawMinX ? t.rawMaxX - t.rawMinX : 1;
   const uint16_t height = t.rawMaxY > t.rawMinY ? t.rawMaxY - t.rawMinY : 1;
   uint16_t x = mapTouchAxis(sx, t.rawMinX, t.rawMaxX, width);
+#if FREEINK_DEVICE_MURPHY_M4
+  uint16_t y = freeink::mapMurphyM4TouchShortAxis(sy, murphyM4Batch, height);
+#else
   uint16_t y = mapTouchAxis(sy, t.rawMinY, t.rawMaxY, height);
+#endif
   if (t.flipX) x = static_cast<uint16_t>(width - x);
   if (t.flipY) y = static_cast<uint16_t>(height - y);
   return {true, x, y, now};
@@ -1595,8 +1560,13 @@ void InputManager::pollFt5x06(const unsigned long now) {
 #if FREEINK_DEVICE_MURPHY_M4
 bool InputManager::beginFt6336u(const bool powerCycle) {
   const auto& t = BoardConfig::ACTIVE.touch;
+  pauseFt6336uPolling();
   touchDataEnabled = false;
   if (t.sda < 0 || t.scl < 0 || t.i2cAddress == 0 || t.powerEnable < 0) return false;
+
+  portENTER_CRITICAL(&ft6336uPollMux);
+  ft6336uPollState = {};
+  portEXIT_CRITICAL(&ft6336uPollMux);
 
   if (powerCycle) {
     gpio_hold_dis(static_cast<gpio_num_t>(t.powerEnable));
@@ -1628,13 +1598,14 @@ bool InputManager::beginFt6336u(const bool powerCycle) {
                        freeink::murphy_m4_i2c::read(device, 0x80, &readThreshold, 1) &&
                        freeink::murphy_m4_i2c::read(device, 0x88, &readRate, 1) &&
                        freeink::murphy_m4_i2c::read(device, 0x02, probe, sizeof(probe));
-  auto probeState = classifyFt6336uFrame(probe[0], probe[1], probe[2], probe[3], probe[4]);
-  if (probeState == Ft6336uFrameState::Contact &&
-      !ft6336uPointInBounds(probe[1], probe[2], probe[3], probe[4], t.rawMaxX, t.rawMaxY, t.swapXY)) {
-    probeState = Ft6336uFrameState::Invalid;
+  auto probeState = freeink::murphy_m4_touch::classifyFrame(probe[0], probe[1], probe[2], probe[3], probe[4]);
+  if (probeState == freeink::murphy_m4_touch::FrameState::Contact &&
+      !freeink::murphy_m4_touch::pointInBounds(probe[1], probe[2], probe[3], probe[4], t.rawMaxX, t.rawMaxY,
+                                               t.swapXY)) {
+    probeState = freeink::murphy_m4_touch::FrameState::Invalid;
   }
   touchDataEnabled = readsOk && readMode == 0x00 && readThreshold == 0x16 && readRate == 0x04 &&
-                     probeState != Ft6336uFrameState::Invalid;
+                     probeState != freeink::murphy_m4_touch::FrameState::Invalid;
   if (!touchDataEnabled) {
     esp_rom_printf(
         "[touch] M4 FT6336U initialization failed: writes=%d reads=%d "
@@ -1646,35 +1617,147 @@ bool InputManager::beginFt6336u(const bool powerCycle) {
   return touchDataEnabled;
 }
 
-void InputManager::pollFt6336u(const unsigned long now) {
+bool InputManager::readFt6336uFrame(freeink::murphy_m4_touch::FrameState& state, uint16_t& rawX, uint16_t& rawY) {
   const auto& t = BoardConfig::ACTIVE.touch;
-  if (t.irq >= 0 && digitalRead(t.irq) != LOW && !touchPressed) return;
+  uint8_t frame[11] = {};
+  const auto device = freeink::murphy_m4_i2c::touchDevice(t.sda, t.scl, t.i2cAddress);
+  if (!freeink::murphy_m4_i2c::read(device, 0x02, frame, sizeof(frame))) return false;
+
+  state = freeink::murphy_m4_touch::classifyFrame(frame[0], frame[1], frame[2], frame[3], frame[4]);
+  if (state == freeink::murphy_m4_touch::FrameState::Contact &&
+      !freeink::murphy_m4_touch::pointInBounds(frame[1], frame[2], frame[3], frame[4], t.rawMaxX, t.rawMaxY,
+                                               t.swapXY)) {
+    state = freeink::murphy_m4_touch::FrameState::Invalid;
+  }
+  if (state == freeink::murphy_m4_touch::FrameState::Contact) {
+    rawX = freeink::murphy_m4_touch::axis(frame[1], frame[2]);
+    rawY = freeink::murphy_m4_touch::axis(frame[3], frame[4]);
+  }
+  return true;
+}
+
+void InputManager::applyFt6336uSnapshot(const freeink::murphy_m4_touch::Snapshot& snapshot) {
+  if (snapshot.completedPending) {
+    if (!touchPressed) {
+      updateTouchContact(
+          mapTouchPoint(snapshot.completedDown.x, snapshot.completedDown.y, snapshot.completedDown.timestamp));
+    }
+    updateTouchContact(mapTouchPoint(snapshot.completedUp.x, snapshot.completedUp.y, snapshot.completedUp.timestamp));
+    releaseTouch(snapshot.completedUp.timestamp);
+    return;
+  }
+
+  if (!snapshot.contact) return;
+  if (!touchPressed) updateTouchContact(mapTouchPoint(snapshot.down.x, snapshot.down.y, snapshot.down.timestamp));
+  updateTouchContact(mapTouchPoint(snapshot.latest.x, snapshot.latest.y, snapshot.latest.timestamp));
+}
+
+bool InputManager::startFt6336uPolling() {
+  if (!touchDataEnabled) return false;
+
+  if (ft6336uTask == nullptr) {
+    ft6336uTask = xTaskCreateStaticPinnedToCore(ft6336uTaskTrampoline, "fi_ft6336", FT6336U_TASK_STACK_BYTES, this, 5,
+                                                ft6336uTaskStack, &ft6336uTaskTcb, 0);
+    if (ft6336uTask == nullptr) return false;
+    esp_rom_printf("[touch] M4 FT6336U polling on core 0 every %lu ms (static stack=%lu)\r\n",
+                   static_cast<unsigned long>(FT6336U_POLL_MS), static_cast<unsigned long>(FT6336U_TASK_STACK_BYTES));
+  }
+
+  portENTER_CRITICAL(&ft6336uPollMux);
+  ft6336uPollingEnabled = true;
+  portEXIT_CRITICAL(&ft6336uPollMux);
+  return true;
+}
+
+void InputManager::pauseFt6336uPolling() {
+  if (ft6336uTask == nullptr) return;
+
+  portENTER_CRITICAL(&ft6336uPollMux);
+  ft6336uPollingEnabled = false;
+  bool inFlight = ft6336uPollInFlight;
+  portEXIT_CRITICAL(&ft6336uPollMux);
+
+  const unsigned long startedAt = millis();
+  while (inFlight && millis() - startedAt < 30) {
+    delay(1);
+    portENTER_CRITICAL(&ft6336uPollMux);
+    inFlight = ft6336uPollInFlight;
+    portEXIT_CRITICAL(&ft6336uPollMux);
+  }
+  if (inFlight) esp_rom_printf("[touch] M4 polling pause timed out with I2C in flight\r\n");
+}
+
+void InputManager::ft6336uTaskTrampoline(void* self) { static_cast<InputManager*>(self)->ft6336uTaskLoop(); }
+
+void InputManager::ft6336uTaskLoop() {
+  TickType_t wakeAt = xTaskGetTickCount();
+  for (;;) {
+    portENTER_CRITICAL(&ft6336uPollMux);
+    const bool shouldPoll = ft6336uPollingEnabled;
+    if (shouldPoll) ft6336uPollInFlight = true;
+    portEXIT_CRITICAL(&ft6336uPollMux);
+
+    if (shouldPoll) {
+      freeink::murphy_m4_touch::FrameState state = freeink::murphy_m4_touch::FrameState::Invalid;
+      uint16_t rawX = 0;
+      uint16_t rawY = 0;
+      const bool readOk = readFt6336uFrame(state, rawX, rawY);
+      const uint32_t now = millis();
+
+      portENTER_CRITICAL(&ft6336uPollMux);
+      if (ft6336uPollingEnabled) {
+        if (!readOk || state == freeink::murphy_m4_touch::FrameState::Invalid) {
+          freeink::murphy_m4_touch::releaseIfStale(ft6336uPollState, now, FT6336U_STALE_RELEASE_MS);
+        } else {
+          switch (state) {
+            case freeink::murphy_m4_touch::FrameState::Contact:
+              freeink::murphy_m4_touch::recordContact(ft6336uPollState, rawX, rawY, now);
+              break;
+            case freeink::murphy_m4_touch::FrameState::Released:
+              freeink::murphy_m4_touch::recordRelease(ft6336uPollState, now);
+              break;
+            case freeink::murphy_m4_touch::FrameState::Invalid:
+              break;
+          }
+        }
+      }
+      ft6336uPollInFlight = false;
+      portEXIT_CRITICAL(&ft6336uPollMux);
+    }
+
+    vTaskDelayUntil(&wakeAt, pdMS_TO_TICKS(FT6336U_POLL_MS));
+  }
+}
+
+void InputManager::pollFt6336u(const unsigned long now) {
+  if (ft6336uTask != nullptr) {
+    portENTER_CRITICAL(&ft6336uPollMux);
+    const auto snapshot = freeink::murphy_m4_touch::takeSnapshot(ft6336uPollState);
+    portEXIT_CRITICAL(&ft6336uPollMux);
+    applyFt6336uSnapshot(snapshot);
+    return;
+  }
+
   if (now < touchReadAt) return;
   touchReadAt = now + TOUCH_SAMPLE_DELAY_MS;
 
-  uint8_t frame[11] = {};
-  const auto device = freeink::murphy_m4_i2c::touchDevice(t.sda, t.scl, t.i2cAddress);
-  if (!freeink::murphy_m4_i2c::read(device, 0x02, frame, sizeof(frame))) return;
-
-  auto frameState = classifyFt6336uFrame(frame[0], frame[1], frame[2], frame[3], frame[4]);
-  if (frameState == Ft6336uFrameState::Contact &&
-      !ft6336uPointInBounds(frame[1], frame[2], frame[3], frame[4], t.rawMaxX, t.rawMaxY, t.swapXY)) {
-    frameState = Ft6336uFrameState::Invalid;
+  freeink::murphy_m4_touch::FrameState state = freeink::murphy_m4_touch::FrameState::Invalid;
+  uint16_t rawX = 0;
+  uint16_t rawY = 0;
+  if (!readFt6336uFrame(state, rawX, rawY) || state == freeink::murphy_m4_touch::FrameState::Invalid) {
+    if (touchPressed && now - touchPoint.timestamp >= FT6336U_STALE_RELEASE_MS) releaseTouch(now);
+    return;
   }
 
-  switch (frameState) {
-    case Ft6336uFrameState::Invalid:
-      if (touchPressed && t.irq >= 0 && digitalRead(t.irq) != LOW) releaseTouch(now);
-      return;
-    case Ft6336uFrameState::Released:
+  switch (state) {
+    case freeink::murphy_m4_touch::FrameState::Released:
       releaseTouch(now);
       return;
-    case Ft6336uFrameState::Contact: {
-      const uint16_t rawX = ft6336uAxis(frame[1], frame[2]);
-      const uint16_t rawY = ft6336uAxis(frame[3], frame[4]);
+    case freeink::murphy_m4_touch::FrameState::Contact:
       updateTouchContact(mapTouchPoint(rawX, rawY, now));
       return;
-    }
+    case freeink::murphy_m4_touch::FrameState::Invalid:
+      return;
   }
 }
 #endif

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "MurphyM4Batch.h"
+
 // FreeInk SDK — board hardware profiles + build composition.
 //
 // A BoardProfile describes a device's pinout, screen, and capabilities. The
@@ -1510,7 +1512,7 @@ constexpr BoardProfile EEGO_A4 = {Board::EegoA4,
 constexpr BoardProfile MURPHY_M4 = {
     Board::MurphyM4,
     "murphy_m4",
-    InputStyle::DigitalConfirmPowerHold,
+    InputStyle::DigitalButtons,
     DisplayController::SSD1677,
     800,
     480,
@@ -1518,18 +1520,18 @@ constexpr BoardProfile MURPHY_M4 = {
     20000000,
     {PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, 10, false,
      0, false},
-    {PIN_UNASSIGNED, 0, PIN_UNASSIGNED, PIN_UNASSIGNED, 1, 2, 0, false},
+    {PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, 1, 2, 0, false},
     9,
     43,
     2.0f,
     PIN_UNASSIGNED,
     // The portrait controller frame is swapped into the 800x480 panel frame.
-    // GPIO44 is active-low IRQ, GPIO7 shares reset with the display, and GPIO45
-    // powers the touch controller while LOW.
+    // GPIO46 is the unusable active-low IRQ, GPIO7 shares reset with the display,
+    // and GPIO45 powers the touch controller while LOW.
     {TouchController::Ft6336u,
      13,
      12,
-     44,
+     46,
      7,
      0x2E,
      0,
@@ -1592,13 +1594,13 @@ static_assert(!EEGO_A4.touch.swapXY && !EEGO_A4.touch.flipX && !EEGO_A4.touch.fl
 static_assert(MURPHY_M4.displayWidth / 8 * MURPHY_M4.displayHeight == 48000,
               "Murphy M4 must use one 48,000-byte framebuffer");
 static_assert(
-    MURPHY_M4.inputStyle == InputStyle::DigitalConfirmPowerHold &&
-        MURPHY_M4.input.confirm == 0 && MURPHY_M4.input.power == 0 &&
+    MURPHY_M4.inputStyle == InputStyle::DigitalButtons &&
+        MURPHY_M4.input.confirm == PIN_UNASSIGNED && MURPHY_M4.input.power == 0 &&
         MURPHY_M4.input.up == 1 && MURPHY_M4.input.down == 2,
-    "Murphy M4 GPIO0 must use the shared confirm/power state machine");
+    "Murphy M4 GPIO0 must be an independent power button");
 static_assert(
     MURPHY_M4.touch.controller == TouchController::Ft6336u &&
-        MURPHY_M4.touch.irq == 44 && MURPHY_M4.touch.reset == 7 &&
+        MURPHY_M4.touch.irq == 46 && MURPHY_M4.touch.reset == 7 &&
         MURPHY_M4.touch.sda == 13 && MURPHY_M4.touch.scl == 12 &&
         MURPHY_M4.touch.i2cAddress == 0x2E &&
         MURPHY_M4.touch.powerEnable == 45 && MURPHY_M4.touch.irqActiveLow &&
