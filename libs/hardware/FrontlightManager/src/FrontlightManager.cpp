@@ -58,38 +58,6 @@ void pm1FrontlightWrite(uint32_t pct) {
   freeink::m5pm1::writeBytes(freeink::m5pm1::REG_PWM0_DUTY_L, data, sizeof(data));
 }
 
-// EEGO A4 (frontlit variant): a dual-channel white-LED driver chip on the shared
-// I2C bus (same wires as touch/RTC), powered by an enable GPIO. Cool and warm
-// brightness are separate registers; the total is clamped to i2cMaxTotal. The init
-// register sequence below is what the stock firmware writes (charge-pump / current
-// limits) — recovered by RE, so it may want tuning against a physical unit.
-struct I2cLedReg {
-  uint8_t reg;
-  uint8_t val;
-};
-constexpr I2cLedReg kI2cLedInit[] = {
-    {0x50, 0x03}, {0x01, 0x07}, {0x02, 0x38}, {0x05, 0x1F}, {0x06, 0x1F},
-};
-
-void i2cLedWriteReg(const BoardConfig::FrontlightConfig& fl, uint8_t reg, uint8_t val) {
-  Wire.beginTransmission(fl.i2cAddr);
-  Wire.write(reg);
-  Wire.write(val);
-  Wire.endTransmission();
-}
-
-void i2cLedAttach(const BoardConfig::FrontlightConfig& fl) {
-  if (fl.i2cEnableGpio != BoardConfig::PIN_UNASSIGNED) {
-    pinMode(fl.i2cEnableGpio, OUTPUT);
-    digitalWrite(fl.i2cEnableGpio, HIGH);  // active-high chip power
-    delay(2);
-  }
-  if (fl.i2cSda != BoardConfig::PIN_UNASSIGNED && fl.i2cScl != BoardConfig::PIN_UNASSIGNED) {
-    Wire.begin(fl.i2cSda, fl.i2cScl);  // shared bus; idempotent if touch/RTC already brought it up
-  }
-  for (const auto& r : kI2cLedInit) i2cLedWriteReg(fl, r.reg, r.val);
-}
-
 // Fixed LEDC channels for the Arduino-ESP32 2.x path (3.x keys by GPIO and allocates
 // channels itself). Frontlight owns 0 (cool/primary) and 1 (warm); no other SDK LEDC
 // user on a frontlight board takes these (the Buzzer uses the 3.x gpio-keyed API).
@@ -160,14 +128,34 @@ void writeChannel(int8_t /*gpio*/, uint8_t ch, uint32_t duty) { ledcWrite(ch, du
 void FrontlightManager::begin() {
 #if FREEINK_CAP_FRONTLIGHT
   const auto& fl = BoardConfig::ACTIVE.frontlight;
-  if (fl.viaPm1Pwm) {
-    pm1FrontlightAttach(fl.pwmFrequency);
+#if FREEINK_DEVICE_EEGO_A4
+  const auto& i2c = BoardConfig::ACTIVE.i2cFrontlight;
+  if (BoardConfig::ACTIVE.board == BoardConfig::Board::EegoA4 &&
+      i2c.controller == BoardConfig::I2cFrontlightController::Lm3630a) {
+    if (i2c.sda < 0 || i2c.scl < 0 || i2c.enable < 0 || i2c.address == 0) return;
+    Wire.begin(i2c.sda, i2c.scl, i2c.i2cHz);
+    Wire.setTimeOut(256);
+    pinMode(i2c.enable, OUTPUT);
+    digitalWrite(i2c.enable, LOW);
+
+    // The OEM firmware contains an LM3630A path, but at least one retail EEGO
+    // A4 revision has no frontlight hardware populated. Probe with the recovered
+    // enable sequence so an absent option stays off and is not exposed as a
+    // capability merely because its driver exists in a shared firmware image.
+    digitalWrite(i2c.enable, HIGH);
+    delay(2);
+    Wire.beginTransmission(i2c.address);
+    const bool detected = Wire.endTransmission() == 0;
+    digitalWrite(i2c.enable, LOW);
+    if (!detected) return;
+
     _begun = true;
-    setBrightness(0);
+    _brightness = 0;
     return;
   }
-  if (fl.viaI2cLed) {
-    i2cLedAttach(fl);
+#endif
+  if (fl.viaPm1Pwm) {
+    pm1FrontlightAttach(fl.pwmFrequency);
     _begun = true;
     setBrightness(0);
     return;
@@ -202,28 +190,100 @@ void FrontlightManager::begin() {
 }
 
 #if FREEINK_CAP_FRONTLIGHT
+#if FREEINK_DEVICE_EEGO_A4
+bool FrontlightManager::lm3630aWrite(const uint8_t reg, const uint8_t value) {
+  const auto& cfg = BoardConfig::ACTIVE.i2cFrontlight;
+  Wire.beginTransmission(cfg.address);
+  Wire.write(reg);
+  Wire.write(value);
+  return Wire.endTransmission() == 0;
+}
+
+bool FrontlightManager::lm3630aRead(const uint8_t reg, uint8_t& value) {
+  const auto& cfg = BoardConfig::ACTIVE.i2cFrontlight;
+  Wire.beginTransmission(cfg.address);
+  Wire.write(reg);
+  if (Wire.endTransmission(false) != 0) return false;
+  if (Wire.requestFrom(cfg.address, static_cast<uint8_t>(1), static_cast<uint8_t>(true)) != 1) return false;
+  value = Wire.read();
+  return true;
+}
+
+bool FrontlightManager::lm3630aUpdate(const uint8_t reg, const uint8_t mask, const uint8_t value) {
+  uint8_t current = 0;
+  if (!lm3630aRead(reg, current)) return false;
+  return lm3630aWrite(reg, static_cast<uint8_t>((current & ~mask) | (value & mask)));
+}
+
+bool FrontlightManager::configureLm3630a() {
+  const auto& cfg = BoardConfig::ACTIVE.i2cFrontlight;
+  digitalWrite(cfg.enable, HIGH);
+  delay(2);
+  Wire.beginTransmission(cfg.address);
+  if (Wire.endTransmission() != 0) {
+    digitalWrite(cfg.enable, LOW);
+    return false;
+  }
+
+  // Exact EEGO A4 sequence recovered from HalBacklight/LM3630A in CrossLink.
+  // Register meanings follow TI SNVS974B: filter, config, boost, max-current A/B,
+  // control, then the two brightness banks.
+  bool ok = lm3630aWrite(0x50, 0x03);
+  ok = lm3630aUpdate(0x01, 0x07, 0x00) && ok;
+  ok = lm3630aWrite(0x02, 0x38) && ok;
+  ok = lm3630aUpdate(0x05, 0x1f, 0x10) && ok;
+  ok = lm3630aUpdate(0x06, 0x1f, 0x10) && ok;
+  ok = lm3630aUpdate(0x00, 0x14, 0x00) && ok;
+  ok = lm3630aUpdate(0x00, 0x0b, 0x00) && ok;
+  delay(2);
+  ok = lm3630aWrite(0x03, 0x00) && ok;
+  ok = lm3630aWrite(0x04, 0x00) && ok;
+  _i2cConfigured = ok;
+  if (!ok) digitalWrite(cfg.enable, LOW);
+  return ok;
+}
+
+void FrontlightManager::applyLm3630a() {
+  const auto& cfg = BoardConfig::ACTIVE.i2cFrontlight;
+  if (_brightness == 0) {
+    if (_i2cConfigured) {
+      lm3630aWrite(0x03, 0);
+      lm3630aWrite(0x04, 0);
+    }
+    digitalWrite(cfg.enable, LOW);
+    _i2cConfigured = false;
+    return;
+  }
+  if (!_i2cConfigured && !configureLm3630a()) return;
+
+  const uint8_t level = static_cast<uint16_t>(_brightness) * 255 / 100;
+  uint8_t warm = static_cast<uint16_t>(level) * _warmPercent / 100;
+  uint8_t cool = static_cast<uint16_t>(level) * (100 - _warmPercent) / 100;
+  // The IC ignores brightness codes 1..3; preserve a visible nonzero request.
+  if (warm != 0 && warm < 4) warm = 4;
+  if (cool != 0 && cool < 4) cool = 4;
+
+  lm3630aUpdate(0x00, 0x80, 0x00);  // leave software sleep
+  delay(2);
+  lm3630aWrite(0x03, warm);
+  lm3630aWrite(0x04, cool);
+  lm3630aUpdate(0x00, 0x04, warm >= 4 ? 0x04 : 0x00);
+  lm3630aUpdate(0x00, 0x02, cool >= 4 ? 0x02 : 0x00);
+}
+#endif
+
 void FrontlightManager::apply() {
   const auto& fl = BoardConfig::ACTIVE.frontlight;
   if (!_begun) return;
-  if (fl.viaPm1Pwm) {
-    pm1FrontlightWrite(_brightness);
+#if FREEINK_DEVICE_EEGO_A4
+  if (BoardConfig::ACTIVE.board == BoardConfig::Board::EegoA4 &&
+      BoardConfig::ACTIVE.i2cFrontlight.controller == BoardConfig::I2cFrontlightController::Lm3630a) {
+    applyLm3630a();
     return;
   }
-  if (fl.viaI2cLed) {
-    // Total brightness maps onto the chip's 0..i2cMaxTotal range, then splits into
-    // cool + warm by color temperature (so cool+warm == total <= max).
-    const uint32_t full = fl.i2cMaxTotal ? fl.i2cMaxTotal : 255u;
-    uint32_t total = 0;
-    if (_useLevel && _brightnessLevel > 0) {
-      const uint32_t n = static_cast<uint32_t>(_brightnessLevel - 1u);
-      total = 1u + (n * n * (full - 1u)) / (254u * 254u);
-    } else if (!_useLevel) {
-      total = (static_cast<uint32_t>(_brightness) * full + 50u) / 100u;
-    }
-    const uint32_t warm = (total * _warmPercent + 50u) / 100u;
-    const uint32_t cool = total - warm;
-    i2cLedWriteReg(fl, fl.i2cRegCool, static_cast<uint8_t>(cool));
-    i2cLedWriteReg(fl, fl.i2cRegWarm, static_cast<uint8_t>(warm));
+#endif
+  if (fl.viaPm1Pwm) {
+    pm1FrontlightWrite(_brightness);
     return;
   }
   if (fl.gpio == BoardConfig::PIN_UNASSIGNED) return;
