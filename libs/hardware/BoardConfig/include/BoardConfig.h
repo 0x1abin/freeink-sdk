@@ -570,6 +570,23 @@ struct FrontlightConfig {
   int8_t i2cEnableGpio = PIN_UNASSIGNED;  // chip power/enable, active-high (EEGO: GPIO12)
 };
 
+// I2C frontlight controller (LM3630A on the EEGO A4). The controller is driven
+// over a board I2C bus with a separate enable GPIO; the enable is also the
+// hardware probe: an unpopulated optional circuit (some retail A4 units ship
+// without a frontlight) never ACKs, so FrontlightManager only reports present()
+// after a successful probe.
+enum class I2cFrontlightController : uint8_t { None, Lm3630a };
+struct I2cFrontlightConfig {
+  I2cFrontlightController controller;
+  int8_t sda;
+  int8_t scl;
+  uint32_t i2cHz;
+  uint8_t address;
+  int8_t enable;
+};
+constexpr I2cFrontlightConfig NO_I2C_FRONTLIGHT = {I2cFrontlightController::None, PIN_UNASSIGNED, PIN_UNASSIGNED, 0,
+                                                   0, PIN_UNASSIGNED};
+
 // Audio output description (AudioOutput::None disables it).
 struct AudioConfig {
   AudioOutput output;
@@ -714,6 +731,9 @@ struct BoardProfile {
   // no pull (the X4 Pro's GPIO21, recovered from the stock Cw2017PowerHal —
   // stock configures it input/no-pull and reports the raw level).
   bool batteryChargeStatusActiveHigh = false;
+  // I2C frontlight (LM3630A). Defaulted so existing profiles need no change;
+  // a board with one sets it (EEGO A4).
+  I2cFrontlightConfig i2cFrontlight = NO_I2C_FRONTLIGHT;
 };
 
 constexpr TouchConfig NO_TOUCH = {TouchController::None,
@@ -1383,7 +1403,10 @@ constexpr BoardProfile EEGO_A4 = {
     // Charger STAT GPIO11 is driven HIGH while charging, like the X4 Pro
     // (hardware verified: with the active-low default the charging indicator
     // lit only when USB was unplugged).
-    true};
+    true,
+    // LM3630A on the shared I2C bus (SDA2/SCL1), enable GPIO12.
+    // Probed at runtime: some retail A4 units have no frontlight.
+    {I2cFrontlightController::Lm3630a, 2, 1, 400000, 0x36, 12}};
 
 static_assert(EEGO_A4.displayWidth / 8 * EEGO_A4.displayHeight == 52992,
               "EEGO A4 framebuffer must be 52,992 bytes (768/8 x 552)");
@@ -1755,6 +1778,11 @@ inline bool isEegoA4() { return ACTIVE.board == Board::EegoA4; }
 inline bool hasTouch() { return ACTIVE.touch.controller != TouchController::None; }
 inline bool hasHomeKey() { return ACTIVE.touch.hasHomeKey; }
 inline bool hasPwmFrontlight() { return ACTIVE.frontlight.gpio != PIN_UNASSIGNED || ACTIVE.frontlight.viaPm1Pwm; }
+inline bool hasI2cFrontlight() { return ACTIVE.i2cFrontlight.controller != I2cFrontlightController::None; }
+inline bool hasColorTemperatureFrontlight() {
+  return (ACTIVE.frontlight.gpio != PIN_UNASSIGNED && ACTIVE.frontlight.gpioWarm != PIN_UNASSIGNED) ||
+         ACTIVE.i2cFrontlight.controller == I2cFrontlightController::Lm3630a;
+}
 inline bool hasAudio() { return ACTIVE.audio.output != AudioOutput::None; }
 
 // Safety guard: a power-latch pin must never coincide with a display or SDMMC
