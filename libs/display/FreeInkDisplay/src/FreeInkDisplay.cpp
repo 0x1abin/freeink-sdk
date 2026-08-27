@@ -177,10 +177,12 @@ void FreeInkDisplay::selectDriver() {
 #endif
 #if FREEINK_DRIVER_SSD1677
 #if FREEINK_DEVICE_MURPHY_M4
-      _driver = &ssd1677Driver(_murphyM4Batch);
-#else
-      _driver = &ssd1677Driver();
+      if (BoardConfig::ACTIVE.board == BoardConfig::Board::MurphyM4) {
+        _driver = &ssd1677MurphyM4Driver(_murphyM4Batch);
+        break;
+      }
 #endif
+      _driver = &ssd1677Driver();
 #elif FREEINK_DRIVER_PAPER_MONO
       _driver = &paperMonoDriver();
 #elif FREEINK_DRIVER_UC8253_MURPHY
@@ -879,10 +881,6 @@ bool FreeInkDisplay::supportsStripGrayscale() const {
   return !_inverted && _driver && _driver->supportsStripGrayscale();
 }
 
-bool FreeInkDisplay::supportsFactoryGrayscale() const {
-  return !_inverted && _driver && _driver->supportsFactoryGrayscale();
-}
-
 bool FreeInkDisplay::combinesGrayscaleBase() const { return _driver && _driver->combinesGrayscaleBase(); }
 
 void FreeInkDisplay::cleanupGrayscaleBuffers(const uint8_t* bwBuffer) {
@@ -940,6 +938,14 @@ void FreeInkDisplay::controllerIdle() {
 
 void FreeInkDisplay::requestCompleteWaveformNextRefresh() {
   if (_driver) _driver->requestCompleteWaveformNextRefresh();
+}
+
+void FreeInkDisplay::setFullRefreshCompletesWaveform(bool enabled) {
+  if (_driver) _driver->setFullRefreshCompletesWaveform(enabled);
+}
+
+void FreeInkDisplay::setAccentPlaneSlot(uint8_t slot, const uint8_t* plane, uint8_t colorCode) {
+  if (_driver) _driver->setAccentPlaneSlot(slot, plane, colorCode);
 }
 
 void FreeInkDisplay::setFastRefreshCutoffMs(uint16_t ms) {
