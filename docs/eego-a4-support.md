@@ -79,7 +79,9 @@ not new infrastructure:
 
 ## Open items (need a physical unit)
 
-- Confirm 768×552 and the UC8279C bring-up/LUTs on real glass (ghosting, gray).
+- Confirm 768×552 on real glass (ghosting, gray levels). The UC8279C bring-up now
+  does the full power/booster/VCOM/PLL setup and uploads external Full/Fast/Gray
+  LUTs (hash-verified), so refreshes actually run — validate quality on a unit.
 - Validate the **I²C LED-driver frontlight** on hardware (backend implemented:
   `FrontlightConfig.viaI2cLed`, chip 0x36, enable GPIO 12, cool=reg3 / warm=reg4,
   total clamp 150). Confirm the init register sequence (`kI2cLedInit` in
@@ -89,7 +91,9 @@ not new infrastructure:
 - Re-verify the whole pin map on hardware: a frontlit-unit dump did NOT contain the
   `20 MHz` display clock or the `eego_a4` name the scaffold assumed (both units are
   pre-freeink community-sdk builds), so the borrowed pin values are provisional.
-- Confirm button GPIOs 5/7/8 and battery divider ×1.559.
+- Confirm button GPIOs 5/7/8 and battery divider ×1.559. Buttons are set **active-low**
+  (INPUT_PULLUP) — active-high phantom-triggered the power-button sleep path on first
+  boot. Active-low is also the safe default for an unused/floating pin.
 - Validate GSLX680 touch on hardware: the firmware blob is byte-verified (SHA-256
   `076ac8…`) and the init/read sequence is RE-derived, but the coordinate
   orientation (swapXY/flipY) and calibration range need a corner-tap check.

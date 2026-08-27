@@ -1352,14 +1352,19 @@ constexpr BoardProfile EEGO_A4 = {
     {42, 45, 21, 14, 13, 41, 6},                       // SCLK MOSI CS DC RST BUSY PWR-EN
     20000000,
     {39, 40, 38, 47, PIN_UNASSIGNED, true, 20000000},  // dedicated HSPI SD: SCLK MISO MOSI CS
-    {PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, 5, 7, 8, true},  // UP DOWN POWER, active-high
+    // UP DOWN POWER. Power is active-HIGH (press drives 3V3) with a weak
+    // external pull-down; INPUT_PULLDOWN required (InputManager honors the
+    // polarity for pinMode). An internal pull-up leaves the pin mid-rail and
+    // phantom-pressed.
+    {PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, 5, 7, 8, true},
     10,      // batteryAdc
     11,      // batteryChargeStatus
     1.559f,  // divider
     PIN_UNASSIGNED,
-    // GSLX680 (needs firmware upload); rawY 12..632 -> X, rawX 884..9 -> Y reversed.
-    {TouchController::Gslx680, 2, 1, PIN_UNASSIGNED, 3, 0x40, 12, 632, 9, 884, false, 0, false, false,
-     PIN_UNASSIGNED, true, false, true, true},  // powerEnable, swapXY, flipX, flipY, hasHomeKey
+    // GSLX680: pollGslx680 applies the 1.2.7 calibration and returns panel-native
+    // x=0..767, y=0..551, so no raw-range/swap/flip mapping is needed here.
+    {TouchController::Gslx680, 2, 1, PIN_UNASSIGNED, 3, 0x40, 0, 767, 0, 551, false, 0, false, false,
+     PIN_UNASSIGNED, false, false, false, true, true},  // powerEnable, swapXY, flipX, flipY, hasHomeKey, pwrEnActiveHigh
     EEGO_A4_FRONTLIGHT,  // I2C LED driver @0x36, enable GPIO12, cool=reg3/warm=reg4 (frontlit variant)
     NO_AUDIO,
     NO_LEDS,
@@ -1369,10 +1374,17 @@ constexpr BoardProfile EEGO_A4 = {
     NO_MIC,
     {2, 1, 400000, 0x51, 0, 0, 0, RtcType::Pcf8563, ImuType::None},  // PCF8563 on the shared touch bus
     1.2f,
-    {4}};  // power latch GPIO4
+    {4},  // power latch GPIO4
+    0,    // displayControllerVariant (UC8279C, not probed)
+    // Rounded-corner panel: pull the sides (left/right in the portrait frame) in a
+    // lot so text/status icons aren't clipped by the curved bezel. Tune on hardware.
+    // {top, right, bottom, left}
+    {24, 24, 8, 24},
+    // Charger STAT GPIO11 is driven HIGH while charging, like the X4 Pro
+    // (hardware verified: with the active-low default the charging indicator
+    // lit only when USB was unplugged).
+    true};
 
-static_assert(EEGO_A4.touch.swapXY && !EEGO_A4.touch.flipX && EEGO_A4.touch.flipY,
-              "EEGO A4 touch must map raw Y to X and reverse raw X onto Y");
 static_assert(EEGO_A4.displayWidth / 8 * EEGO_A4.displayHeight == 52992,
               "EEGO A4 framebuffer must be 52,992 bytes (768/8 x 552)");
 

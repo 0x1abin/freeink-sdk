@@ -101,12 +101,19 @@ void InputManager::begin() {
 
   const int8_t pins[] = {BoardConfig::ACTIVE.input.back, BoardConfig::ACTIVE.input.confirm,
                          BoardConfig::ACTIVE.input.left, BoardConfig::ACTIVE.input.right,
-                         BoardConfig::ACTIVE.input.up,   BoardConfig::ACTIVE.input.down,
-                         BoardConfig::ACTIVE.input.power};
+                         BoardConfig::ACTIVE.input.up,   BoardConfig::ACTIVE.input.down};
   for (const int8_t pin : pins) {
     if (pin >= 0) {
       pinMode(pin, INPUT_PULLUP);
     }
+  }
+  // Power follows its declared polarity, as in the ladder branch above. An
+  // active-high button (EEGO A4) needs INPUT_PULLDOWN: the unconditional
+  // pull-up fights its weak external pull-down into mid-rail phantom presses.
+  // Configured after the loop so a pin shared with a button (all such boards
+  // are active-low) resolves to the same INPUT_PULLUP either way.
+  if (BoardConfig::ACTIVE.input.power >= 0) {
+    pinMode(BoardConfig::ACTIVE.input.power, BoardConfig::ACTIVE.input.powerActiveHigh ? INPUT_PULLDOWN : INPUT_PULLUP);
   }
   beginTouch();
 }
@@ -279,7 +286,8 @@ uint8_t InputManager::getDigitalState() const {
   if (isDigitalPressed(BoardConfig::ACTIVE.input.right)) state |= (1 << BTN_RIGHT);
   if (isDigitalPressed(BoardConfig::ACTIVE.input.up)) state |= (1 << BTN_UP);
   if (isDigitalPressed(BoardConfig::ACTIVE.input.down)) state |= (1 << BTN_DOWN);
-  if (isDigitalPressed(BoardConfig::ACTIVE.input.power) &&
+  // Power reads at its declared polarity (isDigitalPressed assumes active-low).
+  if (isPowerButtonPhysicallyPressed() &&
       BoardConfig::ACTIVE.inputStyle != BoardConfig::InputStyle::DigitalConfirmBackHold &&
       BoardConfig::ACTIVE.inputStyle != BoardConfig::InputStyle::DigitalConfirmPowerHold) {
     state |= (1 << BTN_POWER);
@@ -1579,16 +1587,24 @@ void InputManager::beginGslx680() {
 }
 
 void InputManager::pollGslx680(const unsigned long now) {
-  const auto& t = BoardConfig::ACTIVE.touch;
   if (now < touchReadAt) return;
   touchReadAt = now + TOUCH_SAMPLE_DELAY_MS;
 
   // Data register 0x80: byte 0 = finger count, then 4 bytes per finger.
-  uint8_t data[24] = {};
-  if (!gslRead(0x80, data, sizeof(data))) return;  // survive transient bus errors
+  uint8_t frame[24] = {};
+  if (!gslRead(0x80, frame, sizeof(frame))) return;  // survive transient bus errors
 
-  const uint8_t fingers = data[0] & 0x0F;
-  if (fingers == 0) {
+  auto finishHomeKey = [&]() {
+    if (!touchHomeKeyDown) return;
+    lastTouchHeldDurationMs = now - touchHomeKeyDownAt;
+    if (!touchHomeKeyLongFired) touchHomeKeyTapEvent = true;
+    touchHomeKeyDown = false;
+    touchHomeKeyLongFired = false;
+  };
+
+  const uint8_t count = frame[0] > 5 ? 5 : frame[0];
+  if (count == 0) {
+    finishHomeKey();
     if (touchPressed) {
       touchPressed = false;
       touchPoint.valid = false;
@@ -1598,18 +1614,41 @@ void InputManager::pollGslx680(const unsigned long now) {
     return;
   }
 
-  // First contact drives the app's tap/swipe model. GSL packs x/y as 12-bit
-  // little fields with the finger id in the x-high nibble.
-  const uint16_t rawX = static_cast<uint16_t>((data[5] & 0x0F) << 8) | data[4];
-  const uint16_t rawY = static_cast<uint16_t>((data[7] & 0x0F) << 8) | data[6];
-  const uint16_t sx = t.swapXY ? rawY : rawX;
-  const uint16_t sy = t.swapXY ? rawX : rawY;
+  const uint16_t rawYWord = static_cast<uint16_t>(frame[5]) << 8 | frame[4];
+  const uint16_t rawXWord = static_cast<uint16_t>(frame[7]) << 8 | frame[6];
+
+  // The capacitive home key below the panel reports a fixed sentinel (not a
+  // coordinate). Route it to the home-key events instead of a screen tap.
+  const bool homeKeyDown = count == 1 && rawXWord == 0x03a0 && rawYWord == 0x1020;
+  if (homeKeyDown) {
+    if (!touchHomeKeyDown) {
+      touchHomeKeyEvent = true;
+      touchHomeKeyDown = true;
+      touchHomeKeyLongFired = false;
+      touchHomeKeyDownAt = now;
+    } else if (!touchHomeKeyLongFired && now - touchHomeKeyDownAt >= HOME_KEY_LONG_PRESS_MS) {
+      touchHomeKeyLongEvent = true;
+      touchHomeKeyLongFired = true;
+    }
+    touchPressed = false;
+    touchPoint.valid = false;
+    return;
+  }
+  finishHomeKey();
+
+  // GSLX680 1.2.7 calibration: the digitizer is portrait (raw ~0..920 x 0..680)
+  // over a landscape 768x552 framebuffer. Map, swap the axes, then mirror the
+  // short axis for GfxRenderer's Portrait transform. Returns panel-native coords.
+  const uint16_t rawY = rawYWord & 0x0fff;
+  const uint16_t rawX = rawXWord & 0x0fff;
+  const uint16_t limitedY = rawY > 680 ? 680 : rawY;
+  const uint16_t limitedX = rawX > 920 ? 920 : rawX;
+  const uint16_t portraitX = static_cast<uint32_t>(limitedY) * 551 / 680;
+  const uint16_t portraitY = static_cast<uint32_t>(920 - limitedX) * 767 / 920;
 
   touchPoint.valid = true;
-  touchPoint.x = mapTouchAxis(sx, t.rawMinX, t.rawMaxX, t.rawMaxX - t.rawMinX);
-  touchPoint.y = mapTouchAxis(sy, t.rawMinY, t.rawMaxY, t.rawMaxY - t.rawMinY);
-  if (t.flipX) touchPoint.x = static_cast<uint16_t>((t.rawMaxX - t.rawMinX) - touchPoint.x);
-  if (t.flipY) touchPoint.y = static_cast<uint16_t>((t.rawMaxY - t.rawMinY) - touchPoint.y);
+  touchPoint.x = portraitY;
+  touchPoint.y = static_cast<uint16_t>(551 - portraitX);
   touchPoint.timestamp = now;
 
   if (!touchPressed) {
