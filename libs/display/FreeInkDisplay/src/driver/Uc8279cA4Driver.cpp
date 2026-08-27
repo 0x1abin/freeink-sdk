@@ -129,13 +129,19 @@ void Uc8279cA4Driver::loadGrayLut(EpdBus& bus) {
   }
 }
 
-void Uc8279cA4Driver::writeFrame(EpdBus& bus, const uint8_t command, const uint8_t* fb) {
+void Uc8279cA4Driver::writeFrame(EpdBus& bus, const uint8_t command, const uint8_t* fb, const bool invert) {
   uint8_t white[96];
   memset(white, 0xff, sizeof(white));
+  uint8_t rowBuf[96];
   bus.cmd(command);
   bus.beginTxn();
   for (int y = static_cast<int>(_height) - 1; y >= 0; --y) {
-    bus.rawWriteBytes(fb + static_cast<uint32_t>(y) * _widthBytes, _widthBytes);
+    const uint8_t* row = fb + static_cast<uint32_t>(y) * _widthBytes;
+    if (invert) {
+      for (uint16_t xb = 0; xb < _widthBytes; ++xb) rowBuf[xb] = static_cast<uint8_t>(~row[xb]);
+      row = rowBuf;
+    }
+    bus.rawWriteBytes(row, _widthBytes);
   }
   for (uint16_t y = 0; y < PADDING_ROWS; ++y) {
     bus.rawWriteBytes(white, _widthBytes);
@@ -161,6 +167,7 @@ void Uc8279cA4Driver::begin(EpdBus& bus) {
   _fastRefreshesSinceFull = 0;
   hardwareReset(bus);
   initController(bus);
+  _firstRefreshPending = true;
 }
 
 void Uc8279cA4Driver::display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, const RefreshMode mode,
@@ -178,8 +185,8 @@ void Uc8279cA4Driver::display(EpdBus& bus, const uint8_t* fb, const uint8_t* pre
   _redriveAfterGray = false;
   ensurePowerOn(bus);
   bool fast = mode == RefreshMode::Fast;
-  if (fast && _fastRefreshesSinceFull >= MAX_CONSECUTIVE_FAST_REFRESHES) fast = false;
-  if (scrubAfterGray) fast = false;
+  if (fast && !_holdPeriodicFull && _fastRefreshesSinceFull >= MAX_CONSECUTIVE_FAST_REFRESHES) fast = false;
+  if (scrubAfterGray || _firstRefreshPending) fast = false;
   if (fast) {
     ++_fastRefreshesSinceFull;
   } else {
@@ -194,6 +201,13 @@ void Uc8279cA4Driver::display(EpdBus& bus, const uint8_t* fb, const uint8_t* pre
     // HALF is CrossPoint's periodic ghost-cleanup cadence on this target.
     // Treat it as a complete refresh.
     loadFullLut(bus);
+  }
+  if (_firstRefreshPending) {
+    // First refresh after begin(): the glass state is unknown (reflash/reset),
+    // so seed the old plane with the inverse of this frame — every pixel
+    // transitions and the full LUT drives the whole panel to a clean baseline.
+    writeFrame(bus, CMD_DTM1, fb, /*invert=*/true);
+    _firstRefreshPending = false;
   }
   writeFrame(bus, CMD_DTM2, fb);
   refresh(bus, turnOff);
@@ -246,6 +260,9 @@ void Uc8279cA4Driver::displayGray(EpdBus& bus, const uint8_t* fb, const bool tur
   // transition LUT. The fork had these swapped, scrambling the four gray levels.
   writeFrame(bus, CMD_DTM1, _grayLsb);
   writeFrame(bus, CMD_DTM2, _grayMsb);
+  // Both planes are fully written here and _redriveAfterGray already forces the
+  // next B/W refresh to a full drive, so the first-refresh inverse seed is moot.
+  _firstRefreshPending = false;
   loadGrayLut(bus);
   refresh(bus, turnOff);
   _fastRefreshesSinceFull = 0;

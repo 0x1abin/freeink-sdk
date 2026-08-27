@@ -555,19 +555,6 @@ struct FrontlightConfig {
   // on. pwmFrequency still applies (PM1 PWM_FREQ register); resolution is the
   // PM1's fixed 12 bits.
   bool viaPm1Pwm = false;
-  // EEGO A4 (frontlit variant): the frontlight is a dual-channel white-LED driver
-  // chip on a shared I2C bus, not LEDC PWM. `gpio`/`gpioWarm` stay PIN_UNASSIGNED;
-  // FrontlightManager powers the chip via `i2cEnableGpio` (active-high) and writes
-  // brightness to `i2cRegCool` / `i2cRegWarm`, keeping cool+warm <= `i2cMaxTotal`.
-  // pwm* fields are unused on this path.
-  bool viaI2cLed = false;
-  uint8_t i2cAddr = 0;                    // 7-bit driver address (EEGO: 0x36)
-  int8_t i2cSda = PIN_UNASSIGNED;         // shared with touch/RTC (EEGO: SDA2)
-  int8_t i2cScl = PIN_UNASSIGNED;         // (EEGO: SCL1)
-  uint8_t i2cRegCool = 0;                 // cold-channel brightness register (EEGO: 3)
-  uint8_t i2cRegWarm = 0;                 // warm-channel brightness register (EEGO: 4)
-  uint8_t i2cMaxTotal = 0;                // clamp on cool+warm; 0 = 255 (EEGO: 150)
-  int8_t i2cEnableGpio = PIN_UNASSIGNED;  // chip power/enable, active-high (EEGO: GPIO12)
 };
 
 // I2C frontlight controller (LM3630A on the EEGO A4). The controller is driven
@@ -764,12 +751,6 @@ constexpr TouchConfig LILYGO_T5_PRO_GT911 = {
     TouchController::Gt911, 39,   40,    3,    9, 0x5D, 0, 959, 0, 539, false, 0x14, false, true,
     PIN_UNASSIGNED,         true, false, true, true};  // powerEnable, swapXY, flipX, flipY, hasHomeKey
 constexpr FrontlightConfig NO_FRONTLIGHT = {PIN_UNASSIGNED, 0, 0, true};
-// EEGO A4 (frontlit variant): I2C LED driver at 0x36 on the touch/RTC bus (SDA2/SCL1),
-// enable GPIO12, cool=reg3 / warm=reg4, total clamp 150. gpio/gpioWarm unused.
-constexpr FrontlightConfig EEGO_A4_FRONTLIGHT = {
-    PIN_UNASSIGNED, 0, 0, true, PIN_UNASSIGNED, false,
-    /*viaI2cLed=*/true, /*i2cAddr=*/0x36, /*i2cSda=*/2, /*i2cScl=*/1,
-    /*i2cRegCool=*/3, /*i2cRegWarm=*/4, /*i2cMaxTotal=*/150, /*i2cEnableGpio=*/12};
 constexpr AudioConfig NO_AUDIO = {AudioOutput::None,
                                   PIN_UNASSIGNED,
                                   PIN_UNASSIGNED,
@@ -1385,7 +1366,9 @@ constexpr BoardProfile EEGO_A4 = {
     // x=0..767, y=0..551, so no raw-range/swap/flip mapping is needed here.
     {TouchController::Gslx680, 2, 1, PIN_UNASSIGNED, 3, 0x40, 0, 767, 0, 551, false, 0, false, false,
      PIN_UNASSIGNED, false, false, false, true, true},  // powerEnable, swapXY, flipX, flipY, hasHomeKey, pwrEnActiveHigh
-    EEGO_A4_FRONTLIGHT,  // I2C LED driver @0x36, enable GPIO12, cool=reg3/warm=reg4 (frontlit variant)
+    // The frontlight is an LM3630A driven via the i2cFrontlight field below, not
+    // this LEDC/PWM FrontlightConfig — the frontlit variant's light is I2C only.
+    NO_FRONTLIGHT,
     NO_AUDIO,
     NO_LEDS,
     NO_FLIP,

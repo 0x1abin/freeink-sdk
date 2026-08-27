@@ -947,6 +947,10 @@ uint16_t FreeInkDisplay::fastRefreshCutoffMs() const {
   return _driver ? _driver->fastRefreshCutoffMs() : 0;
 }
 
+void FreeInkDisplay::setHoldPeriodicFullRefresh(bool hold) {
+  if (_driver) _driver->setHoldPeriodicFull(hold);
+}
+
 void FreeInkDisplay::grayscaleRevert() {
   if (!_inverted && _driver) _driver->grayscaleRevert(_bus, frameBuffer);
 }

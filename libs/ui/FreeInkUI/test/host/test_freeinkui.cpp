@@ -1011,13 +1011,14 @@ void testBatteryIndicator() {
   CHECK_EQ(charge.rect.width, 9);  // cavity is 18 wide at 50%
   CHECK(charge.paint == PaintKind::Solid);
 
-  // Charging without an icon keeps the solid fill and overlays a bolt.
+  // Charging without an icon keeps the solid fill and overlays a bolt, drawn
+  // as a pixel-authored 5x8 mask bitmap (rasterized triangles blob at this size).
   FakeDrawTarget draw2;
   Frame<4> frame2(draw2, device, input, interactions);
   props.charging = true;
   batteryIndicator(frame2, Rect{400, 0, 80, 20}, props);
   CHECK(draw2.ops[2].paint == PaintKind::Solid);
-  CHECK_EQ(draw2.countKind(FakeDrawTarget::Op::Triangle), 2u);
+  CHECK_EQ(draw2.countKind(FakeDrawTarget::Op::Bitmap), 1u);
 
   // Percent above 100 clamps to a full cavity.
   FakeDrawTarget draw3;
@@ -1553,14 +1554,14 @@ void testThemePrimitiveParity() {
   CHECK_EQ(draw4.countKind(FakeDrawTarget::Op::Line), 1u);
   CHECK_EQ(draw4.countKind(FakeDrawTarget::Op::Bitmap), 1u);
 
-  // Charging battery draws a bolt (two triangles) instead of a dithered fill.
+  // Charging battery draws a bolt (a 5x8 mask bitmap) over the solid fill.
   FakeDrawTarget draw5;
   Frame<16> frame5(draw5, device, input, interactions);
   BatteryIndicatorProps battery;
   battery.percent = 80;
   battery.charging = true;
   batteryIndicator(frame5, Rect{400, 0, 80, 20}, battery);
-  CHECK_EQ(draw5.countKind(FakeDrawTarget::Op::Triangle), 2u);
+  CHECK_EQ(draw5.countKind(FakeDrawTarget::Op::Bitmap), 1u);
 }
 
 
@@ -2916,9 +2917,19 @@ void testHeaderBorderEdges() {
   Screen<8> screen(frame, theme);
 
   // The themed header supplies a 1px divider when the theme's popup style has
-  // no border of its own, so default headers match the documented divider.
+  // no border of its own. A single (bottom-only) edge draws as a fill band at
+  // the bottom of the rect, not a stroke or a centered line() (drawBorderEdges
+  // fills partial edges so a thick rule can't leak past the band).
   screen.header("Top");
-  CHECK_EQ(draw.countKind(FakeDrawTarget::Op::Line), 1u);
+  bool sawDivider = false;
+  for (size_t i = 0; i < draw.opCount; ++i) {
+    const auto& op = draw.ops[i];
+    if (op.kind == FakeDrawTarget::Op::Fill && op.rect.height == 1 &&
+        op.rect.width == 200 && op.rect.y == 19)
+      sawDivider = true;
+  }
+  CHECK(sawDivider);
+  CHECK_EQ(draw.countKind(FakeDrawTarget::Op::Line), 0u);
   CHECK_EQ(draw.countKind(FakeDrawTarget::Op::Stroke), 0u);
 
   FakeDrawTarget boxedDraw;
