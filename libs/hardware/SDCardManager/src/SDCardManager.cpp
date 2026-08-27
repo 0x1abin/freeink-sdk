@@ -127,24 +127,36 @@ bool SDCardManager::begin() {
     digitalWrite(BoardConfig::ACTIVE.display.cs, HIGH);
   }
 
-  bool cardReady = false;
-#if FREEINK_MCU_S3 || FREEINK_MCU_ESP32
-  if (BoardConfig::ACTIVE.sd.separateSpi && SD_SCLK >= 0 && SD_MOSI >= 0 && SD_MISO >= 0) {
+#if FREEINK_DEVICE_EEGO_A4
+  if (BoardConfig::ACTIVE.board == BoardConfig::Board::EegoA4 && BoardConfig::ACTIVE.sd.separateSpi && SD_SCLK >= 0 &&
+      SD_MOSI >= 0 && SD_MISO >= 0) {
     static SPIClass dedicatedSdSpi(HSPI);
     // End each transaction in the task that started it; the bus itself remains dedicated HSPI.
-    cardReady = dedicatedSdSpi.begin(SD_SCLK, SD_MISO, SD_MOSI, SD_CS) &&
-                sd.begin(SdSpiConfig(SD_CS, SHARED_SPI | USER_SPI_BEGIN, SPI_FQ, &dedicatedSdSpi));
-  } else {
-#endif
-    if (SD_SCLK >= 0 && SD_MOSI >= 0 && SD_MISO >= 0) {
-      SPI.begin(SD_SCLK, SD_MISO, SD_MOSI, SD_CS);
+    const bool cardReady = dedicatedSdSpi.begin(SD_SCLK, SD_MISO, SD_MOSI, SD_CS) &&
+                           sd.begin(SdSpiConfig(SD_CS, SHARED_SPI | USER_SPI_BEGIN, SPI_FQ, &dedicatedSdSpi));
+    if (!cardReady) {
+      if (Serial)
+        Serial.printf(
+            "[%lu] [SD] SD card not detected (err=0x%02X data=0x%02X cs=%d sclk=%d miso=%d mosi=%d clk=%luHz)\n",
+            millis(), sd.sdErrorCode(), sd.sdErrorData(), SD_CS, SD_SCLK, SD_MISO, SD_MOSI, (unsigned long)SPI_FQ);
+      initialized = false;
+      cachedTotalBytes = 0;
+      cachedUsedBytesValid = false;
+    } else {
+      if (Serial) Serial.printf("[%lu] [SD] SD card detected\n", millis());
+      initialized = true;
+      cachedTotalBytes = static_cast<uint64_t>(vol().clusterCount()) * vol().bytesPerCluster();
+      cachedUsedBytesValid = false;
     }
-    cardReady = sd.begin(SD_CS, SPI_FQ);
-#if FREEINK_MCU_S3 || FREEINK_MCU_ESP32
+    return initialized;
   }
 #endif
 
-  if (!cardReady) {
+  if (SD_SCLK >= 0 && SD_MOSI >= 0 && SD_MISO >= 0) {
+    SPI.begin(SD_SCLK, SD_MISO, SD_MOSI, SD_CS);
+  }
+
+  if (!sd.begin(SD_CS, SPI_FQ)) {
     if (Serial)
       Serial.printf(
           "[%lu] [SD] SD card not detected (err=0x%02X data=0x%02X cs=%d sclk=%d miso=%d mosi=%d clk=%luHz)\n",

@@ -399,7 +399,6 @@ enum class InputStyle : uint8_t {
 // XteinkDetect::applyXteinkDisplayController.
 enum class DisplayController : uint8_t {
   SSD1677 = 0,
-  SSD1683 = 1,
   UC8253 = 2,
   ED2208 = 3,
   LgfxEpd = 4,
@@ -660,6 +659,14 @@ constexpr I2cFrontlightConfig NO_I2C_FRONTLIGHT = {I2cFrontlightController::None
 struct PowerConfig {
   int8_t latch0 = PIN_UNASSIGNED;
   int8_t latch1 = PIN_UNASSIGNED;
+  // Battery-charger enable input (e.g. the Sticky's EN_BAT_CHGn -> BQ25616 /CE
+  // on GPIO39). holdPowerRails() drives it to its active level and latches it
+  // with gpio_hold_en so the charger stays enabled awake AND through deep sleep.
+  // Left unmapped, an S3 JTAG-group pin like GPIO39 keeps its reset-default weak
+  // pull-up while the firmware runs — /CE sits high and the device won't charge
+  // until sleep isolates the pad and lets the line float back to enabled.
+  int8_t chargeEnable = PIN_UNASSIGNED;
+  bool chargeEnableActiveHigh = false;  // "n"-suffixed enables are active-low
 };
 
 // Panel rows/columns the device's bezel physically overlaps, in the panel's
@@ -717,6 +724,12 @@ struct BoardProfile {
   // Bezel-covered edge insets. Defaulted so existing profiles need no change;
   // a measured board overrides it.
   ViewableInsets viewableInsets = {};
+  // Polarity of batteryChargeStatus. Default is the MCP73832-style /STAT that
+  // every earlier board uses: open-drain, LOW = charging, read with the internal
+  // pull-up. true = the line is push-pull driven HIGH while charging and carries
+  // no pull (the X4 Pro's GPIO21, recovered from the stock Cw2017PowerHal —
+  // stock configures it input/no-pull and reports the raw level).
+  bool batteryChargeStatusActiveHigh = false;
   // I2C frontlight (LM3630A). Defaulted so existing profiles need no change;
   // a board with one sets it (EEGO A4).
   I2cFrontlightConfig i2cFrontlight = NO_I2C_FRONTLIGHT;
@@ -1340,7 +1353,11 @@ constexpr BoardProfile STICKY = {
     1.2f,  // uiScale: touch device, 3.97" 800x480 — bump chrome to finger size
     // Power latch: PWR_HOLD GPIO45 + PWR_LOCK GPIO46, driven HIGH first thing in
     // boot (the vendor demo's first init step) — see holdPowerRails().
-    {45, 46}};
+    // chargeEnable: EN_BAT_CHGn GPIO39 -> BQ25616 /CE, active-low (confirmed by
+    // Seeed's firmware team; native firmware drives it). Without it the pin's
+    // JTAG reset-default pull-up disables charging the whole time we're awake
+    // (~0.06 A USB input awake vs ~0.5 A once sleep isolates the pad).
+    {45, 46, 39, false}};
 
 // --- Xteink X4 Pro — ESP32-S3, 800x480 EPD + GT911 touch + warm/cold frontlight ---
 // Recovered from the OEM flash dump (x4pro_flash_dump.bin); full evidence and confidence
@@ -1393,7 +1410,12 @@ constexpr BoardProfile XTEINK_X4_PRO = {
     // {back, confirm, left, right, up, down, power, powerActiveHigh}
     {PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, 0, 7, 3, false},
     PIN_UNASSIGNED,  // batteryAdc: monitoring exists ("Battery Meter"/"Low battery") but pin not isolated
-    PIN_UNASSIGNED,  // batteryChargeStatus
+    // Charger STAT on GPIO21, ACTIVE-HIGH (batteryChargeStatusActiveHigh at the
+    // profile tail): stock's Cw2017PowerHal configures GPIO21 input/no-pull and
+    // reports the raw level as "charging" (vtable slot 3 -> FUN_4214f67c;
+    // gpio object configured pin=0x15 in board init FUN_4214eeb0). This is the
+    // OEM battery-icon source — the CW2017 itself cannot observe charging.
+    21,
     2.0f,
     PIN_UNASSIGNED,  // usbDetect: USB-MSC/VBUS-detect present; GPIO10 is a candidate (unconfirmed)
     // GT911 touch on the SHARED I2C bus SDA39/SCL38 (with RTC 0x51 + CW2017 gauge 0x63), addr 0x5D
@@ -1469,7 +1491,8 @@ constexpr BoardProfile XTEINK_X4_PRO = {
     // side inset that keeps an edge-hugging scroll indicator visible (was the
     // firmware's hardcoded X4 Pro scrollbar inset); top/bottom keep the X4
     // historical values pending measurement.
-    {9, 7, 3, 7}};
+    {9, 7, 3, 7},
+    true};  // batteryChargeStatusActiveHigh: GPIO21 STAT is driven HIGH while charging
 
 // --- EEGO A4 — ESP32-S3 N16R8, UC8279C + GSLX680 ---------------------------
 // This profile follows the validated EEGO A4 template pinout and calibration.
@@ -1504,6 +1527,7 @@ constexpr BoardProfile EEGO_A4 = {Board::EegoA4,
                                   {4},
                                   0,  // displayControllerVariant (not probed for UC8279C)
                                   {},  // viewableInsets
+                                  false,  // batteryChargeStatusActiveHigh
                                   // LM3630A on the shared I2C bus (SDA2/SCL1), enable GPIO12.
                                   // Probed at runtime: some retail A4 units have no frontlight.
                                   {I2cFrontlightController::Lm3630a, 2, 1, 400000, 0x36, 12}};
@@ -1846,6 +1870,17 @@ inline void holdPowerRails() {
     gpio_hold_dis(static_cast<gpio_num_t>(pin));
     pinMode(pin, OUTPUT);
     digitalWrite(pin, HIGH);
+  }
+  // Charger enable (see PowerConfig::chargeEnable). Held with gpio_hold_en so the
+  // level survives esp_sleep_config_gpio_isolate() and deep sleep (PowerManager
+  // calls gpio_deep_sleep_hold_en() before sleeping) — the charger must stay
+  // enabled whether the firmware is awake or asleep.
+  if (const int8_t ce = ACTIVE.power.chargeEnable; ce >= 0 && !latchConflictsWithBus(ce)) {
+    const auto g = static_cast<gpio_num_t>(ce);
+    gpio_hold_dis(g);
+    pinMode(ce, OUTPUT);
+    digitalWrite(ce, ACTIVE.power.chargeEnableActiveHigh ? HIGH : LOW);
+    gpio_hold_en(g);
   }
 }
 

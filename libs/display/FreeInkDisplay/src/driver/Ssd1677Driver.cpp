@@ -106,7 +106,6 @@ static Ssd1677Config makeSsd1677MurphyM4Config(const uint8_t halfRefreshTemp) {
   Ssd1677Config value = ssd1677DefaultConfig();
   value.halfRefreshTemp = halfRefreshTemp;
   value.halfSeqOverride = 0xD4;
-  value.windowRefreshUsesHalfTemp = true;
   return value;
 }
 
@@ -132,7 +131,6 @@ static const Ssd1677Config& ssd1677Waveshare397Config() {
     value.fastSeqOverride = 0xFF;
     value.grayPowerUpFirst = true;
     value.borderWaveformGray = 0x80;
-    value.deepSleepMode = 0x01;
     return value;
   }();
   return cfg;
@@ -592,10 +590,12 @@ void Ssd1677Driver::displayWindow(EpdBus& bus, const uint8_t* fb, const uint8_t*
     writeRam(bus, CMD_WRITE_RAM_RED, previousWindow.data(), windowBufferSize);
   }
 
-  if (_cfg.windowRefreshUsesHalfTemp) {
+#if FREEINK_DEVICE_MURPHY_M4
+  if (BoardConfig::ACTIVE.board == BoardConfig::Board::MurphyM4) {
     bus.cmd(CMD_WRITE_TEMP);
     bus.data(_cfg.halfRefreshTemp);
   }
+#endif
   refresh(bus, RefreshMode::Fast, turnOff);
 
   if (prev == nullptr) {
@@ -727,12 +727,18 @@ void Ssd1677Driver::deepSleep(EpdBus& bus) {
   // driven with the full-refresh waveform through deep sleep, then power down
   // analog/clock. Stock does not touch CTRL1 here.
   powerOffController(bus);
-  // Most boards use deep sleep mode 2 (0x03); boards with a vendor-specific
-  // requirement override it in their config. Nothing may treat controller RAM
-  // as a valid diff baseline after wake — initController() re-arms
+  // Stock parity: deep sleep mode 2 (0x03) discards controller RAM. Nothing may
+  // treat RAM as a valid diff baseline after wake — initController() re-arms
   // _needsInitialFull, so the first paint is an absolute clean anyway.
   bus.cmd(CMD_DEEP_SLEEP);
-  bus.data(_cfg.deepSleepMode);
+#if FREEINK_DEVICE_WAVESHARE_EPAPER_397
+  if (BoardConfig::ACTIVE.board == BoardConfig::Board::WaveshareEpaper397) {
+    bus.data(0x01);
+  } else
+#endif
+  {
+    bus.data(0x03);
+  }
 }
 
 // Per-board waveform/LUT injection: a board supplies its own SSD1677 config
@@ -751,8 +757,6 @@ static const Ssd1677Config& ssd1677ActiveConfig() {
   switch (BoardConfig::ACTIVE.board) {
     case BoardConfig::Board::Sticky:
       return ssd1677StickyConfig();
-    case BoardConfig::Board::MurphyM4:
-      return ssd1677MurphyM4Config();
     case BoardConfig::Board::WaveshareEpaper397:
       return ssd1677Waveshare397Config();
     // X4 Pro runs on the stock X4/GDEQ0426T82 config — same controller and panel
@@ -777,14 +781,14 @@ static const Ssd1677Config& ssd1677ActiveConfig() {
 }
 #endif
 
-#if FREEINK_DEVICE_MURPHY_M4
-PanelDriver& ssd1677Driver(const MurphyM4Batch batch) {
-  static Ssd1677Driver instance(ssd1677MurphyM4Config(batch));
-  return instance;
-}
-#else
 PanelDriver& ssd1677Driver() {
   static Ssd1677Driver instance(ssd1677ActiveConfig());
+  return instance;
+}
+
+#if FREEINK_DEVICE_MURPHY_M4
+PanelDriver& ssd1677MurphyM4Driver(const MurphyM4Batch batch) {
+  static Ssd1677Driver instance(ssd1677MurphyM4Config(batch));
   return instance;
 }
 #endif

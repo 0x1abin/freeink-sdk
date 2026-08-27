@@ -57,8 +57,6 @@ struct Ssd1677Config {
   // collapsing toward B/W). The X4 keeps the panel powered between fast
   // refreshes, so it never needs this and keeps stock behavior.
   bool grayPowerUpFirst = false;
-  uint8_t deepSleepMode = 0x03;
-  bool windowRefreshUsesHalfTemp = false;
 };
 
 // Standard config (Xteink X4 / GDEQ0426T82). Panel mounting (mirror/180°) is NOT
@@ -150,10 +148,9 @@ class Ssd1677Driver : public PanelDriver {
 };
 
 // Singleton accessor (Meyers, zero-heap). Selects the config for the active board.
-#if FREEINK_DEVICE_MURPHY_M4
-PanelDriver& ssd1677Driver(MurphyM4Batch batch);
-#else
 PanelDriver& ssd1677Driver();
+#if FREEINK_DEVICE_MURPHY_M4
+PanelDriver& ssd1677MurphyM4Driver(MurphyM4Batch batch);
 #endif
 
 }  // namespace freeink

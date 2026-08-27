@@ -177,10 +177,12 @@ void FreeInkDisplay::selectDriver() {
 #endif
 #if FREEINK_DRIVER_SSD1677
 #if FREEINK_DEVICE_MURPHY_M4
-      _driver = &ssd1677Driver(_murphyM4Batch);
-#else
-      _driver = &ssd1677Driver();
+      if (BoardConfig::ACTIVE.board == BoardConfig::Board::MurphyM4) {
+        _driver = &ssd1677MurphyM4Driver(_murphyM4Batch);
+        break;
+      }
 #endif
+      _driver = &ssd1677Driver();
 #elif FREEINK_DRIVER_PAPER_MONO
       _driver = &paperMonoDriver();
 #elif FREEINK_DRIVER_UC8253_MURPHY

@@ -16,7 +16,9 @@
 
 #include <cstdint>
 
+#if FREEINK_DEVICE_WAVESHARE_EPAPER_397
 #include "FunctionButtonGesture.h"
+#endif
 #if FREEINK_DEVICE_MURPHY_M4
 #include "MurphyM4TouchPolling.h"
 #endif
@@ -56,9 +58,11 @@ class InputManager {
   // otherwise a press shorter than the poll period lands in a single sample and
   // is dropped.
   bool isDebouncePending() const {
+#if FREEINK_DEVICE_WAVESHARE_EPAPER_397
     if (BoardConfig::ACTIVE.inputStyle == BoardConfig::InputStyle::DigitalFunctionMultiGesture) {
       return functionButtonGesture.isDebouncePending();
     }
+#endif
     return lastState != currentState;
   }
 
@@ -316,7 +320,9 @@ class InputManager {
   void updateConfirmBackHold(unsigned long currentTime);
   void updateConfirmPowerHold(unsigned long currentTime);
   void updateDigitalTwoButton(unsigned long currentTime);
+#if FREEINK_DEVICE_WAVESHARE_EPAPER_397
   void updateFunctionMultiGesture(unsigned long currentTime);
+#endif
   void applyStateChange(uint8_t state, unsigned long currentTime);
 
   // Touch backend. Compiled only when FREEINK_CAP_TOUCH is set; dispatches on
@@ -333,9 +339,11 @@ class InputManager {
   bool readChsc6xPoint(TouchPoint& point);
   bool decodeChsc6xFrame(const uint8_t* data, size_t len, TouchPoint& point) const;
   uint16_t mapTouchAxis(uint16_t raw, uint16_t rawMin, uint16_t rawMax, uint16_t outMax) const;
+#if FREEINK_DEVICE_EEGO_A4 || FREEINK_DEVICE_MURPHY_M4
   TouchPoint mapTouchPoint(uint16_t rawX, uint16_t rawY, unsigned long now) const;
   void updateTouchContact(const TouchPoint& point);
   void releaseTouch(unsigned long now);
+#endif
   void beginGt911();
   bool gt911ReadReg(uint16_t reg, uint8_t* buf, uint8_t len);
   void gt911ClearStatus();
@@ -403,7 +411,9 @@ class InputManager {
   uint8_t twoButtonPhysicalState;
   unsigned long twoButtonPressStart;
   bool twoButtonLongPressActive;
+#if FREEINK_DEVICE_WAVESHARE_EPAPER_397
   freeink::input::FunctionButtonGesture functionButtonGesture;
+#endif
 
   bool touchDataEnabled = false;         // I2C up, controller present
   uint8_t gt911Addr = 0;                 // resolved GT911 address (0 until probed)
