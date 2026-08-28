@@ -57,15 +57,15 @@ void PowerManager::waitForPowerButtonRelease() {
 }
 
 namespace {
-// Drive a rail-enable pin to `offLevel` and latch it so the level survives deep
+// Drive a rail pin to `level` and latch it so the level survives deep
 // sleep (requires gpio_deep_sleep_hold_en(), done in deepSleep()). gpio_hold_dis
 // first: a hold left over from a previous cycle would make the writes no-ops.
-void holdRailOff(int8_t pin, uint8_t offLevel) {
+void holdRailLevel(int8_t pin, uint8_t level) {
   if (pin < 0) return;
   const auto g = static_cast<gpio_num_t>(pin);
   gpio_hold_dis(g);
   pinMode(pin, OUTPUT);
-  digitalWrite(pin, offLevel);
+  digitalWrite(pin, level);
   gpio_hold_en(g);
 }
 }  // namespace
@@ -80,14 +80,19 @@ void PowerManager::powerDownRailsForSleep() {
   // drift out of DSLP and restart its analog booster. EpdBus and XteinkDetect
   // release the hold before issuing a reset pulse on wake.
   const uint8_t resetSleepLevel = b.display.powerEnable >= 0 ? LOW : HIGH;
-  holdRailOff(b.display.rst, resetSleepLevel);
-  holdRailOff(b.display.powerEnable, LOW);
+  holdRailLevel(b.display.rst, resetSleepLevel);
+#if FREEINK_DEVICE_EEGO_A4
+  // EEGO's GPIO4 battery latch must stay asserted for GPIO8 to wake the S3
+  // from real deep sleep instead of forcing the next press through a cold boot.
+  if (BoardConfig::isEegoA4()) holdRailLevel(b.power.latch0, HIGH);
+#endif
+  holdRailLevel(b.display.powerEnable, LOW);
   // SD enable OFF = the inactive level: LOW for active-high enables, HIGH for the
   // active-low ones (e.g. X4 Pro's GPIO5, which powers the card while held LOW).
-  holdRailOff(b.sd.powerEnable, b.sd.powerActiveHigh ? LOW : HIGH);
-  holdRailOff(b.touch.powerEnable, b.touch.powerEnableActiveHigh ? LOW : HIGH);
+  holdRailLevel(b.sd.powerEnable, b.sd.powerActiveHigh ? LOW : HIGH);
+  holdRailLevel(b.touch.powerEnable, b.touch.powerEnableActiveHigh ? LOW : HIGH);
   // The mic enable also carries a polarity flag; OFF is the inactive level.
-  holdRailOff(b.mic.enable, b.mic.enableActiveHigh ? LOW : HIGH);
+  holdRailLevel(b.mic.enable, b.mic.enableActiveHigh ? LOW : HIGH);
 }
 
 void PowerManager::deepSleep() {
