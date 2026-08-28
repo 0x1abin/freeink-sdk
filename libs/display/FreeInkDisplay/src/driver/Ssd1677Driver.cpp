@@ -389,7 +389,9 @@ void Ssd1677Driver::powerOn(EpdBus& bus) {
 void Ssd1677Driver::powerOffController(EpdBus& bus) {
   // Always park: re-issuing the border/analog-off sequence on an already-off
   // panel is harmless, and this guarantees the booster is off before DSLP even
-  // if _isScreenOn drifted out of sync (see the AA-pass desync above).
+  // if _isScreenOn drifted out of sync (see the AA-pass desync above). This
+  // driver is ActiveHigh (Ssd1677Driver.h), whose waitBusy() has a 30 s ceiling
+  // (EpdBus.cpp:225), so an off panel cannot hang here.
   bus.cmd(CMD_BORDER_WAVEFORM);
   bus.data(_cfg.borderWaveformInit);  // X4 Pro: 0x80
   bus.cmd(CMD_DISPLAY_UPDATE_CTRL2);
