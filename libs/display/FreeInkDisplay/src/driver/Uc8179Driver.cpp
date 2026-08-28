@@ -393,11 +393,14 @@ void Uc8179Driver::skipInitialResync() { _needFullClear = false; }
 void Uc8179Driver::deepSleep(EpdBus& bus) {
   _grayBaseValid = false;
   _absoluteGrayPlanes = false;
-  if (_isScreenOn) {
-    bus.cmd(CMD_POWER_OFF);
-    bus.waitBusy(" 8179 power-down");
-    _isScreenOn = false;
-  }
+  // Always power the panel down before DSLP: re-issuing POF on an already-off
+  // panel is harmless, and guarantees the booster/charge-pump is off even if
+  // _isScreenOn drifted out of sync. PR #3215 holds the X4 Pro master rail
+  // (GPIO1) HIGH through deep sleep, so a biased booster would otherwise keep
+  // drawing mA.
+  bus.cmd(CMD_POWER_OFF);
+  bus.waitBusy(" 8179 power-down");
+  _isScreenOn = false;
   bus.cmd(CMD_DEEP_SLEEP);
   bus.data(0xA5);
 }
