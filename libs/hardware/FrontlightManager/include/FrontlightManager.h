@@ -107,9 +107,9 @@ class FrontlightManager {
   // re-arms it on 0<->nonzero total-duty transitions, so dark idle sleeps at
   // full depth.
   void updateLsKeepAlive(bool lit);
-  bool _lsAttachOk = false;         // both channel attaches succeeded (refcount is balanced)
-  bool _lsKeepAliveArmed = false;   // our own +1 on the RC_FAST sleep sub-mode is active
-  bool _lsParked = false;           // park() has driven + held the frontlight pads LOW
+  bool _lsAttachOk = false;        // both channel attaches succeeded (refcount is balanced)
+  bool _lsKeepAliveArmed = false;  // our own +1 on the RC_FAST sleep sub-mode is active
+  bool _lsParked = false;          // park() has driven + held the frontlight pads LOW
 #endif
 
   bool _begun = false;
