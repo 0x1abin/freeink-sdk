@@ -1,11 +1,14 @@
 #include "FrontlightManager.h"
 
 #if FREEINK_CAP_FRONTLIGHT
+static const char* TAG = "FrontlightMgr";
+
 #include <M5Pm1.h>
 #include <Wire.h>
 #ifdef FREEINK_FRONTLIGHT_LS
 #include <driver/gpio.h>
 #include <driver/ledc.h>
+#include <esp_log.h>
 // esp_sleep_sub_mode_config lives in a private IDF header (no public API exists
 // for balancing the refcounted RC_FAST keep-on the LEDC driver takes for
 // KEEP_ALIVE channels — the driver manages it through this same header). Pinned
@@ -167,6 +170,17 @@ void FrontlightManager::begin() {
     attachOk = attachChannel(fl.gpioWarm, LEDC_CH_WARM, fl.pwmFrequency, fl.pwmResolutionBits) || attachOk;
   }
 #ifdef FREEINK_FRONTLIGHT_LS
+  // Defensive: a prior sleep cycle may have left _lsParked set if releaseOnWake()
+  // was skipped (bad ordering, mid-flash). If the pad is still held, the LEDC
+  // re-attach below would be a no-op and the light would stay dark after wake.
+  // Drop any surviving hold here so begin() always starts from a clean pad.
+  if (_lsParked) {
+    for (const int8_t pin : {fl.gpio, fl.gpioWarm}) {
+      if (pin >= 0) gpio_hold_dis(static_cast<gpio_num_t>(pin));
+    }
+    _lsParked = false;
+    ESP_LOGI(TAG, "begin: cleared stale parked hold (was parked)");
+  }
   // The FIRST successful KEEP_ALIVE channel config takes a single refcounted +1
   // on the RC_FAST sleep sub-mode (esp_sleep_sub_mode_config; the driver's
   // global-clock latch means later configs don't take another), which would
@@ -186,6 +200,7 @@ void FrontlightManager::begin() {
 #endif
   _begun = true;
   setBrightness(0);
+  ESP_LOGI(TAG, "begin: attached gpio=%d warm=%d ok=%d", fl.gpio, fl.gpioWarm, attachOk ? 1 : 0);
 #endif
 }
 
@@ -316,6 +331,8 @@ void FrontlightManager::apply() {
   if (dual) {
     writeChannel(fl.gpioWarm, LEDC_CH_WARM, physicalDuty(warmDuty, full, fl.activeHigh));
   }
+  ESP_LOGI(TAG, "apply: brightness=%u level=%u totalDuty=%u coolDuty=%u warmDuty=%u lit=%d", _brightness,
+           _brightnessLevel, totalDuty, coolDuty, warmDuty, totalDuty != 0 ? 1 : 0);
 }
 
 #ifdef FREEINK_FRONTLIGHT_LS
@@ -343,6 +360,7 @@ void FrontlightManager::park() {
   // the LEDC channels on boot.
   const auto& fl = BoardConfig::ACTIVE.frontlight;
   if (!_begun) return;
+  ESP_LOGI(TAG, "park: begun, driving pads LOW + hold");
   // Return the LEDC driver's refcounted RC_FAST keep-alive it took at attach, if
   // it is still armed (apply() re-arms only while lit; off()/setBrightness(0)
   // returns it, but be safe if the light was parked while lit).
@@ -370,13 +388,20 @@ void FrontlightManager::releaseOnWake() {
   // Undo park() so begin() can re-attach the LEDC channels cleanly: drop the pad
   // holds (a held pad would make ledc_channel_config()'s drive a no-op) and clear
   // the parked flag. Called from the consumer at boot, before Frontlight.begin().
-  if (!_lsParked) return;
+  // Idempotent: safe to call more than once (e.g. begin() ALSO clears a stale hold
+  // defensively), and a no-op when never parked — so the wake path can call it
+  // unconditionally without risk of being a silent no-op that leaves the pad held.
+  if (!_lsParked) {
+    ESP_LOGI(TAG, "releaseOnWake: not parked (no-op)");
+    return;
+  }
   const auto& fl = BoardConfig::ACTIVE.frontlight;
   for (const int8_t pin : {fl.gpio, fl.gpioWarm}) {
     if (pin < 0) continue;
     gpio_hold_dis(static_cast<gpio_num_t>(pin));
   }
   _lsParked = false;
+  ESP_LOGI(TAG, "releaseOnWake: released pad holds");
 }
 #endif
 #endif
