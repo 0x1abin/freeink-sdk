@@ -41,11 +41,15 @@ class FrontlightManager {
   // before deep sleep. Only meaningful on LEDC frontlights (no-op otherwise).
   // releaseOnWake() must be called at boot before begin() re-attaches the
   // channels.
+  // Implemented only under FREEINK_FRONTLIGHT_LS, so guard the declarations to
+  // match (otherwise boards without it get an undefined reference at link time).
+#ifdef FREEINK_FRONTLIGHT_LS
   void park();
 
   // Undo park() at boot so begin() can re-attach the LEDC channels. Safe to call
   // unconditionally; a no-op when not parked.
   void releaseOnWake();
+#endif
 
   // Warm/cool mix, 0 = fully cool, 100 = fully warm, 50 = neutral. Only meaningful on a
   // two-channel board (hasColorTemperature()); a no-op on single-channel frontlights.
