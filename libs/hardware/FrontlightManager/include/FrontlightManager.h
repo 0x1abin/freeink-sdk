@@ -35,6 +35,18 @@ class FrontlightManager {
   void off();
   void on();
 
+  // Cut frontlight leakage through deep sleep: drive the LED pads LOW and hold
+  // them (so the level survives deep sleep via gpio_deep_sleep_hold_en), and
+  // release the LEDC KEEP_ALIVE clock. Call from the consumer's sleep path just
+  // before deep sleep. Only meaningful on LEDC frontlights (no-op otherwise).
+  // releaseOnWake() must be called at boot before begin() re-attaches the
+  // channels.
+  void park();
+
+  // Undo park() at boot so begin() can re-attach the LEDC channels. Safe to call
+  // unconditionally; a no-op when not parked.
+  void releaseOnWake();
+
   // Warm/cool mix, 0 = fully cool, 100 = fully warm, 50 = neutral. Only meaningful on a
   // two-channel board (hasColorTemperature()); a no-op on single-channel frontlights.
   void setColorTemperature(uint8_t warmPercent);
@@ -97,6 +109,7 @@ class FrontlightManager {
   void updateLsKeepAlive(bool lit);
   bool _lsAttachOk = false;         // both channel attaches succeeded (refcount is balanced)
   bool _lsKeepAliveArmed = false;   // our own +1 on the RC_FAST sleep sub-mode is active
+  bool _lsParked = false;           // park() has driven + held the frontlight pads LOW
 #endif
 
   bool _begun = false;

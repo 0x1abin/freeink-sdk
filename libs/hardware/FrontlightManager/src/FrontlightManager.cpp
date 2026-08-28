@@ -327,6 +327,57 @@ void FrontlightManager::updateLsKeepAlive(const bool lit) {
   esp_sleep_sub_mode_config(ESP_SLEEP_DIG_USE_RC_FAST_MODE, lit);
   _lsKeepAliveArmed = lit;
 }
+
+void FrontlightManager::park() {
+  // Frontlight leakage through deep sleep (Xteink X4 Pro — Mark31415,
+  // crosspoint-reader#3215). The channels are configured LEDC_SLEEP_MODE_KEEP_ALIVE
+  // so the PWM keeps driving GPIO8/9 (cool/warm) through light sleep; at deep
+  // sleep the panel rail is held up (PR #3215 holds power.latch0 / GPIO1 HIGH for
+  // fast-wake), so the frontlight driver IC stays powered and the KEEP_ALIVE pad
+  // keeps drawing quiescent + leakage current. Cut it at the source: drive both
+  // pads LOW (active-high frontlight -> LED off, no booster bias) and hold them
+  // LOW so the level survives deep sleep via gpio_deep_sleep_hold_en() (called by
+  // PowerManager::deepSleep()). The LEDC peripheral clock (RC_FAST) is also
+  // released so the driver's refcounted +1 is dropped and the clock can fully
+  // stop in deep sleep. releaseOnWake() must undo this before begin() re-attaches
+  // the LEDC channels on boot.
+  const auto& fl = BoardConfig::ACTIVE.frontlight;
+  if (!_begun) return;
+  // Return the LEDC driver's refcounted RC_FAST keep-alive it took at attach, if
+  // it is still armed (apply() re-arms only while lit; off()/setBrightness(0)
+  // returns it, but be safe if the light was parked while lit).
+  updateLsKeepAlive(false);
+  // Tear down the KEEP_ALIVE LEDC channels so the pads no longer answer to the
+  // peripheral; the explicit GPIO hold below then owns the pad level.
+  ledc_stop(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 0);
+  if (fl.gpioWarm != BoardConfig::PIN_UNASSIGNED) {
+    ledc_stop(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, 0);
+  }
+  for (const int8_t pin : {fl.gpio, fl.gpioWarm}) {
+    if (pin < 0) continue;
+    const auto g = static_cast<gpio_num_t>(pin);
+    // Release any surviving pad hold first: a held pad silently ignores the drive
+    // below (same trap as HalPowerManager's latch loop).
+    gpio_hold_dis(g);
+    pinMode(pin, OUTPUT);
+    digitalWrite(pin, LOW);
+    gpio_hold_en(g);
+    _lsParked = true;
+  }
+}
+
+void FrontlightManager::releaseOnWake() {
+  // Undo park() so begin() can re-attach the LEDC channels cleanly: drop the pad
+  // holds (a held pad would make ledc_channel_config()'s drive a no-op) and clear
+  // the parked flag. Called from the consumer at boot, before Frontlight.begin().
+  if (!_lsParked) return;
+  const auto& fl = BoardConfig::ACTIVE.frontlight;
+  for (const int8_t pin : {fl.gpio, fl.gpioWarm}) {
+    if (pin < 0) continue;
+    gpio_hold_dis(static_cast<gpio_num_t>(pin));
+  }
+  _lsParked = false;
+}
 #endif
 #endif
 
