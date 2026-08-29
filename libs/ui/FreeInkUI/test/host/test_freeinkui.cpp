@@ -49,14 +49,20 @@ class FakeDrawTarget : public DrawTarget {
     uint8_t radius;
     uint8_t corners;
     Rotation rotation;
+    FontId font;
+    bool bold;
   };
 
   Op ops[256]{};
   size_t opCount = 0;
+  mutable bool measuredForbiddenLabel = false;
+  bool drewForbiddenLabel = false;
   int16_t charWidth = 6;
   int16_t lineH = 12;
 
   Size measureText(FontId, const char* text, TextStyle) const override {
+    if (text != nullptr && std::strcmp(text, "must-not-measure") == 0)
+      measuredForbiddenLabel = true;
     return Size{static_cast<int16_t>(charWidth * static_cast<int16_t>(std::strlen(text))), lineH};
   }
   int16_t lineHeight(FontId) const override { return lineH; }
@@ -74,8 +80,11 @@ class FakeDrawTarget : public DrawTarget {
   void triangle(Point a, Point, Point c, Paint paint) override {
     record(Op::Triangle, Rect{a.x, a.y, static_cast<int16_t>(c.x - a.x), static_cast<int16_t>(c.y - a.y)}, paint);
   }
-  void text(Rect rect, const char*, TextStyle style) override {
-    record(Op::Text, rect, Paint::solid(style.color), 0, CornersAll, style.rotation);
+  void text(Rect rect, const char* text, TextStyle style) override {
+    if (text != nullptr && std::strcmp(text, "must-not-measure") == 0)
+      drewForbiddenLabel = true;
+    record(Op::Text, rect, Paint::solid(style.color), 0, CornersAll,
+           style.rotation, style.font, style.bold);
   }
   void bitmap(Rect rect, BitmapRef, BitmapMode, Paint foreground, Rotation rotation) override {
     record(Op::Bitmap, rect, foreground, 0, CornersAll, rotation);
@@ -90,9 +99,12 @@ class FakeDrawTarget : public DrawTarget {
 
  private:
   void record(Op::Kind kind, Rect rect, Paint paint, uint8_t radius = 0, uint8_t corners = CornersAll,
-              Rotation rotation = Rotation::None) {
+              Rotation rotation = Rotation::None, FontId font = 0,
+              bool bold = false) {
     if (opCount < sizeof(ops) / sizeof(ops[0]))
-      ops[opCount++] = Op{kind, rect, paint.kind, paint.color, radius, corners, rotation};
+      ops[opCount++] =
+          Op{kind, rect, paint.kind, paint.color, radius, corners, rotation,
+             font, bold};
   }
 };
 
@@ -350,6 +362,79 @@ void testDisabledSkipsTouch() {
   CHECK(!buffer.route(tap));
 }
 
+void testDragRouting() {
+  InteractionBuffer<8> buffer;
+  // 0: slider, 1: plain button below it.
+  buffer.addInteraction(
+      Interaction{Rect{0, 0, 201, 40}, 1, 0, static_cast<uint16_t>(InputTouch | InputDrag), StateNormal, 0});
+  buffer.addInteraction(Interaction{Rect{0, 40, 100, 40}, 2, 0, InputTouch, StateNormal, 0});
+
+  // A drag that starts moving at once never reads as a tap, so it arrives as
+  // a bare held frame with no press edge.
+  const auto contactAt = [](int16_t x, int16_t y) {
+    InputSnapshot snap;
+    snap.touchHeld = true;
+    snap.touchX = x;
+    snap.touchY = y;
+    return snap;
+  };
+  ActionEvent event = buffer.route(contactAt(100, 20));
+  CHECK_EQ(event.action, 1);
+  CHECK_EQ(event.dragPermille, 500);
+
+  // Grab semantics: later frames follow the finger, even off the rect.
+  const InputSnapshot held = contactAt(260, 300);
+  event = buffer.route(held);
+  CHECK_EQ(event.action, 1);
+  CHECK_EQ(event.dragPermille, 1000);
+
+  InputSnapshot release;
+  release.touchReleased = true;
+  release.touchX = -1;
+  release.touchY = -1;
+  CHECK(!buffer.route(release));
+
+  // The landing point decides, not the live one: a contact beginning off the
+  // slider never grabs it, however far it then travels across it. The button
+  // it landed on is not bound either — InputDrag is not part of the InputTouch
+  // fallback, so activeIndex stays clear.
+  CHECK(!buffer.route(contactAt(50, 60)));
+  CHECK_EQ(buffer.activeIndex(), -1);
+  CHECK(!buffer.route(held));
+  buffer.route(release);
+
+  // Touch-only elements are never bound, so the button keeps its press edge.
+  InputSnapshot press;
+  press.touchPressed = true;
+  press.touchX = 50;
+  press.touchY = 60;
+  CHECK(!buffer.route(press));
+  CHECK_EQ(buffer.activeIndex(), 1);
+  buffer.route(release);
+
+  // A repaint routes a default-constructed snapshot through the same buffer.
+  // It must not end the contact: the drag stays bound across it and keeps
+  // following the finger off the rect.
+  CHECK(buffer.route(contactAt(100, 20)));
+  buffer.route(InputSnapshot{});
+  ActionEvent stillHeld = buffer.route(contactAt(400, 300));
+  CHECK_EQ(stillHeld.action, 1);
+  CHECK_EQ(stillHeld.dragPermille, 1000);
+  buffer.route(release);
+
+  // The release edge is what opens the latch, so the next contact binds fresh
+  // rather than inheriting what the last one held.
+  CHECK(!buffer.route(contactAt(50, 60)));
+  CHECK_EQ(buffer.activeIndex(), -1);
+  buffer.route(release);
+
+  // A disabled slider is inert on the contact edge too.
+  buffer.clear();
+  buffer.addInteraction(
+      Interaction{Rect{0, 0, 201, 40}, 1, 0, static_cast<uint16_t>(InputTouch | InputDrag), StateDisabled, 0});
+  CHECK(!buffer.route(contactAt(100, 20)));
+}
+
 void testLongPressRouting() {
   InteractionBuffer<8> buffer;
   buffer.addInteraction(Interaction{Rect{0, 0, 100, 100}, 1, 5,
@@ -461,6 +546,59 @@ void testEdgeButtonsAndSwipes() {
   CHECK_EQ(buffer.route(input).action, 5);
 }
 
+// Cross-task double-buffer contract (added for the render-task-vs-loop-task
+// interaction table race): publishedCount()/publishedData()/routePublished()
+// must keep reporting the previous generation for as long as a new one is
+// being built via beginPublishCycle()/clear()/addInteraction(), and only
+// switch over atomically once publish() is called -- never a mix of the two.
+// A caller that never opts in must see the exact single-buffer behavior this
+// whole file's other tests rely on.
+void testPublishCycleIsolatesReaders() {
+  InteractionBuffer<8> buffer;
+
+  // Establish a known "old" generation and publish it.
+  buffer.addInteraction(Interaction{Rect{0, 0, 10, 10}, 1, 0, InputTouch, StateNormal, 0});
+  buffer.publish();
+  CHECK_EQ(buffer.publishedCount(), 1u);
+  CHECK_EQ(buffer.publishedData()[0].action, 1);
+
+  // Start building the next generation. A concurrent reader (publishedCount/
+  // publishedData/routePublished) must still see the OLD generation,
+  // untouched, for as long as this isn't published yet.
+  buffer.beginPublishCycle();
+  buffer.clear();
+  buffer.addInteraction(Interaction{Rect{0, 0, 10, 10}, 2, 0, InputTouch, StateNormal, 0});
+  buffer.addInteraction(Interaction{Rect{10, 0, 10, 10}, 3, 0, InputTouch, StateNormal, 0});
+  CHECK_EQ(buffer.publishedCount(), 1u);
+  CHECK_EQ(buffer.publishedData()[0].action, 1);
+  // The generation being built (what Frame uses during layout) already
+  // reflects the new rects.
+  CHECK_EQ(buffer.count(), 2u);
+  CHECK_EQ(buffer.data()[1].action, 3);
+
+  // Publish: readers now atomically see the complete new generation.
+  buffer.publish();
+  CHECK_EQ(buffer.publishedCount(), 2u);
+  CHECK_EQ(buffer.publishedData()[0].action, 2);
+  CHECK_EQ(buffer.publishedData()[1].action, 3);
+
+  InputSnapshot tap;
+  tap.touchReleased = true;
+  tap.touchX = 5;
+  tap.touchY = 5;
+  CHECK_EQ(buffer.routePublished(tap).action, 2);
+
+  // A caller that never calls beginPublishCycle()/publish() at all (every
+  // other test in this file, and every existing single-task consumer) keeps
+  // behaving exactly like the pre-double-buffer design.
+  InteractionBuffer<8> plain;
+  plain.addInteraction(Interaction{Rect{0, 0, 10, 10}, 9, 0, InputTouch, StateNormal, 0});
+  plain.clear();
+  plain.addInteraction(Interaction{Rect{0, 0, 10, 10}, 10, 0, InputTouch, StateNormal, 0});
+  CHECK_EQ(plain.count(), 1u);
+  CHECK_EQ(plain.data()[0].action, 10);
+}
+
 void testListHelpers() {
   CHECK_EQ(listVisibleRows(Rect{0, 0, 100, 360}, 36, 0), 10);
   CHECK_EQ(listVisibleRows(Rect{0, 0, 100, 359}, 36, 0), 9);
@@ -556,6 +694,233 @@ void testListClampsBadTopIndex() {
   CHECK_EQ(interactions.data()[3].value, 5);
 }
 
+// items can be a small window around the viewport (itemsWindowFirst) instead
+// of an array of all `count` entries; absolute indexing and interactions stay
+// identical to the full-array form.
+void testListItemsWindow() {
+  FakeDrawTarget draw;
+  DeviceContext device = makeDevice();
+  InputSnapshot input;
+  InteractionBuffer<32> interactions;
+  Frame<32> frame(draw, device, input, interactions);
+
+  // Window holds absolute rows 10..17 of a 100-row list.
+  ListItem window[8]{};
+  char labels[8][8];
+  for (int i = 0; i < 8; ++i) {
+    std::snprintf(labels[i], sizeof(labels[i]), "row%d", 10 + i);
+    window[i].label = labels[i];
+    window[i].actionValue = static_cast<int16_t>(10 + i);
+    window[i].enabled = true;
+  }
+
+  ListProps props;
+  props.items = window;
+  props.itemsWindowFirst = 10;
+  props.itemsWindowCount = 8;
+  props.count = 100;
+  props.topIndex = 12;
+  props.selectedIndex = 14;
+  props.action = 9;
+  props.rowHeight = 40;
+  list(frame, Rect{0, 0, 480, 200}, props); // fits 5 rows: absolute 12..16
+
+  CHECK_EQ(interactions.count(), 5u);
+  CHECK_EQ(interactions.data()[0].value, 12);
+  CHECK_EQ(interactions.data()[4].value, 16);
+}
+
+// The virtual window only needs rows that can actually be drawn. In
+// particular, list() must not measure an extra row after the viewport is full:
+// callers often store exactly the visible window, so that read would be past
+// their ListItem array.
+void testListItemsWindowStopsBeforePastEndMeasurement() {
+  FakeDrawTarget draw;
+  DeviceContext device = makeDevice();
+  InputSnapshot input;
+  InteractionBuffer<32> interactions;
+  Frame<32> frame(draw, device, input, interactions);
+
+  ListItem window[6]{};
+  for (int i = 0; i < 6; ++i) {
+    window[i].label = i == 5 ? "must-not-measure" : "row";
+    window[i].actionValue = static_cast<int16_t>(10 + i);
+  }
+
+  ListProps props;
+  props.items = window;
+  props.itemsWindowFirst = 10;
+  props.itemsWindowCount = 5;
+  props.count = 100;
+  props.topIndex = 10;
+  props.action = 9;
+  props.rowHeight = 19;
+  list(frame, Rect{0, 0, 480, 95}, props);  // exactly 5 visible rows
+
+  CHECK_EQ(interactions.count(), 5u);
+  CHECK(!draw.measuredForbiddenLabel);
+  CHECK(!draw.drewForbiddenLabel);
+}
+
+void testListItemsWindowSkipsUnavailablePartialPreview() {
+  FakeDrawTarget draw;
+  DeviceContext device = makeDevice();
+  InputSnapshot input;
+  InteractionBuffer<32> interactions;
+  Frame<32> frame(draw, device, input, interactions);
+
+  ListItem window[6]{};
+  for (int i = 0; i < 6; ++i) {
+    window[i].label = i == 5 ? "must-not-measure" : "row";
+    window[i].actionValue = static_cast<int16_t>(10 + i);
+  }
+
+  ListProps props;
+  props.items = window;
+  props.itemsWindowFirst = 10;
+  props.itemsWindowCount = 5;
+  props.count = 100;
+  props.topIndex = 10;
+  props.action = 9;
+  props.rowHeight = 20;
+  props.partialTrailingRow = true;
+  list(frame, Rect{0, 0, 480, 118}, props);  // five rows plus an 18px preview
+
+  CHECK_EQ(interactions.count(), 5u);
+  CHECK(!draw.measuredForbiddenLabel);
+  CHECK(!draw.drewForbiddenLabel);
+}
+
+void testListNavLayoutFeedback() {
+  FakeDrawTarget draw;
+  DeviceContext device = makeDevice();
+  InputSnapshot input;
+  InteractionBuffer<32> interactions;
+  Frame<32> frame(draw, device, input, interactions);
+
+  ListItem items[20]{};
+  for (int i = 0; i < 20; ++i) {
+    items[i].label = "x";
+    items[i].actionValue = static_cast<int16_t>(i);
+    items[i].enabled = true;
+  }
+
+  // list() reports its layout through props.nav (wired by syncToProps).
+  ListNav nav;
+  nav.reset(12);
+  ListProps props;
+  props.items = items;
+  props.count = 20;
+  props.action = 7;
+  props.rowHeight = 40;
+  const Rect body{0, 0, 480, 200}; // fits 5 fixed-height rows
+  nav.syncToProps(body, 40, 0, 20, props);
+  CHECK(props.nav == &nav);
+  CHECK_EQ(nav.visibleRows, 5);
+  CHECK_EQ(nav.top, 8); // follow-on-build pulled the viewport to 12
+  CHECK(nav.followPending);
+  list(frame, body, props);
+  CHECK_EQ(nav.drawnRows, 5);
+  CHECK(!nav.followPending); // selection drew; follow confirmed
+  CHECK(!nav.rebuildNeeded);
+
+  // Clipped selection: variable-height rows fit only 3 of the estimated 5,
+  // ending short of the selection. The nav advances the viewport minimally
+  // and requests a rebuild; the next pass that draws the selection settles.
+  nav.follow(20);
+  nav.onListRendered(8, 3, /*selectedDrawn=*/false); // drew [8,10], 12 clipped
+  CHECK_EQ(nav.top, 10);                             // 12 - 3 + 1
+  CHECK(nav.consumeRebuildNeeded());
+  CHECK(!nav.rebuildNeeded);
+  nav.onListRendered(10, 3, /*selectedDrawn=*/true); // rebuilt: [10,12]
+  CHECK(!nav.followPending);
+  CHECK(!nav.rebuildNeeded);
+
+  // Swipe scrolling may leave the selection off-screen by design; layout
+  // feedback must not yank the viewport back.
+  nav.scrollBy(5, 20);
+  nav.onListRendered(15, 3, /*selectedDrawn=*/false);
+  CHECK(!nav.rebuildNeeded);
+  CHECK_EQ(nav.top, 15);
+
+  // pageRows() prefers the measured page size over the estimate.
+  CHECK_EQ(nav.pageRows(), 3);
+
+  // Tail of the list: navigating to the last item when wrapped rows mean the
+  // count - visibleRows viewport can't reach it. follow() clamps to the
+  // fixed-height maxTop (15 of 20 with 5 estimated rows), only 4 rows fit, so
+  // the selection (19) is clipped; the feedback pass must advance past the
+  // old clamp (scrollBy's clamp uses the measured page size) and land it.
+  ListNav tail;
+  tail.reset(19);
+  ListProps tailProps;
+  tailProps.items = items;
+  tailProps.count = 20;
+  tailProps.rowHeight = 40;
+  tail.syncToProps(body, 40, 0, 20, tailProps); // follow-on-build
+  CHECK_EQ(tail.top, 15);                       // fixed-height clamp
+  tail.onListRendered(15, 4, /*selectedDrawn=*/false); // only [15,18] fit
+  CHECK(tail.consumeRebuildNeeded());
+  CHECK_EQ(tail.top, 16); // 19 - 4 + 1
+  tail.syncToProps(body, 40, 0, 20, tailProps); // rebuild pass re-syncs
+  CHECK_EQ(tail.top, 16); // measured clamp (20 - 4) keeps the advance
+  tail.onListRendered(16, 4, /*selectedDrawn=*/true); // [16,19] draws it
+  CHECK(!tail.followPending);
+  CHECK(!tail.rebuildNeeded);
+}
+
+// End-to-end tail-clip regression through the REAL list(): every label wraps
+// to two lines (itemH 32 vs rowHeight 20), so only 6 of the 10 estimated rows
+// fit. Following the last item must converge even though list()'s fixed-height
+// top clamp (count - visible) sits below the top the selection needs; the
+// clamp is skipped for nav-managed lists. Mirrors the on-device failure where
+// the rebuild loop oscillated (advance -> clamp) and the last row never drew.
+void testListNavConvergesThroughRealList() {
+  FakeDrawTarget draw;
+  DeviceContext device = makeDevice();
+  InputSnapshot input;
+
+  // 80 chars * charWidth 6 = 480px > the ~459px label band: wraps to 2 lines.
+  static const char kLongLabel[] =
+      "wrapping filename that is deliberately long enough to need a second "
+      "display line";
+  ListItem items[12]{};
+  for (int i = 0; i < 12; ++i) {
+    items[i].label = kLongLabel;
+    items[i].actionValue = static_cast<int16_t>(i);
+    items[i].enabled = true;
+  }
+
+  ListNav nav;
+  nav.reset(11); // follow the last item on first build
+  const Rect body{0, 0, 480, 200};
+  bool selectedRegistered = false;
+  int passes = 0;
+  for (; passes < 8; ++passes) {
+    InteractionBuffer<32> interactions;
+    Frame<32> frame(draw, device, input, interactions);
+    ListProps props;
+    props.items = items;
+    props.count = 12;
+    props.action = 7;
+    props.rowHeight = 20;
+    props.labelText.maxLines = 2;
+    nav.syncToProps(body, 20, 0, 12, props);
+    list(frame, body, props);
+    selectedRegistered = false;
+    for (size_t k = 0; k < interactions.count(); ++k) {
+      if (interactions.data()[k].value == 11)
+        selectedRegistered = true;
+    }
+    if (!nav.consumeRebuildNeeded())
+      break;
+  }
+  CHECK(selectedRegistered); // the last row actually drew and registered
+  CHECK(!nav.followPending);
+  CHECK(passes < 8); // converged instead of exhausting the rebuild budget
+  CHECK_EQ(nav.pageRows(), 6);
+}
+
 void testListCanUseFullTitleWidthWithShortValue() {
   ListItem item{};
   item.label = "This filename is deliberately long enough to require a two-line wrapped title";
@@ -587,6 +952,114 @@ void testListCanUseFullTitleWidthWithShortValue() {
   // Only the extension and its normal gap are reserved, so the title can use
   // the remaining width before the value.
   CHECK_EQ(fullWidthDraw.ops[2].rect.width, 424);
+}
+
+void testInxListPrimitivesStayOptIn() {
+  FakeDrawTarget draw;
+  DeviceContext device = makeDevice(100, 40);
+  InputSnapshot input;
+  InteractionBuffer<8> interactions;
+  Frame<8> frame(draw, device, input, interactions);
+  ListItem items[3];
+  items[0].label = "Heading";
+  items[0].value = "1234567890";
+  items[0].state = StateEmphasized;
+  items[1].label = "Second";
+  items[2].label = "Third";
+
+  ListProps props;
+  props.items = items;
+  props.count = 3;
+  props.selectedIndex = 0;
+  props.rowHeight = 20;
+  props.rowGap = 0;
+  props.sidePadding = 4;
+  props.scrollIndicatorWidth = 3;
+  props.separator = SeparatorStyle::Dotted;
+  props.valueMaxWidth = 20;
+  props.selectionCoversScrollReservation = 1;
+  props.emphasizedText.font = 9;
+  props.emphasizedText.bold = true;
+  list(frame, Rect{0, 0, 100, 40}, props);
+
+  bool sawFullSelection = false;
+  bool sawDotted0 = false;
+  bool sawDotted3 = false;
+  bool sawEmphasized = false;
+  bool sawValueCap = false;
+  for (size_t i = 0; i < draw.opCount; ++i) {
+    const auto &op = draw.ops[i];
+    if (op.kind == FakeDrawTarget::Op::Fill &&
+        op.paint == PaintKind::Solid && op.color == Color::Black &&
+        op.rect.x == 0 && op.rect.y == 0 && op.rect.width == 100 &&
+        op.rect.height == 20)
+      sawFullSelection = true;
+    if (op.kind == FakeDrawTarget::Op::Fill && op.rect.y == 19 &&
+        op.rect.width == 1 && op.rect.height == 1) {
+      if (op.rect.x == 0)
+        sawDotted0 = true;
+      if (op.rect.x == 3)
+        sawDotted3 = true;
+    }
+    if (op.kind == FakeDrawTarget::Op::Text && op.font == 9 && op.bold)
+      sawEmphasized = true;
+    if (op.kind == FakeDrawTarget::Op::Text && op.rect.width == 20)
+      sawValueCap = true;
+  }
+  CHECK(sawFullSelection);
+  CHECK(sawDotted0 && sawDotted3);
+  CHECK(sawEmphasized);
+  CHECK(sawValueCap);
+
+  FakeDrawTarget defaultsDraw;
+  InteractionBuffer<8> defaultsInteractions;
+  Frame<8> defaultsFrame(defaultsDraw, device, input, defaultsInteractions);
+  props.separator = SeparatorStyle::None;
+  props.valueMaxWidth = 0;
+  props.selectionCoversScrollReservation = 0;
+  list(defaultsFrame, Rect{0, 0, 100, 40}, props);
+  bool defaultSelectionStayedReserved = false;
+  for (size_t i = 0; i < defaultsDraw.opCount; ++i) {
+    const auto &op = defaultsDraw.ops[i];
+    if (op.kind == FakeDrawTarget::Op::Fill &&
+        op.paint == PaintKind::Solid && op.color == Color::Black &&
+        op.rect.x == 0 && op.rect.y == 0 && op.rect.width == 95 &&
+        op.rect.height == 20)
+      defaultSelectionStayedReserved = true;
+  }
+  CHECK(defaultSelectionStayedReserved);
+}
+
+void testSelectedVisualOnlyDisabledListRow() {
+  FakeDrawTarget draw;
+  DeviceContext device = makeDevice(100, 40);
+  InputSnapshot input;
+  InteractionBuffer<4> interactions;
+  Frame<4> frame(draw, device, input, interactions);
+  ListItem item{};
+  item.label = "Installed";
+  item.state = StateDisabled;
+  item.actionValue = 7;
+
+  ListProps props;
+  props.items = &item;
+  props.count = 1;
+  props.selectedIndex = 0;
+  props.action = 9;
+  props.rowHeight = 20;
+  list(frame, Rect{0, 0, 100, 20}, props);
+
+  bool sawSelectedFill = false;
+  for (size_t i = 0; i < draw.opCount; ++i) {
+    const auto &op = draw.ops[i];
+    if (op.kind == FakeDrawTarget::Op::Fill && op.paint == PaintKind::Solid &&
+        op.color == Color::Black && op.rect.x == 0 && op.rect.y == 0 &&
+        op.rect.width == 100 && op.rect.height == 20)
+      sawSelectedFill = true;
+  }
+  CHECK(sawSelectedFill);
+  CHECK_EQ(interactions.count(), 1u);
+  CHECK(!hasState(interactions.data()[0].state, StateDisabled));
 }
 
 void testButtonRegistersExpandedHit() {
@@ -652,7 +1125,8 @@ void testBatteryIndicator() {
   CHECK_EQ(charge.rect.width, 9);  // cavity is 18 wide at 50%
   CHECK(charge.paint == PaintKind::Solid);
 
-  // Charging without an icon keeps the solid fill and overlays a bitmap bolt.
+  // Charging without an icon keeps the solid fill and overlays the built-in
+  // bitmap bolt.
   FakeDrawTarget draw2;
   Frame<4> frame2(draw2, device, input, interactions);
   props.charging = true;
@@ -1034,6 +1508,8 @@ void testContentWidthTabBarLayout() {
   bar.gap = 8;
   bar.tabInset = Insets{2, 0, 4, 0};
   bar.contentInset = Insets{2, 8, 2, 8};
+  bar.selectedText.font = 9;
+  bar.selectedText.bold = true;
   tabBar(frame, Rect{0, 0, 480, 40}, bar);
 
   CHECK_EQ(interactions.count(), 2u);
@@ -1043,6 +1519,8 @@ void testContentWidthTabBarLayout() {
   CHECK_EQ(draw.ops[0].rect.width, 34);
   CHECK_EQ(draw.ops[2].rect.x, 62);
   CHECK_EQ(draw.ops[2].rect.width, 52);
+  CHECK_EQ(draw.ops[1].font, 9);
+  CHECK(draw.ops[1].bold);
   InputSnapshot tap;
   tap.touchReleased = true;
   tap.touchX = 70;
@@ -1194,7 +1672,7 @@ void testThemePrimitiveParity() {
   CHECK_EQ(draw4.countKind(FakeDrawTarget::Op::Line), 1u);
   CHECK_EQ(draw4.countKind(FakeDrawTarget::Op::Bitmap), 1u);
 
-  // Charging battery draws one bitmap bolt instead of a dithered fill.
+  // Charging battery draws the built-in bolt bitmap.
   FakeDrawTarget draw5;
   Frame<16> frame5(draw5, device, input, interactions);
   BatteryIndicatorProps battery;
@@ -1358,6 +1836,130 @@ void testListSectionHeaders() {
   // Second section: header height 16 (12 line + 4 gap) + two 40px rows +
   // 20px section gap puts its underline at 16 + 80 + 20 + 12 + 2 = 130.
   CHECK_EQ(secondHeaderY, 130);
+}
+
+void testListWrappedLabelHeights() {
+  // Per-item height: a wrapping label grows its row by the lines it USES,
+  // not by maxLines; a subtitle follows the wrapped label band; and the
+  // "would maxLines already fit rowH" gate still protects touch-sized rows.
+  DeviceContext device = makeDevice();
+  InputSnapshot input;
+  InteractionBuffer<16> interactions;
+
+  // 480 wide, sidePadding 10 -> 460px of label width; charWidth 6 fits 7
+  // ten-char words per line, so ten words wrap onto exactly two lines.
+  const char* longLabel =
+      "aaaaaaaaa aaaaaaaaa aaaaaaaaa aaaaaaaaa aaaaaaaaa "
+      "aaaaaaaaa aaaaaaaaa aaaaaaaaa aaaaaaaaa aaaaaaaaa";
+
+  // Label-only, dense e-ink row (20px holds one 12px line): two used lines
+  // out of a three-line budget grow the row by ONE line height (32), not two.
+  {
+    FakeDrawTarget draw;
+    Frame<16> frame(draw, device, input, interactions);
+    ListItem items[2]{};
+    items[0].label = longLabel;
+    items[1].label = "short";
+    ListProps props;
+    props.items = items;
+    props.count = 2;
+    props.rowHeight = 20;
+    props.sidePadding = 10;
+    props.labelText.maxLines = 3;
+    list(frame, Rect{0, 0, 480, 400}, props);
+    int16_t row0H = 0;
+    int16_t row1Y = -1;
+    for (size_t i = 0; i < draw.opCount; ++i) {
+      const FakeDrawTarget::Op& op = draw.ops[i];
+      if (op.kind != FakeDrawTarget::Op::Fill || op.rect.width != 480) continue;
+      if (op.rect.y == 0) row0H = op.rect.height;
+      if (op.rect.y > 0 && row1Y < 0) row1Y = op.rect.y;
+    }
+    CHECK_EQ(row0H, 32);  // 20 + one extra 12px line, not 20 + 24
+    CHECK_EQ(row1Y, 32);  // the next row starts right below the grown one
+  }
+
+  // Label + subtitle: the row grows the same way, the label band holds both
+  // lines, and the subtitle sits under the band instead of under line one.
+  {
+    FakeDrawTarget draw;
+    Frame<16> frame(draw, device, input, interactions);
+    ListItem items[2]{};
+    items[0].label = longLabel;
+    items[0].subtitle = "Author";
+    items[1].label = "short";
+    items[1].subtitle = "Author";
+    ListProps props;
+    props.items = items;
+    props.count = 2;
+    props.rowHeight = 40;
+    props.sidePadding = 10;
+    props.labelText.maxLines = 3;
+    list(frame, Rect{0, 0, 480, 400}, props);
+    int16_t row0H = 0;
+    int16_t row1H = 0;
+    for (size_t i = 0; i < draw.opCount; ++i) {
+      const FakeDrawTarget::Op& op = draw.ops[i];
+      if (op.kind != FakeDrawTarget::Op::Fill || op.rect.width != 480) continue;
+      if (op.rect.y == 0) row0H = op.rect.height;
+      if (op.rect.y == 52) row1H = op.rect.height;
+    }
+    CHECK_EQ(row0H, 52);
+    CHECK_EQ(row1H, 40);  // a fitting label keeps the uniform height
+    // Subtitle of the grown row: band is (52 - 24 - 12) / 2 = 8 from the row
+    // top, so the subtitle's 12px line starts at 8 + 24 = 32.
+    bool subtitleAt32 = false;
+    for (size_t i = 0; i < draw.opCount; ++i) {
+      const FakeDrawTarget::Op& op = draw.ops[i];
+      if (op.kind == FakeDrawTarget::Op::Text && op.rect.y == 32 && op.rect.height == 12) subtitleAt32 = true;
+    }
+    CHECK(subtitleAt32);
+  }
+
+  // Wrapped SUBTITLE: a maxLines > 1 subtitle that overflows grows the row by
+  // its own extra lines while the label keeps one (the complementary case).
+  {
+    FakeDrawTarget draw;
+    Frame<16> frame(draw, device, input, interactions);
+    ListItem items[1]{};
+    items[0].label = "short";
+    items[0].subtitle = longLabel;
+    ListProps props;
+    props.items = items;
+    props.count = 1;
+    props.rowHeight = 40;
+    props.sidePadding = 10;
+    props.subtitleText.maxLines = 2;
+    list(frame, Rect{0, 0, 480, 400}, props);
+    int16_t row0H = 0;
+    for (size_t i = 0; i < draw.opCount; ++i) {
+      const FakeDrawTarget::Op& op = draw.ops[i];
+      if (op.kind == FakeDrawTarget::Op::Fill && op.rect.width == 480 && op.rect.y == 0) row0H = op.rect.height;
+    }
+    CHECK_EQ(row0H, 52);  // 12 label + 24 wrapped subtitle + 16 base padding
+  }
+
+  // Touch-sized gate: without a subtitle, a 44px row already fits two 12px
+  // lines, so a wrapping two-line-budget label does not grow it.
+  {
+    FakeDrawTarget draw;
+    Frame<16> frame(draw, device, input, interactions);
+    ListItem items[1]{};
+    items[0].label = longLabel;
+    ListProps props;
+    props.items = items;
+    props.count = 1;
+    props.rowHeight = 44;
+    props.sidePadding = 10;
+    props.labelText.maxLines = 2;
+    list(frame, Rect{0, 0, 480, 400}, props);
+    int16_t row0H = 0;
+    for (size_t i = 0; i < draw.opCount; ++i) {
+      const FakeDrawTarget::Op& op = draw.ops[i];
+      if (op.kind == FakeDrawTarget::Op::Fill && op.rect.width == 480 && op.rect.y == 0) row0H = op.rect.height;
+    }
+    CHECK_EQ(row0H, 44);
+  }
 }
 
 
@@ -2066,6 +2668,68 @@ void testKeyboardAltCaseFlip() {
   CHECK(keyboardAltOutputFor(en, QWERTY_KEY_BACKSPACE) == nullptr);
 }
 
+void testTouchTapQueue() {
+  TouchTapQueue<2> taps;
+  CHECK(taps.empty());
+  CHECK(taps.push(10, 20));
+  CHECK(taps.push(30, 40));
+  CHECK_EQ(taps.size(), 2u);
+
+  // Full queues retain current input and report that the oldest tap dropped.
+  CHECK(!taps.push(50, 60));
+  CHECK(taps.overflowed());
+  int16_t x = 0;
+  int16_t y = 0;
+  CHECK(taps.pop(x, y));
+  CHECK_EQ(x, 30);
+  CHECK_EQ(y, 40);
+  CHECK(taps.pop(x, y));
+  CHECK_EQ(x, 50);
+  CHECK_EQ(y, 60);
+  CHECK(!taps.pop(x, y));
+
+  taps.clear();
+  CHECK(taps.empty());
+  CHECK(!taps.overflowed());
+}
+
+void testKeyboardNavigatorAndActivation() {
+  const KeyboardLayout& layout = builtinKeyboardLayout(KeyboardLayoutId::QwertyEn, false, false, true);
+  KeyboardNavigator nav;
+  CHECK_EQ(nav.logicalIndex(layout), 0);
+  CHECK_EQ(nav.selected(layout)->value, '1');
+
+  nav.moveCol(layout, -1);
+  CHECK_EQ(nav.col(), 9);  // wraps within the ten-key digit row
+  nav.moveRow(layout, 1);
+  CHECK_EQ(nav.row(), 1);
+  CHECK_EQ(nav.col(), 9);  // same-width row preserves the column
+  nav.moveRow(layout, 1);
+  CHECK_EQ(nav.row(), 2);
+  CHECK_EQ(nav.col(), 8);  // proportional mapping: ten columns -> nine
+  CHECK(nav.syncToValue(layout, QWERTY_KEY_SPACE));
+  CHECK_EQ(nav.selected(layout)->kind, KeyKind::Space);
+  CHECK(nav.logicalIndex(layout) >= 0);
+
+  KeyboardActivation activation = keyboardActivationFor(layout, 'q');
+  CHECK_EQ(activation.kind, KeyboardActivationKind::Text);
+  CHECK(std::strcmp(activation.text, "q") == 0);
+  activation = keyboardActivationFor(layout, 'q', /*longPress=*/true);
+  CHECK_EQ(activation.kind, KeyboardActivationKind::Text);
+  CHECK(std::strcmp(activation.text, "Q") == 0);
+  CHECK_EQ(keyboardActivationFor(layout, QWERTY_KEY_SHIFT).kind, KeyboardActivationKind::Shift);
+  CHECK_EQ(keyboardActivationFor(layout, QWERTY_KEY_MODE).kind, KeyboardActivationKind::Mode);
+  CHECK_EQ(keyboardActivationFor(layout, QWERTY_KEY_BACKSPACE).kind, KeyboardActivationKind::Delete);
+  CHECK_EQ(keyboardActivationFor(layout, QWERTY_KEY_ENTER).kind, KeyboardActivationKind::Submit);
+  CHECK_EQ(keyboardActivationFor(layout, 32000).kind, KeyboardActivationKind::None);
+
+  const char utf8[] = "a\xc3\xb1z";
+  CHECK_EQ(utf8NextBoundary(utf8, 4, 0), 1u);
+  CHECK_EQ(utf8NextBoundary(utf8, 4, 1), 3u);
+  CHECK_EQ(utf8PreviousBoundary(utf8, 4, 3), 1u);
+  CHECK_EQ(utf8PreviousBoundary(utf8, 4, 4), 3u);
+}
+
 void testTouchHoldRouter() {
   InteractionBuffer<8> interactions;
   const auto rebuild = [&] {
@@ -2086,6 +2750,20 @@ void testTouchHoldRouter() {
   r = router.update(interactions, false, 0, 0, true, 20, 20, false, 1100);
   CHECK_EQ(r.event.value, 'q');
   CHECK(!r.event.longPress);
+
+  // A touch-down repaint can start rebuilding the next frame before the
+  // finger releases. The release must continue routing against the complete
+  // published table while that rebuild is in progress; callers should not
+  // disable input between beginPublishCycle() and publish().
+  interactions.publish();
+  r = router.update(interactions, true, 20, 20, false, 0, 0, true, 1200);
+  CHECK(r.activeChanged);
+  interactions.beginPublishCycle();
+  rebuild();
+  r = router.update(interactions, false, 0, 0, true, 20, 20, false, 1300);
+  CHECK_EQ(r.event.value, 'q');
+  CHECK(!r.event.longPress);
+  interactions.publish();
 
   // Hold past the threshold: long-press fires exactly once at threshold and
   // the timer must NOT re-arm on later frames (the repeat bug), and the real
@@ -2359,7 +3037,15 @@ void testHeaderBorderEdges() {
   // The themed header supplies a 1px divider when the theme's popup style has
   // no border of its own, so default headers match the documented divider.
   screen.header("Top");
-  CHECK_EQ(draw.countKind(FakeDrawTarget::Op::Fill), 2u);  // background + bottom divider
+  bool sawBottomRule = false;
+  for (size_t i = 0; i < draw.opCount; ++i) {
+    const auto &op = draw.ops[i];
+    if (op.kind == FakeDrawTarget::Op::Fill && op.rect.x == 0 &&
+        op.rect.y == 19 && op.rect.width == 200 && op.rect.height == 1)
+      sawBottomRule = true;
+  }
+  CHECK(sawBottomRule);
+  CHECK_EQ(draw.countKind(FakeDrawTarget::Op::Line), 0u);
   CHECK_EQ(draw.countKind(FakeDrawTarget::Op::Stroke), 0u);
 
   FakeDrawTarget boxedDraw;
@@ -2512,6 +3198,38 @@ void testFreeInkAppHandlerOverflowFlag() {
   CHECK(app.handlerOverflowed());
 }
 
+// setThemeRef() takes a pointer to a caller-owned atomic cell (not a raw
+// ThemeTokens*) so a caller can atomically swap which instance it points at
+// -- every app sharing the cell must pick up the change on its very next
+// theme() call, with no re-call to setThemeRef() needed. This is the
+// property the fix (avoiding an in-place struct overwrite a render task
+// could read mid-write) must preserve.
+void testFreeInkAppSharedThemeRefFollowsAtomicSwap() {
+  FakeDrawTarget draw;
+  DeviceContext device{100, 100};
+  FreeInkApp<4, 1> app(draw, device);
+
+  ThemeTokens tokensA;
+  tokensA.rowHeight = 30;
+  ThemeTokens tokensB;
+  tokensB.rowHeight = 60;
+
+  std::atomic<const ThemeTokens *> themeRef{&tokensA};
+  app.setThemeRef(&themeRef);
+  CHECK_EQ(app.theme().rowHeight, 30);
+
+  // Swap which instance the cell points at (as applySharedUiTheme() does:
+  // build the new tokens into a fresh instance, then one atomic store) --
+  // no second setThemeRef() call.
+  themeRef.store(&tokensB, std::memory_order_release);
+  CHECK_EQ(app.theme().rowHeight, 60);
+
+  // nullptr reverts to the owned/default tokens.
+  app.setThemeRef(nullptr);
+  CHECK(&app.theme() != &tokensA);
+  CHECK(&app.theme() != &tokensB);
+}
+
 // Editor canvas: wrapping, caret-line tracking, scroll helpers, and the render
 // window. FakeDrawTarget is monospace (charWidth 6, lineH 12), so widths are
 // exactly 6*strlen — easy to reason about.
@@ -2590,6 +3308,227 @@ void testSwipeGeometry() {
   CHECK(!edgeSwipe(ScreenEdge::Bottom, 200, 413, 300, 313, width, height));
 }
 
+// Filled-capsule slider: one track fill, a value-proportional stadium fill,
+// an outline, and a round handle riding the fill boundary — and a drag-routed
+// hit over the whole pill.
+void testCapsuleSlider() {
+  FakeDrawTarget draw;
+  DeviceContext device = makeDevice();
+  InputSnapshot input;
+  InteractionBuffer<4> interactions;
+  Frame<4> frame(draw, device, input, interactions);
+
+  CapsuleSliderProps props;
+  props.value = 50;
+  props.max = 100;
+  props.action = 7;
+  capsuleSlider(frame, Rect{0, 0, 200, 56}, props);
+  CHECK_EQ(interactions.count(), 1u);
+  CHECK_EQ(interactions.data()[0].action, 7);
+  CHECK_EQ(interactions.data()[0].inputMask, static_cast<uint16_t>(InputTouch | InputDrag));
+  // track + value fill + handle fill; capsule outline + handle outline
+  CHECK_EQ(draw.countKind(FakeDrawTarget::Op::Fill), 3u);
+  CHECK_EQ(draw.countKind(FakeDrawTarget::Op::Stroke), 2u);
+  // stroke 2 -> inner {2,2,196,52}, cap 26, travel 144: at 50% the handle
+  // center lands at x=100 and the fill runs to its far edge (x=126).
+  CHECK_EQ(draw.ops[1].rect.width, 124);
+  CHECK_EQ(draw.ops[1].color, Color::Black);
+
+  // Narrower than the handle: nothing drawn, nothing registered — the step
+  // buttons beside it (sliderRow) still drive the value.
+  const size_t opsBefore = draw.opCount;
+  capsuleSlider(frame, Rect{0, 0, 50, 56}, props);
+  CHECK_EQ(interactions.count(), 1u);
+  CHECK_EQ(draw.opCount, opsBefore);
+}
+
+// Caption + [-][capsule][+][toggle]: caption texts drawn, all four hits
+// registered, and the capsule spanning the gap between the step buttons.
+void testSliderRow() {
+  FakeDrawTarget draw;
+  DeviceContext device = makeDevice();
+  InputSnapshot input;
+  InteractionBuffer<8> interactions;
+  Frame<8> frame(draw, device, input, interactions);
+
+  SliderRowProps props;
+  props.label = "Brightness";
+  props.value = "62%";
+  props.sliderValue = 62;
+  props.sliderAction = 1;
+  props.decrement = 2;
+  props.increment = 2;
+  props.decrementValue = -1;
+  props.incrementValue = 1;
+  props.toggleAction = 3;
+  sliderRow(frame, Rect{0, 0, 300, 76}, props);
+
+  // label + value readout (step glyphs are also text ops)
+  CHECK_EQ(draw.countKind(FakeDrawTarget::Op::Text), 4u);
+  CHECK_EQ(interactions.count(), 4u);
+  int sawMinus = 0, sawPlus = 0, sawToggle = 0, sawDrag = 0;
+  for (size_t i = 0; i < interactions.count(); ++i) {
+    const Interaction &it = interactions.data()[i];
+    if (it.action == 2 && it.value == -1) ++sawMinus;
+    if (it.action == 2 && it.value == 1) ++sawPlus;
+    if (it.action == 3) ++sawToggle;
+    if (it.action == 1 && (it.inputMask & InputDrag)) {
+      ++sawDrag;
+      // caption is 12px + 8 gap: band y=20, height 56. Track spans the gap
+      // between the 56px step buttons: x 64..172 (plus at 180, toggle 244).
+      CHECK_EQ(it.rect.x, 64);
+      CHECK_EQ(it.rect.width, 108);
+    }
+  }
+  CHECK_EQ(sawMinus, 1);
+  CHECK_EQ(sawPlus, 1);
+  CHECK_EQ(sawToggle, 1);
+  CHECK_EQ(sawDrag, 1);
+}
+
+// Tile grid: one hit per tile carrying the item's id and state, checked tiles
+// filled solid, and the height helper matching the laid-out rows.
+void testTileGrid() {
+  FakeDrawTarget draw;
+  DeviceContext device = makeDevice();
+  InputSnapshot input;
+  InteractionBuffer<8> interactions;
+  Frame<8> frame(draw, device, input, interactions);
+
+  TileGridItem items[3];
+  items[0].label = "Night mode";
+  items[0].value = 10;
+  items[1].label = "Refresh";
+  items[1].value = 11;
+  items[1].state = StateChecked;
+  items[2].label = "Sleep";
+  items[2].value = 12;
+
+  TileGridProps props;
+  props.items = items;
+  props.count = 3;
+  props.action = 5;
+  props.tileHeight = 84;
+  CHECK_EQ(tileGridHeight(props.count, props.columns, props.tileHeight, props.gap), 180);
+  CHECK_EQ(tileGridHeight(0, props.columns, props.tileHeight, props.gap), 0);
+
+  tileGrid(frame, Rect{0, 0, 212, 180}, props);
+  CHECK_EQ(interactions.count(), 3u);
+  CHECK_EQ(interactions.data()[1].value, 11);
+  CHECK(hasState(interactions.data()[1].state, StateChecked));
+  CHECK_EQ(draw.countKind(FakeDrawTarget::Op::Text), 3u);
+  // Checked tile (row 0, col 1: x=112, w=100) draws filled black; its
+  // neighbors stay white cards.
+  bool checkedFilled = false, normalWhite = false;
+  for (size_t i = 0; i < draw.opCount; ++i) {
+    const FakeDrawTarget::Op &op = draw.ops[i];
+    if (op.kind != FakeDrawTarget::Op::Fill) continue;
+    if (op.rect.x == 112 && op.rect.y == 0) checkedFilled = op.color == Color::Black;
+    if (op.rect.x == 0 && op.rect.y == 0) normalWhite = op.color == Color::White;
+  }
+  CHECK(checkedFilled);
+  CHECK(normalWhite);
+  // Second row starts below the first plus the gap.
+  CHECK_EQ(interactions.data()[2].rect.y, 96);
+}
+
+// Sheet chrome: body fill with corners rounded on the free edge, a rule and a
+// centered grabber along that edge, a dismiss hit over the rest of the
+// screen, and a content rect that excludes the grabber band.
+void testSheet() {
+  FakeDrawTarget draw;
+  DeviceContext device = makeDevice();
+  InputSnapshot input;
+  InteractionBuffer<4> interactions;
+  Frame<4> frame(draw, device, input, interactions);
+
+  SheetProps props;
+  props.dismissAction = 9;
+  const Rect rect{0, 0, 480, 300};
+  sheet(frame, rect, props);
+  CHECK_EQ(draw.countKind(FakeDrawTarget::Op::Fill), 3u);  // body + rule + grabber
+  CHECK_EQ(draw.ops[0].corners, static_cast<uint8_t>(CornersBottom));
+  CHECK_EQ(draw.ops[1].rect.y, 298);  // 2px rule hugging the free edge
+  CHECK_EQ(draw.ops[1].rect.height, 2);
+  CHECK_EQ(draw.ops[2].rect.x, 204);  // 72px grabber, centered
+  CHECK_EQ(draw.ops[2].rect.y, 279);  // inset 16 above the free edge
+  CHECK_EQ(interactions.count(), 1u);
+  CHECK_EQ(interactions.data()[0].action, 9);
+  CHECK_EQ(interactions.data()[0].rect.y, 300);
+  CHECK_EQ(interactions.data()[0].rect.height, 500);
+
+  const Rect content = sheetContentRect(rect, props);
+  CHECK_EQ(content.height, 271);  // minus margin 8 + grabber 5 + inset 16
+
+  // Bottom-anchored: rule and grabber flip to the sheet's top edge, dismiss
+  // covers the screen above it.
+  FakeDrawTarget draw2;
+  InteractionBuffer<4> interactions2;
+  Frame<4> frame2(draw2, device, input, interactions2);
+  SheetProps bottom = props;
+  bottom.anchor = SheetEdge::Bottom;
+  sheet(frame2, Rect{0, 500, 480, 300}, bottom);
+  CHECK_EQ(draw2.ops[0].corners, static_cast<uint8_t>(CornersTop));
+  CHECK_EQ(draw2.ops[1].rect.y, 500);
+  CHECK_EQ(draw2.ops[2].rect.y, 516);
+  CHECK_EQ(interactions2.data()[0].rect.y, 0);
+  CHECK_EQ(interactions2.data()[0].rect.height, 500);
+}
+
+// The themed Screen wrappers for the control-center pieces: sheet() clamps
+// the content area to the sheet's usable part, and sliderRow()/tileGrid()
+// reserve exactly the bands their content needs.
+void testScreenControlCenterWrappers() {
+  FakeDrawTarget draw;
+  DeviceContext device = makeDevice();
+  InputSnapshot input;
+  InteractionBuffer<16> interactions;
+  Frame<16> frame(draw, device, input, interactions);
+  ThemeTokens theme;
+  Screen<16> screen(frame, theme);
+
+  SheetProps panel;
+  const Rect content = screen.sheet(panel, 400);
+  // Free-edge band: margin 8 + grabber 5 + inset 16.
+  CHECK_EQ(content.height, 371);
+  CHECK_EQ(screen.body().y, 0);
+  CHECK_EQ(screen.body().height, 371);
+
+  SliderRowProps row;
+  row.label = "Brightness";
+  row.value = "62%";
+  row.sliderValue = 62;
+  row.sliderAction = 1;
+  row.decrement = 2;
+  row.increment = 2;
+  screen.sliderRow(row);
+  // capsule (drag) + two step buttons
+  CHECK_EQ(interactions.count(), 3u);
+  // caption line (12) + spaceMd + control band (minTouchSize 44 + 12) + gap
+  CHECK_EQ(screen.body().y, 12 + 8 + 56 + 8);
+
+  TileGridItem items[2];
+  items[0].label = "Night mode";
+  items[0].value = 0;
+  items[1].label = "Refresh";
+  items[1].value = 1;
+  TileGridProps grid;
+  grid.items = items;
+  grid.count = 2;
+  grid.action = 3;
+  const int16_t before = screen.body().y;
+  screen.tileGrid(grid);
+  CHECK_EQ(interactions.count(), 5u);
+  // one 84px row (2*minTouchSize-4) + spaceSm gap
+  CHECK_EQ(screen.body().y, static_cast<int16_t>(before + 84 + 4));
+
+  CapsuleSliderProps capsule;
+  capsule.value = 30;
+  capsule.action = 4;
+  screen.capsuleSlider(capsule, 56);
+  CHECK_EQ(interactions.count(), 6u);
+}
+
 }  // namespace
 
 int main() {
@@ -2603,14 +3542,23 @@ int main() {
   testTouchRouting();
   testDisabledSkipsTouch();
   testLongPressRouting();
+  testDragRouting();
   testFocusNavigationWrapsAndSkips();
   testConfirmIgnoresStaleFocus();
   testConfirmRespectsInputMask();
   testEdgeButtonsAndSwipes();
+  testPublishCycleIsolatesReaders();
   testListHelpers();
   testListVirtualization();
   testListClampsBadTopIndex();
+  testListItemsWindow();
+  testListItemsWindowStopsBeforePastEndMeasurement();
+  testListItemsWindowSkipsUnavailablePartialPreview();
+  testListNavLayoutFeedback();
+  testListNavConvergesThroughRealList();
   testListCanUseFullTitleWidthWithShortValue();
+  testInxListPrimitivesStayOptIn();
+  testSelectedVisualOnlyDisabledListRow();
   testButtonRegistersExpandedHit();
   testProgressBarClamps();
   testBatteryIndicator();
@@ -2626,6 +3574,7 @@ int main() {
   testThemePrimitiveParity();
   testRotationAndBitmapSampling();
   testListSectionHeaders();
+  testListWrappedLabelHeights();
   testCrossInkSleepScreenComposition();
   testCoverCarousel();
   testLayoutTextWrapping();
@@ -2644,6 +3593,8 @@ int main() {
   testNumberRowLayouts();
   testKeyboardEntryLongPressAlt();
   testKeyboardAltCaseFlip();
+  testTouchTapQueue();
+  testKeyboardNavigatorAndActivation();
   testTouchHoldRouter();
   testKeyboardBottomHitOverflow();
   testHeaderLeadingButton();
@@ -2655,8 +3606,14 @@ int main() {
   testScreenAnchoredLayout();
   testFreeInkAppDispatchesScreenActions();
   testFreeInkAppHandlerOverflowFlag();
+  testFreeInkAppSharedThemeRefFollowsAtomicSwap();
   testTextArea();
   testSwipeGeometry();
+  testCapsuleSlider();
+  testSliderRow();
+  testTileGrid();
+  testSheet();
+  testScreenControlCenterWrappers();
 
   std::printf("%d checks, %d failed\n", checksRun, checksFailed);
   return checksFailed == 0 ? 0 : 1;

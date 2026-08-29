@@ -2,6 +2,7 @@
 
 #include <BoardConfig.h>
 #include <SPI.h>
+#include <new>
 #include <driver/gpio.h>
 
 #include "SdmmcBlockDevice.h"  // no-op unless FREEINK_SD_SDMMC
@@ -16,6 +17,8 @@ SDCardManager SDCardManager::instance;
 SDCardManager::SDCardManager() {}
 
 bool SDCardManager::begin() {
+  if (initialized) return true;
+
   // Native SDMMC: SdFat can't drive SDIO, so mount a plain FsVolume on the esp-idf
   // SDMMC block device. FsFile from this volume is the same type the SPI path
   // returns, so the public API and consumers are unchanged.
@@ -29,7 +32,18 @@ bool SDCardManager::begin() {
   // The SD power-enable (sd.powerEnable) is driven by SdmmcBlockDevice itself, which
   // reproduces the OEM's timed HIGH->LOW power-cycle around each mount attempt — do
   // NOT assert it here (holding it HIGH going in breaks that reset sequence).
-  if (!_dev) _dev = new freeink::SdmmcBlockDevice();
+  if (_dev) {
+    // detachFilesystemForRawAccess() intentionally keeps the host and card
+    // alive for USB-MSC. Tear that session down before mounting the volume
+    // again, otherwise sdmmc_host_init() rejects the second initialization.
+    _dev->end();
+  } else {
+    _dev = new (std::nothrow) freeink::SdmmcBlockDevice();
+    if (!_dev) {
+      if (Serial) Serial.printf("[%lu] [SD] SDMMC block-device allocation failed\n", millis());
+      return false;
+    }
+  }
   if (!_dev->begin(BoardConfig::ACTIVE.sdmmc)) {
     if (Serial) Serial.printf("[%lu] [SD] SDMMC init failed\n", millis());
     initialized = false;
@@ -49,6 +63,16 @@ bool SDCardManager::begin() {
   cachedTotalBytes = static_cast<uint64_t>(vol().clusterCount()) * vol().bytesPerCluster();
   cachedUsedBytesValid = false;
   return initialized;
+}
+
+FsBlockDeviceInterface* SDCardManager::detachFilesystemForRawAccess() {
+  if (!initialized || !_dev) return nullptr;
+  _vol.end();
+  initialized = false;
+  cachedTotalBytes = 0;
+  cachedUsedBytes = 0;
+  cachedUsedBytesValid = false;
+  return _dev;
 }
 #else
 SDCardManager::SDCardManager() : sd() {}
@@ -103,24 +127,36 @@ bool SDCardManager::begin() {
     digitalWrite(BoardConfig::ACTIVE.display.cs, HIGH);
   }
 
-  bool cardReady = false;
-#if FREEINK_MCU_S3 || FREEINK_MCU_ESP32
-  if (BoardConfig::ACTIVE.sd.separateSpi && SD_SCLK >= 0 && SD_MOSI >= 0 && SD_MISO >= 0) {
+#if FREEINK_DEVICE_EEGO_A4
+  if (BoardConfig::ACTIVE.board == BoardConfig::Board::EegoA4 && BoardConfig::ACTIVE.sd.separateSpi && SD_SCLK >= 0 &&
+      SD_MOSI >= 0 && SD_MISO >= 0) {
     static SPIClass dedicatedSdSpi(HSPI);
     // End each transaction in the task that started it; the bus itself remains dedicated HSPI.
-    cardReady = dedicatedSdSpi.begin(SD_SCLK, SD_MISO, SD_MOSI, SD_CS) &&
-                sd.begin(SdSpiConfig(SD_CS, SHARED_SPI | USER_SPI_BEGIN, SPI_FQ, &dedicatedSdSpi));
-  } else {
-#endif
-    if (SD_SCLK >= 0 && SD_MOSI >= 0 && SD_MISO >= 0) {
-      SPI.begin(SD_SCLK, SD_MISO, SD_MOSI, SD_CS);
+    const bool cardReady = dedicatedSdSpi.begin(SD_SCLK, SD_MISO, SD_MOSI, SD_CS) &&
+                           sd.begin(SdSpiConfig(SD_CS, SHARED_SPI | USER_SPI_BEGIN, SPI_FQ, &dedicatedSdSpi));
+    if (!cardReady) {
+      if (Serial)
+        Serial.printf(
+            "[%lu] [SD] SD card not detected (err=0x%02X data=0x%02X cs=%d sclk=%d miso=%d mosi=%d clk=%luHz)\n",
+            millis(), sd.sdErrorCode(), sd.sdErrorData(), SD_CS, SD_SCLK, SD_MISO, SD_MOSI, (unsigned long)SPI_FQ);
+      initialized = false;
+      cachedTotalBytes = 0;
+      cachedUsedBytesValid = false;
+    } else {
+      if (Serial) Serial.printf("[%lu] [SD] SD card detected\n", millis());
+      initialized = true;
+      cachedTotalBytes = static_cast<uint64_t>(vol().clusterCount()) * vol().bytesPerCluster();
+      cachedUsedBytesValid = false;
     }
-    cardReady = sd.begin(SD_CS, SPI_FQ);
-#if FREEINK_MCU_S3 || FREEINK_MCU_ESP32
+    return initialized;
   }
 #endif
 
-  if (!cardReady) {
+  if (SD_SCLK >= 0 && SD_MOSI >= 0 && SD_MISO >= 0) {
+    SPI.begin(SD_SCLK, SD_MISO, SD_MOSI, SD_CS);
+  }
+
+  if (!sd.begin(SD_CS, SPI_FQ)) {
     if (Serial)
       Serial.printf(
           "[%lu] [SD] SD card not detected (err=0x%02X data=0x%02X cs=%d sclk=%d miso=%d mosi=%d clk=%luHz)\n",
@@ -304,11 +340,6 @@ bool SDCardManager::ensureDirectoryExists(const char* path) {
 }
 
 bool SDCardManager::openFileForRead(const char* moduleName, const char* path, FsFile& file) {
-  if (!vol().exists(path)) {
-    if (Serial) Serial.printf("[%lu] [%s] File does not exist: %s\n", millis(), moduleName, path);
-    return false;
-  }
-
   file = vol().open(path, O_RDONLY);
   if (!file) {
     if (Serial) Serial.printf("[%lu] [%s] Failed to open file for reading: %s\n", millis(), moduleName, path);

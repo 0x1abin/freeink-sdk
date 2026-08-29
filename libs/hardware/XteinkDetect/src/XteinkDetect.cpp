@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <BoardConfig.h>
 #include <Wire.h>
+#include <driver/gpio.h>
 
 #include <string.h>
 
@@ -137,6 +138,11 @@ bool runDisplayProbePass(const EpdProbePins& p, uint8_t ver[5], uint8_t* flg, ui
   // so we don't gate on BUSY; a flat delay covers every UC81xx power-up. The
   // panel driver's own begin() resets again afterwards, so this leaves no state.
   if (p.rst >= 0) {
+    // The sleep path holds RESET at a board-safe level and that per-pin hold
+    // survives the wake reset. Controller detection runs before EpdBus::begin(),
+    // so it must release the hold itself or every digitalWrite below silently
+    // bounces off the retained latch and the probe can select the wrong driver.
+    gpio_hold_dis(static_cast<gpio_num_t>(p.rst));
     pinMode(p.rst, OUTPUT);
     digitalWrite(p.rst, HIGH);
     delay(2);
@@ -222,13 +228,31 @@ DisplayControllerVerdict probeDisplayController(const EpdProbePins& p, uint8_t v
   // VER = FF FF FF FF FF (blank/unreadable LUT_VER area) with FLG = 0x13 (the
   // datasheet's idle default), which the uniform-VER floating-bus test wrongly
   // rejects. A pulled-up floating bus also reads FF — so require POSITIVE
-  // evidence: the RMTP dump must start with the 0xA5 MTP key, which only a
-  // real UC81xx with a programmed MTP can produce (and without which OTP-mode
-  // refreshes wouldn't run anyway). UC8253 has no RMTP command; its read
-  // floats and can never match.
-  if (!confirmed && flgDriven && verAgree && verIsFloating(ver1) && ver1[0] == 0xFF && g_probeDiag.mtpValid &&
-      g_probeDiag.mtp[0] == 0xA5) {
-    confirmed = true;
+  // evidence from RMTP. Two acceptable shapes:
+  //   * mtp[0] == 0xA5: a programmed MTP's refresh-enable key. Unambiguous.
+  //   * a NON-UNIFORM dump that repeats byte-for-byte on a second read: the
+  //     field UC8279d modules ship a BLANK MTP (all zeros except the LUT
+  //     version stamp at 0x01A — never 0xA5), but the silicon still DRIVES
+  //     the RMTP readback. A UC8253 has no 0xA2 command, so its read floats
+  //     to a uniform pull-up pattern (field-confirmed FF); floating garbage
+  //     can be non-uniform once but cannot repeat 48 bytes exactly.
+  if (!confirmed && flgDriven && verAgree && verIsFloating(ver1) && ver1[0] == 0xFF && g_probeDiag.mtpValid) {
+    if (g_probeDiag.mtp[0] == 0xA5) {
+      confirmed = true;
+    } else {
+      bool uniform = true;
+      for (size_t i = 1; i < sizeof(g_probeDiag.mtp); i++) {
+        if (g_probeDiag.mtp[i] != g_probeDiag.mtp[0]) {
+          uniform = false;
+          break;
+        }
+      }
+      if (!uniform) {
+        uint8_t raw2[sizeof(g_probeDiag.mtp) + 1] = {0};
+        epdCmdRead(p, UC81XX_CMD_RMTP, raw2, sizeof(raw2));
+        if (memcmp(g_probeDiag.mtp, raw2 + 1, sizeof(g_probeDiag.mtp)) == 0) confirmed = true;
+      }
+    }
   }
   releaseDisplayPins(p);
 

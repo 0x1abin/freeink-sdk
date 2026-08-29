@@ -1,5 +1,9 @@
 #pragma once
 
+#if FREEINK_DEVICE_MURPHY_M4
+#include <MurphyM4Batch.h>
+#endif
+
 // SSD1677 panel driver — Xteink X4 and the de-link ESP32-S3 board (both drive
 // an 800x480 GDEQ0426T82 over the same controller). B/W with software 2-bit
 // grayscale via a custom LUT, dual-RAM (BW 0x24 / RED 0x26) differential fast
@@ -112,6 +116,9 @@ class Ssd1677Driver : public PanelDriver {
   void refresh(EpdBus& bus, RefreshMode mode, bool turnOff, bool async = false);
   // Blocking CLOCK_ON|ANALOG_ON activation; no-op when already powered.
   void powerOn(EpdBus& bus);
+  // Documented SSD1677 analog/oscillator shutdown. Used after a 0xFC update
+  // when turnOff was requested and by deepSleep().
+  void powerOffController(EpdBus& bus);
   void displayImpl(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff, bool async);
 
   const Ssd1677Config& _cfg;
@@ -130,6 +137,9 @@ class Ssd1677Driver : public PanelDriver {
   bool _inGrayscaleMode = false;
   bool _customLutActive = false;
   bool _darkBackground = false;
+  // Async 0xFC updates cannot issue the separate power-off activation until the
+  // display waveform completes; displayFinish() consumes this flag.
+  bool _pendingPowerOff = false;
   // First paint after begin() (boot or deep-sleep wake) must be a full refresh to
   // clear whatever is physically on the panel (e.g. the black boot screen) and set
   // a clean differential baseline. Only armed for boards whose self-powering fast
@@ -139,5 +149,8 @@ class Ssd1677Driver : public PanelDriver {
 
 // Singleton accessor (Meyers, zero-heap). Selects the config for the active board.
 PanelDriver& ssd1677Driver();
+#if FREEINK_DEVICE_MURPHY_M4
+PanelDriver& ssd1677MurphyM4Driver(MurphyM4Batch batch);
+#endif
 
 }  // namespace freeink

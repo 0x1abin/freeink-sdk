@@ -1,4 +1,4 @@
-#include "Ssd1683Driver.h"
+#include "PaperMonoDriver.h"
 
 #include <BoardConfig.h>
 #include <esp_heap_caps.h>
@@ -12,6 +12,10 @@ namespace {
 constexpr uint8_t CMD_SOFT_RESET = 0x12;
 constexpr uint8_t CMD_WRITE_NEW = 0x24;
 constexpr uint8_t CMD_WRITE_OLD = 0x26;
+constexpr uint8_t CMD_SET_RAM_X_RANGE = 0x44;
+constexpr uint8_t CMD_SET_RAM_Y_RANGE = 0x45;
+constexpr uint8_t CMD_SET_RAM_X_COUNTER = 0x4E;
+constexpr uint8_t CMD_SET_RAM_Y_COUNTER = 0x4F;
 constexpr uint16_t WIDTH = 800;
 constexpr uint16_t HEIGHT = 480;
 constexpr uint16_t WIDTH_BYTES = WIDTH / 8;
@@ -145,22 +149,22 @@ void sortAscending(uint16_t* values, uint8_t count) {
 }
 }  // namespace
 
-Ssd1683Driver& ssd1683Driver() {
-  static Ssd1683Driver driver;
+PaperMonoDriver& paperMonoDriver() {
+  static PaperMonoDriver driver;
   return driver;
 }
 
-void ssd1683SetGrayParams(const Ssd1683GrayParams& params) { ssd1683Driver().setGrayParams(params); }
-void ssd1683AbortGray() { ssd1683Driver().abortGray(); }
-void ssd1683ResetGray() { ssd1683Driver().resetGray(); }
+void paperMonoSetGrayParams(const PaperMonoGrayParams& params) { paperMonoDriver().setGrayParams(params); }
+void paperMonoAbortGray() { paperMonoDriver().abortGray(); }
+void paperMonoResetGray() { paperMonoDriver().resetGray(); }
 
-uint32_t Ssd1683Driver::spiHz() const {
+uint32_t PaperMonoDriver::spiHz() const {
   return BoardConfig::ACTIVE.displaySpiHz != 0 ? BoardConfig::ACTIVE.displaySpiHz : 20000000;
 }
 
-PanelGeometry Ssd1683Driver::geometry() const { return {WIDTH, HEIGHT, WIDTH_BYTES, BUFFER_SIZE}; }
+PanelGeometry PaperMonoDriver::geometry() const { return {WIDTH, HEIGHT, WIDTH_BYTES, BUFFER_SIZE}; }
 
-bool Ssd1683Driver::allocateBuffers() {
+bool PaperMonoDriver::allocateBuffers() {
   const auto alloc = [](uint8_t*& ptr, size_t size) {
     if (!ptr) ptr = static_cast<uint8_t*>(heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
     return ptr != nullptr;
@@ -178,7 +182,7 @@ bool Ssd1683Driver::allocateBuffers() {
   return ok;
 }
 
-void Ssd1683Driver::begin(EpdBus& bus) {
+void PaperMonoDriver::begin(EpdBus& bus) {
   allocateBuffers();
   bus.reset();
   initController(bus);
@@ -194,14 +198,16 @@ void Ssd1683Driver::begin(EpdBus& bus) {
   _displayWorkGeneration = 0;
   _controllerPowered = false;
   _lutState = LutState::Unknown;
+  _windowBaselineValid = false;
   resetGray();
 }
 
-void Ssd1683Driver::initController(EpdBus& bus) {
+void PaperMonoDriver::initController(EpdBus& bus) {
   bus.cmd(CMD_SOFT_RESET);
-  bus.waitBusy("SSD1683 reset");
+  bus.waitBusy("PaperMono reset");
   _controllerPowered = false;
   _lutState = LutState::Unknown;
+  _windowBaselineValid = false;
 
   bus.cmd(0x18);
   bus.data(0x80);
@@ -222,14 +228,14 @@ void Ssd1683Driver::initController(EpdBus& bus) {
   // raster transform; X+/Y+ adds a visible left/right mirror on this hardware.
   bus.data(0x02);
 
-  bus.cmd(0x44);
+  bus.cmd(CMD_SET_RAM_X_RANGE);
   const uint16_t xStart = WIDTH - 1;
   const uint16_t xEnd = 0;
   bus.data(static_cast<uint8_t>(xStart & 0xFF));
   bus.data(static_cast<uint8_t>(xStart >> 8));
   bus.data(static_cast<uint8_t>(xEnd & 0xFF));
   bus.data(static_cast<uint8_t>(xEnd >> 8));
-  bus.cmd(0x45);
+  bus.cmd(CMD_SET_RAM_Y_RANGE);
   bus.data(0x00);
   bus.data(0x00);
   bus.data(static_cast<uint8_t>((HEIGHT - 1) & 0xFF));
@@ -243,17 +249,46 @@ void Ssd1683Driver::initController(EpdBus& bus) {
   _initialized = true;
 }
 
-void Ssd1683Driver::resetRamCounter(EpdBus& bus) {
-  const uint16_t xStart = WIDTH - 1;
-  bus.cmd(0x4E);
+void PaperMonoDriver::setRamWindow(EpdBus& bus, uint16_t x, uint16_t y, uint16_t w, uint16_t h) {
+  // Paper Mono uses X-/Y+ data entry. Reversing each source row already
+  // aligns framebuffer X with controller X; mirroring the RAM X range again
+  // moves the driven rectangle to WIDTH-x-w. Only Y needs the mount flip.
+  const uint16_t xStart = static_cast<uint16_t>(x + w - 1);
+  const uint16_t xEnd = x;
+  const uint16_t yStart = static_cast<uint16_t>(HEIGHT - y - h);
+  const uint16_t yEnd = static_cast<uint16_t>(HEIGHT - 1 - y);
+
+  bus.cmd(CMD_SET_RAM_X_RANGE);
   bus.data(static_cast<uint8_t>(xStart & 0xFF));
   bus.data(static_cast<uint8_t>(xStart >> 8));
-  bus.cmd(0x4F);
+  bus.data(static_cast<uint8_t>(xEnd & 0xFF));
+  bus.data(static_cast<uint8_t>(xEnd >> 8));
+  bus.cmd(CMD_SET_RAM_Y_RANGE);
+  bus.data(static_cast<uint8_t>(yStart & 0xFF));
+  bus.data(static_cast<uint8_t>(yStart >> 8));
+  bus.data(static_cast<uint8_t>(yEnd & 0xFF));
+  bus.data(static_cast<uint8_t>(yEnd >> 8));
+  bus.cmd(CMD_SET_RAM_X_COUNTER);
+  bus.data(static_cast<uint8_t>(xStart & 0xFF));
+  bus.data(static_cast<uint8_t>(xStart >> 8));
+  bus.cmd(CMD_SET_RAM_Y_COUNTER);
+  bus.data(static_cast<uint8_t>(yStart & 0xFF));
+  bus.data(static_cast<uint8_t>(yStart >> 8));
+}
+
+void PaperMonoDriver::restoreFullRamWindow(EpdBus& bus) { setRamWindow(bus, 0, 0, WIDTH, HEIGHT); }
+
+void PaperMonoDriver::resetRamCounter(EpdBus& bus) {
+  const uint16_t xStart = WIDTH - 1;
+  bus.cmd(CMD_SET_RAM_X_COUNTER);
+  bus.data(static_cast<uint8_t>(xStart & 0xFF));
+  bus.data(static_cast<uint8_t>(xStart >> 8));
+  bus.cmd(CMD_SET_RAM_Y_COUNTER);
   bus.data(0x00);
   bus.data(0x00);
 }
 
-void Ssd1683Driver::writePlane(EpdBus& bus, uint8_t command, const uint8_t* data) {
+void PaperMonoDriver::writePlane(EpdBus& bus, uint8_t command, const uint8_t* data) {
   if (!data) return;
   resetRamCounter(bus);
   bus.cmd(command);
@@ -276,21 +311,50 @@ void Ssd1683Driver::writePlane(EpdBus& bus, uint8_t command, const uint8_t* data
   bus.endTxn();
 }
 
-void Ssd1683Driver::activate(EpdBus& bus, uint8_t control) {
+void PaperMonoDriver::writePlaneWindow(EpdBus& bus, uint8_t command, const uint8_t* data, uint16_t x, uint16_t y,
+                                       uint16_t w, uint16_t h) {
+  if (!data) return;
+  setRamWindow(bus, x, y, w, h);
+  const uint16_t firstByte = x / 8;
+  const uint16_t widthBytes = w / 8;
+  uint16_t staged = 0;
+
+  bus.cmd(command);
+  bus.beginTxn();
+  for (uint16_t rowOffset = 0; rowOffset < h; ++rowOffset) {
+    const uint16_t sourceY = static_cast<uint16_t>(y + h - 1 - rowOffset);
+    const uint32_t rowBase = static_cast<uint32_t>(sourceY) * WIDTH_BYTES;
+    for (uint16_t byteOffset = 0; byteOffset < widthBytes; ++byteOffset) {
+      const uint16_t sourceByte = static_cast<uint16_t>(firstByte + widthBytes - 1 - byteOffset);
+      ROTATE_CHUNK[staged++] = REVERSE_BITS_LUT[data[rowBase + sourceByte]];
+      if (staged == ROTATE_CHUNK_BYTES) {
+        bus.rawWriteBytes(ROTATE_CHUNK, staged);
+        staged = 0;
+      }
+    }
+  }
+  if (staged > 0) bus.rawWriteBytes(ROTATE_CHUNK, staged);
+  bus.endTxn();
+}
+
+void PaperMonoDriver::activate(EpdBus& bus, uint8_t control) {
+  // An activation may swap or consume the controller plane roles. A future
+  // window update must not trust them until they are explicitly re-seeded.
+  _windowBaselineValid = false;
   bus.cmd(0x22);
   bus.data(control);
   bus.cmd(0x20);
-  bus.waitRefreshComplete("SSD1683 refresh");
+  bus.waitRefreshComplete("PaperMono refresh");
 }
 
-void Ssd1683Driver::activateOtp(EpdBus& bus) {
+void PaperMonoDriver::activateOtp(EpdBus& bus) {
   const bool warm = _controllerPowered && _lutState == LutState::OtpBw;
   activate(bus, warm ? CTRL_DISPLAY_HOLD_WARM : CTRL_OTP_BW_HOLD);
   _controllerPowered = true;
   _lutState = LutState::OtpBw;
 }
 
-void Ssd1683Driver::runBootCleanPass(EpdBus& bus, const uint8_t* newPlane, const uint8_t* oldPlane) {
+void PaperMonoDriver::runBootCleanPass(EpdBus& bus, const uint8_t* newPlane, const uint8_t* oldPlane) {
   // First paints after a cold boot: the previous firmware image (boot logo,
   // whatever was on the glass) dwelled for seconds, and one non-flashing pass
   // under-erases that residue. Run the same drive a second time so every
@@ -311,13 +375,13 @@ void Ssd1683Driver::runBootCleanPass(EpdBus& bus, const uint8_t* newPlane, const
   }
 }
 
-void Ssd1683Driver::powerOffController(EpdBus& bus) {
+void PaperMonoDriver::powerOffController(EpdBus& bus) {
   if (!_controllerPowered) return;
   activate(bus, CTRL_POWER_OFF);
   _controllerPowered = false;
 }
 
-void Ssd1683Driver::loadCustomLut(EpdBus& bus, const uint8_t lut[111]) {
+void PaperMonoDriver::loadCustomLut(EpdBus& bus, const uint8_t lut[111]) {
   bus.cmd(0x32);
   bus.data(lut, 105);
   // The analog registers are volatile across reset/deep-sleep, and the OTP
@@ -339,7 +403,7 @@ void Ssd1683Driver::loadCustomLut(EpdBus& bus, const uint8_t lut[111]) {
 // is the only difference: white alternates to avoid a visible dark hold, gray
 // makes a closed local excursion, and black groups its release before one
 // continuous black settle instead of bleaching the endpoint on every repeat.
-uint16_t Ssd1683Driver::makePostCleanLut(uint8_t out[111]) const {
+uint16_t PaperMonoDriver::makePostCleanLut(uint8_t out[111]) const {
   WaveLut lut;
   lut.clear();
   if (_tri.postCleanCycles == 0) {
@@ -391,7 +455,7 @@ uint16_t Ssd1683Driver::makePostCleanLut(uint8_t out[111]) const {
 // frames / 320 ms total, every class exactly DC balanced, and the middle tone
 // lands at ~40% of the weak-rail swing -- clearly separated from both
 // endpoints instead of the previous near-black.
-uint16_t Ssd1683Driver::makeTriLut(uint8_t out[111]) const {
+uint16_t PaperMonoDriver::makeTriLut(uint8_t out[111], bool bgTopUp) const {
   WaveLut lut;
   lut.clear();
 
@@ -416,7 +480,10 @@ uint16_t Ssd1683Driver::makeTriLut(uint8_t out[111]) const {
       lut.setVs(2, group, phase, VS_BLACK);
       lut.setVs(3, group, phase, VS_WHITE);
     }
-    if (topUp) {
+    // Overlay passes leave entry 0 fully idle: there, entry 0 holds every
+    // undriven pixel — including unchanged BLACK text, not just background —
+    // and the white-biased top-up would visibly bleach it each page.
+    if (topUp && bgTopUp) {
       lut.setVs(0, group, 0, VS_BLACK);
       lut.setVs(0, group, 1, VS_WHITE);
     }
@@ -484,7 +551,7 @@ uint16_t Ssd1683Driver::makeTriLut(uint8_t out[111]) const {
 // force it to the endpoint opposite the target and make the OTP transition
 // definite. `forceAll` does the same for every pixel when the glass history is
 // unknown or the caller explicitly requests a full resync.
-bool Ssd1683Driver::runOtpUpdate(EpdBus& bus, const uint8_t* bwTarget, bool forceAll) {
+bool PaperMonoDriver::runOtpUpdate(EpdBus& bus, const uint8_t* bwTarget, bool forceAll) {
   if (!bwTarget || !allocateBuffers()) return false;
   if (!_initialized) {
     bus.reset();
@@ -565,7 +632,8 @@ bool Ssd1683Driver::runOtpUpdate(EpdBus& bus, const uint8_t* bwTarget, bool forc
   return true;
 }
 
-bool Ssd1683Driver::runUpdate(EpdBus& bus, const uint8_t* bwTarget, bool useGray, bool corrective) {
+bool PaperMonoDriver::runUpdate(EpdBus& bus, const uint8_t* bwTarget, bool useGray, bool corrective,
+                                bool overlayOnly) {
   if (!useGray) {
     const bool otpRan = runOtpUpdate(bus, bwTarget, corrective);
     if (otpRan) _displayCommitted = true;
@@ -600,7 +668,14 @@ bool Ssd1683Driver::runUpdate(EpdBus& bus, const uint8_t* bwTarget, bool useGray
     const uint8_t old24 = _glassNonWhite[i];
     const uint8_t old26 = _glassBlack[i];
     const uint8_t changedMask = static_cast<uint8_t>((old24 ^ q24) | (old26 ^ q26));
-    const uint8_t driveMask = corrective ? 0xFFu : static_cast<uint8_t>(changedMask | q24);
+    // Overlay: the B/W base already reached the glass through its own OTP
+    // activation (the host displayed it before staging gray planes), so only
+    // the pixels whose class actually changes — the AA grays — may be driven.
+    // Re-driving the whole non-white body here is what reads as a full-screen
+    // flash. The combined single-activation path keeps `| q24` because there
+    // the tri waveform is the only drive the page gets.
+    const uint8_t driveMask =
+        corrective ? 0xFFu : (overlayOnly ? changedMask : static_cast<uint8_t>(changedMask | q24));
     changedBits |= corrective ? 0xFFu : changedMask;
 #ifdef ENABLE_SERIAL_LOG
     changed += corrective ? 8u
@@ -614,7 +689,7 @@ bool Ssd1683Driver::runUpdate(EpdBus& bus, const uint8_t* bwTarget, bool useGray
 
   const unsigned long started = millis();
   uint8_t lut[111];
-  const uint16_t firstFrames = makeTriLut(lut);
+  const uint16_t firstFrames = makeTriLut(lut, /*bgTopUp=*/!overlayOnly);
   uint16_t cleanFrames = 0;
   uint8_t stages = 1;
   uint32_t cleanedPixels = 0;
@@ -624,7 +699,12 @@ bool Ssd1683Driver::runUpdate(EpdBus& bus, const uint8_t* bwTarget, bool useGray
   loadCustomLut(bus, lut);
   activate(bus, _controllerPowered ? CTRL_DISPLAY_HOLD_WARM : CTRL_CUSTOM_HOLD_COLD);
   _controllerPowered = true;
-  runBootCleanPass(bus, _sel24, _sel26);
+  // No boot-clean pass here: re-running the tri LUT is not direction-safe the
+  // way the OTP B/W waveform is. Its activation kick charges driven pixels
+  // toward the anti-target rail and entry 0 hits the whole white background
+  // with the +15 V top-up, so an extra pass reads as a full-screen flash on
+  // every AA page inside the boot budget. Residue cleanup stays on the OTP
+  // path only (runOtpUpdate), which the boot paints go through anyway.
 
   // Retired in production (postCleanCycles is forced to 0): background deghost
   // now rides inside the tri activation's kick group, and the right-aligned
@@ -666,7 +746,7 @@ bool Ssd1683Driver::runUpdate(EpdBus& bus, const uint8_t* bwTarget, bool useGray
   return true;
 }
 
-void Ssd1683Driver::stashTarget(const uint8_t* fb, RefreshMode mode) {
+void PaperMonoDriver::stashTarget(const uint8_t* fb, RefreshMode mode) {
   if (!allocateBuffers()) return;
   memcpy(_pendingBw, fb, BUFFER_SIZE);
   _pendingTri = true;
@@ -674,7 +754,7 @@ void Ssd1683Driver::stashTarget(const uint8_t* fb, RefreshMode mode) {
   _pendingGeneration = _renderGeneration;
 }
 
-bool Ssd1683Driver::commitPending(EpdBus& bus, bool useGray) {
+bool PaperMonoDriver::commitPending(EpdBus& bus, bool useGray) {
   if (!_pendingTri) return false;
   if (_pendingGeneration != _renderGeneration) {
     _pendingTri = false;
@@ -696,7 +776,7 @@ bool Ssd1683Driver::commitPending(EpdBus& bus, bool useGray) {
   return ran;
 }
 
-void Ssd1683Driver::display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) {
+void PaperMonoDriver::display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) {
   (void)prev;
   (void)turnOff;
   if (!fb) return;
@@ -724,19 +804,84 @@ void Ssd1683Driver::display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev,
   if (!_preparingGray) commitPending(bus, false);
 }
 
-bool Ssd1683Driver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) {
+void PaperMonoDriver::displayWindow(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, uint16_t x, uint16_t y,
+                                    uint16_t w, uint16_t h, bool turnOff) {
+  (void)prev;
+  if (!fb || w == 0 || h == 0 || x + w > WIDTH || y + h > HEIGHT || x % 8 != 0 || w % 8 != 0) return;
+  if (!_initialized) {
+    bus.reset();
+    initController(bus);
+  }
+  if (!allocateBuffers()) return;
+
+  const bool rotate180 = BoardConfig::ACTIVE.orientation.mirrorX && BoardConfig::ACTIVE.orientation.mirrorY;
+  if (!rotate180 || _needsFull || !_lastBwValid || _panelHasGray || _grayLsbReady || _grayMsbReady) {
+    display(bus, fb, prev, RefreshMode::Fast, turnOff);
+    return;
+  }
+
+  const uint16_t firstByte = x / 8;
+  const uint16_t widthBytes = w / 8;
+  bool changed = false;
+  for (uint16_t row = 0; row < h && !changed; ++row) {
+    const uint32_t offset = static_cast<uint32_t>(y + row) * WIDTH_BYTES + firstByte;
+    changed = memcmp(fb + offset, _lastBw + offset, widthBytes) != 0;
+  }
+  if (!changed) return;
+
+  // A normal Paper Mono activation does not preserve trustworthy NEW/OLD
+  // plane roles. Seed both full planes once before the first window update;
+  // subsequent window activations re-seed just their rectangle below.
+  if (!_windowBaselineValid) {
+    restoreFullRamWindow(bus);
+    writePlane(bus, CMD_WRITE_NEW, _lastBw);
+    writePlane(bus, CMD_WRITE_OLD, _lastBw);
+    _windowBaselineValid = true;
+  }
+
+  writePlaneWindow(bus, CMD_WRITE_NEW, fb, x, y, w, h);
+  writePlaneWindow(bus, CMD_WRITE_OLD, _lastBw, x, y, w, h);
+  activateOtp(bus);
+
+  // Commit only the addressed rectangle to the host glass model and previous
+  // target. Window-external pixels were represented by equal NEW/OLD planes
+  // and therefore remained idle during the OTP differential waveform.
+  for (uint16_t row = 0; row < h; ++row) {
+    const uint32_t offset = static_cast<uint32_t>(y + row) * WIDTH_BYTES + firstByte;
+    for (uint16_t byte = 0; byte < widthBytes; ++byte) {
+      const uint32_t index = offset + byte;
+      const uint8_t black = static_cast<uint8_t>(~fb[index]);
+      _glassNonWhite[index] = black;
+      _glassBlack[index] = black;
+      _lastBw[index] = fb[index];
+    }
+  }
+
+  // Re-establish equal plane contents for the updated rectangle. This makes
+  // the next window activation neutral outside its own changed pixels.
+  writePlaneWindow(bus, CMD_WRITE_NEW, fb, x, y, w, h);
+  writePlaneWindow(bus, CMD_WRITE_OLD, fb, x, y, w, h);
+  restoreFullRamWindow(bus);
+  _windowBaselineValid = true;
+  _panelHasGray = false;
+  _displayCommitted = true;
+
+  if (turnOff) powerOffController(bus);
+}
+
+bool PaperMonoDriver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) {
   display(bus, fb, prev, mode, turnOff);
   return false;
 }
 
-void Ssd1683Driver::displayFinish(EpdBus& bus, const uint8_t* fb) {
+void PaperMonoDriver::displayFinish(EpdBus& bus, const uint8_t* fb) {
   // displayStart() is synchronous. Balanced grayscale batching uses
   // displayGrayscaleBase()/displayGray() instead of the generic async split.
   (void)bus;
   (void)fb;
 }
 
-void Ssd1683Driver::seedPreviousFrame(EpdBus& bus, const uint8_t* buf) {
+void PaperMonoDriver::seedPreviousFrame(EpdBus& bus, const uint8_t* buf) {
   if (!buf || !allocateBuffers()) return;
   // There is no host-managed previous-frame plane in this design: the selector
   // planes are rebuilt from _glass* on every activation. Record the caller's
@@ -746,13 +891,13 @@ void Ssd1683Driver::seedPreviousFrame(EpdBus& bus, const uint8_t* buf) {
   _lastBwValid = true;
 }
 
-void Ssd1683Driver::displayGrayscaleBase(EpdBus& bus, const uint8_t* fb, RefreshMode fallback, bool turnOff) {
+void PaperMonoDriver::displayGrayscaleBase(EpdBus& bus, const uint8_t* fb, RefreshMode fallback, bool turnOff) {
   _preparingGray = true;
   display(bus, fb, nullptr, fallback, turnOff);
   _preparingGray = false;
 }
 
-void Ssd1683Driver::beginDisplayWork() {
+void PaperMonoDriver::beginDisplayWork() {
   _displayWorkGeneration = _abortGeneration.load();
   // Cleared per logical render so displayCommitted() answers "did this page
   // reach the panel", which is what a caller's refresh cadence must key off.
@@ -765,13 +910,13 @@ void Ssd1683Driver::beginDisplayWork() {
   clearGrayStaging();
 }
 
-bool Ssd1683Driver::displayWorkCancelled() const { return _abortGeneration.load() != _displayWorkGeneration; }
+bool PaperMonoDriver::displayWorkCancelled() const { return _abortGeneration.load() != _displayWorkGeneration; }
 
-bool Ssd1683Driver::postRefreshAborted() const { return displayWorkCancelled(); }
+bool PaperMonoDriver::postRefreshAborted() const { return displayWorkCancelled(); }
 
-void Ssd1683Driver::abortPostRefresh() { _abortGeneration.fetch_add(1); }
+void PaperMonoDriver::abortPostRefresh() { _abortGeneration.fetch_add(1); }
 
-void Ssd1683Driver::copyGrayscaleLsb(EpdBus& bus, const uint8_t* lsb) {
+void PaperMonoDriver::copyGrayscaleLsb(EpdBus& bus, const uint8_t* lsb) {
   (void)bus;
   if (!lsb || !allocateBuffers()) return;
   memcpy(_grayLsb, lsb, BUFFER_SIZE);
@@ -781,7 +926,7 @@ void Ssd1683Driver::copyGrayscaleLsb(EpdBus& bus, const uint8_t* lsb) {
   _grayLsbReady = true;
 }
 
-void Ssd1683Driver::copyGrayscaleMsb(EpdBus& bus, const uint8_t* msb) {
+void PaperMonoDriver::copyGrayscaleMsb(EpdBus& bus, const uint8_t* msb) {
   (void)bus;
   if (!msb || !allocateBuffers()) return;
   memcpy(_grayMsb, msb, BUFFER_SIZE);
@@ -791,7 +936,7 @@ void Ssd1683Driver::copyGrayscaleMsb(EpdBus& bus, const uint8_t* msb) {
   _grayMsbReady = true;
 }
 
-bool Ssd1683Driver::markGrayRows(GrayPlane plane, uint16_t yStart, uint16_t numRows) {
+bool PaperMonoDriver::markGrayRows(GrayPlane plane, uint16_t yStart, uint16_t numRows) {
   uint8_t* coverage = plane == GrayPlane::Lsb ? _grayLsbCoverage : _grayMsbCoverage;
   uint16_t& covered = plane == GrayPlane::Lsb ? _grayLsbRowsCovered : _grayMsbRowsCovered;
   for (uint16_t y = yStart; y < yStart + numRows; ++y) {
@@ -805,7 +950,7 @@ bool Ssd1683Driver::markGrayRows(GrayPlane plane, uint16_t yStart, uint16_t numR
   return covered == GRAY_ROWS;
 }
 
-void Ssd1683Driver::writeGrayscalePlaneStrip(EpdBus& bus, GrayPlane plane, const uint8_t* rows, uint16_t yStart,
+void PaperMonoDriver::writeGrayscalePlaneStrip(EpdBus& bus, GrayPlane plane, const uint8_t* rows, uint16_t yStart,
                                              uint16_t numRows) {
   (void)bus;
   if (!rows || numRows == 0 || yStart + numRows > HEIGHT || !allocateBuffers()) return;
@@ -824,13 +969,13 @@ void Ssd1683Driver::writeGrayscalePlaneStrip(EpdBus& bus, GrayPlane plane, const
   ready = markGrayRows(plane, yStart, numRows);
 }
 
-void Ssd1683Driver::prepareGrayscaleTarget(const uint8_t* bw) {
+void PaperMonoDriver::prepareGrayscaleTarget(const uint8_t* bw) {
   // Both selector planes and the two-level target are staged in host RAM.
   // displayGray() validates complete, current-generation planes before use.
   (void)bw;
 }
 
-void Ssd1683Driver::displayGray(EpdBus& bus, const uint8_t* fb, bool turnOff, const unsigned char* lut,
+void PaperMonoDriver::displayGray(EpdBus& bus, const uint8_t* fb, bool turnOff, const unsigned char* lut,
                                 bool factoryMode) {
   (void)turnOff;
   (void)lut;
@@ -864,11 +1009,15 @@ void Ssd1683Driver::displayGray(EpdBus& bus, const uint8_t* fb, bool turnOff, co
     clearGrayStaging();
     return;
   }
-  runUpdate(bus, _lastBw, true, false);
+  // The base page is already on the glass (the host displayed it without
+  // displayGrayscaleBase(), so commitPending consumed the stash above). Develop
+  // the AA grays as a changed-pixels-only overlay: driving the full non-white
+  // body a second time through the kick phases reads as a page-wide flash.
+  runUpdate(bus, _lastBw, true, false, /*overlayOnly=*/true);
   clearGrayStaging();
 }
 
-void Ssd1683Driver::displayGrayCalibration(EpdBus& bus, const uint8_t* fb, uint16_t customX, uint16_t customY,
+void PaperMonoDriver::displayGrayCalibration(EpdBus& bus, const uint8_t* fb, uint16_t customX, uint16_t customY,
                                            uint16_t customW, uint16_t customH) {
   // There is a single gray tone and a single waveform now, so a side-by-side
   // "reference vs current" split has nothing left to compare. Render the whole
@@ -889,7 +1038,7 @@ void Ssd1683Driver::displayGrayCalibration(EpdBus& bus, const uint8_t* fb, uint1
   commitPending(bus, useGray);
 }
 
-void Ssd1683Driver::cleanupGrayscaleBuffers(EpdBus& bus, const uint8_t* bw) {
+void PaperMonoDriver::cleanupGrayscaleBuffers(EpdBus& bus, const uint8_t* bw) {
   if (!_pendingTri) {
     clearGrayStaging();
     return;
@@ -909,7 +1058,7 @@ void Ssd1683Driver::cleanupGrayscaleBuffers(EpdBus& bus, const uint8_t* bw) {
   commitPending(bus, useGray);
 }
 
-void Ssd1683Driver::controllerIdle(EpdBus& bus) {
+void PaperMonoDriver::controllerIdle(EpdBus& bus) {
   if (!_initialized) return;
   powerOffController(bus);
 
@@ -922,14 +1071,15 @@ void Ssd1683Driver::controllerIdle(EpdBus& bus) {
   delay(2);
   _initialized = false;
   _controllerPowered = false;
+  _windowBaselineValid = false;
 }
 
-void Ssd1683Driver::setGrayParams(const Ssd1683GrayParams& params) {
+void PaperMonoDriver::setGrayParams(const PaperMonoGrayParams& params) {
   _grayParams = params;
   if (_grayParams.lightFrames == 0) _grayParams.lightFrames = 1;
   if (_grayParams.lightFrames > 12) _grayParams.lightFrames = 12;
   // Stored presets may still carry a nonzero polish count; the polish is
-  // retired (see Ssd1683GrayParams), so it is not forwarded to the waveform.
+  // retired (see PaperMonoGrayParams), so it is not forwarded to the waveform.
   _tri.postCleanCycles = 0;
 
   // lightFrames selects the middle tone: tGray weak-rail frames applied to a
@@ -943,14 +1093,14 @@ void Ssd1683Driver::setGrayParams(const Ssd1683GrayParams& params) {
   _tri.tGray = static_cast<uint8_t>(((clamped + 1) / 3) * 3);
 }
 
-void Ssd1683Driver::requestResync(uint8_t settlePasses) {
+void PaperMonoDriver::requestResync(uint8_t settlePasses) {
   (void)settlePasses;
   _needsFull = true;
   _lastBwValid = false;
   resetGray();
 }
 
-void Ssd1683Driver::resetGray() {
+void PaperMonoDriver::resetGray() {
   _panelHasGray = false;
   clearGrayStaging();
   _pendingTri = false;
@@ -958,7 +1108,7 @@ void Ssd1683Driver::resetGray() {
   _pendingGeneration = 0;
 }
 
-void Ssd1683Driver::clearGrayStaging() {
+void PaperMonoDriver::clearGrayStaging() {
   _grayLsbReady = false;
   _grayMsbReady = false;
   _grayLsbGeneration = 0;
@@ -969,13 +1119,13 @@ void Ssd1683Driver::clearGrayStaging() {
   memset(_grayMsbCoverage, 0, sizeof(_grayMsbCoverage));
 }
 
-void Ssd1683Driver::deepSleep(EpdBus& bus) {
+void PaperMonoDriver::deepSleep(EpdBus& bus) {
   // controllerIdle() may already have parked the controller in the same deep
   // sleep mode. The register writes are then pointless, but the host-side state
   // reset below is not: this is the path after which EPD power is cut, so the
   // on-glass image can no longer be trusted.
   if (_initialized) {
-    bus.waitBusy("SSD1683 idle");
+    bus.waitBusy("PaperMono idle");
     powerOffController(bus);
     bus.cmd(0x10);
     bus.data(0x03);
@@ -984,6 +1134,7 @@ void Ssd1683Driver::deepSleep(EpdBus& bus) {
   _initialized = false;
   _needsFull = true;
   _lastBwValid = false;
+  _windowBaselineValid = false;
   resetGray();
 }
 
