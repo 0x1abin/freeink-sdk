@@ -90,17 +90,18 @@ const GrayLut* selectAaLuts() {
   // are identical.
   return BoardConfig::ACTIVE.displayControllerVariant == 0x02 ? kXtfAa02 : kXtfAa68;
 }
+
 }  // namespace
 
 const Uc8279X4Config& uc8279X4DefaultConfig() {
   static const Uc8279X4Config cfg = {
-      0x37,  // psr0: stock value, SHL set (stock streams rows forward with no RAM
+      0x37,  // psr0: stock X4C UC8279 vtable value, SHL set (rows forward, no RAM
              // mirroring and writes PSR between PON and DRF — PON reloads MTP
              // settings, so only post-PON PSR writes latch). REG=1 (external LUT)
              // at init and for AA; built-in refreshes re-assert psr0 & 0xDF = 0x17
       0x4D,  // psr1
       0x20,  // pfs (0x03)
-      0x0E,  // pll (0x30) — programmed at init on this variant
+      0x0E,  // pll (0x30) — X4 Pro only; stock X4C omits this command
       0x02,  // gateScan (0xE1)
       0x02,  // ccset (0xE0)
       0x1E,  // tsset (0xE5) full refresh
@@ -152,8 +153,11 @@ void Uc8279X4Driver::initController(EpdBus& bus) {
   bus.cmd(CMD_PFS);
   bus.data(_cfg.pfs);
 
-  bus.cmd(CMD_PLL);
-  bus.data(_cfg.pll);
+  // The stock X4C UC8279 vtable's PLL hook is a no-op. X4 Pro programs PLL.
+  if (!BoardConfig::isX4Classic()) {
+    bus.cmd(CMD_PLL);
+    bus.data(_cfg.pll);
+  }
 
   bus.cmd(CMD_GATE_SCAN);
   bus.data(_cfg.gateScan);
@@ -610,7 +614,10 @@ void Uc8279X4Driver::cleanupGrayscaleBuffers(EpdBus& bus, const uint8_t* bw) {
 const Uc8279X4Config& FREEINK_UC8279_X4_CONFIG();
 static const Uc8279X4Config& uc8279X4ActiveConfig() { return FREEINK_UC8279_X4_CONFIG(); }
 #else
-static const Uc8279X4Config& uc8279X4ActiveConfig() { return uc8279X4DefaultConfig(); }
+static const Uc8279X4Config& uc8279X4ActiveConfig() {
+  // Stock X4C screenType=2 uses the same 800x600/120-gate UC8279 configuration.
+  return uc8279X4DefaultConfig();
+}
 #endif
 
 PanelDriver& uc8279X4Driver() {

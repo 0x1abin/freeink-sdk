@@ -41,6 +41,9 @@
 #ifndef FREEINK_DEVICE_X4PRO
 #define FREEINK_DEVICE_X4PRO 0
 #endif
+#ifndef FREEINK_DEVICE_X4CLASSIC
+#define FREEINK_DEVICE_X4CLASSIC 0
+#endif
 #ifndef FREEINK_DEVICE_M5
 #define FREEINK_DEVICE_M5 0
 #endif
@@ -76,12 +79,12 @@
 #endif
 
 // --- 2) Coherence: exactly one MCU family, at least one device ---------------
-#if !(FREEINK_DEVICE_X4 || FREEINK_DEVICE_X3 || FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_M5 || FREEINK_DEVICE_MURPHY || \
-      FREEINK_DEVICE_DELINK || FREEINK_DEVICE_LILYGO || FREEINK_DEVICE_M5PAPER || FREEINK_DEVICE_STICKY ||            \
-      FREEINK_DEVICE_PAPERMONO || FREEINK_DEVICE_PAPERS3 || FREEINK_DEVICE_MURPHY_M4 ||                    \
-      FREEINK_DEVICE_EEGO_A4 || FREEINK_DEVICE_WAVESHARE_EPAPER_397)
+#if !(FREEINK_DEVICE_X4 || FREEINK_DEVICE_X3 || FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_X4CLASSIC ||              \
+      FREEINK_DEVICE_M5 || FREEINK_DEVICE_MURPHY || FREEINK_DEVICE_DELINK || FREEINK_DEVICE_LILYGO ||           \
+      FREEINK_DEVICE_M5PAPER || FREEINK_DEVICE_STICKY || FREEINK_DEVICE_PAPERMONO || FREEINK_DEVICE_PAPERS3 ||  \
+      FREEINK_DEVICE_MURPHY_M4 || FREEINK_DEVICE_EEGO_A4 || FREEINK_DEVICE_WAVESHARE_EPAPER_397)
 #error \
-    "FreeInk: no device selected. Pass at least one -DFREEINK_DEVICE_<NAME> (X4, X3, X4PRO, M5, MURPHY, DELINK, LILYGO, M5PAPER, STICKY, PAPERMONO, PAPERS3, MURPHY_M4, EEGO_A4, WAVESHARE_EPAPER_397) in your build env — see platformio.sample.ini."
+    "FreeInk: no device selected. Pass at least one -DFREEINK_DEVICE_<NAME> (X4, X3, X4PRO, X4CLASSIC, M5, MURPHY, DELINK, LILYGO, M5PAPER, STICKY, PAPERMONO, PAPERS3, MURPHY_M4, EEGO_A4, WAVESHARE_EPAPER_397) in your build env — see platformio.sample.ini."
 #endif
 // Each device belongs to one MCU family; a binary targets exactly one. X3/X4 are
 // ESP32-C3; M5 PaperColor/Murphy/de-link/LilyGo are ESP32-S3; M5Paper v1.1 is the
@@ -90,8 +93,9 @@
 #define FREEINK_MCU_C3 (FREEINK_DEVICE_X3 || FREEINK_DEVICE_X4)
 #define FREEINK_MCU_S3                                                                                    \
   (FREEINK_DEVICE_M5 || FREEINK_DEVICE_MURPHY || FREEINK_DEVICE_DELINK || FREEINK_DEVICE_LILYGO ||        \
-   FREEINK_DEVICE_STICKY || FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_PAPERMONO || FREEINK_DEVICE_PAPERS3 ||  \
-   FREEINK_DEVICE_MURPHY_M4 || FREEINK_DEVICE_EEGO_A4 || FREEINK_DEVICE_WAVESHARE_EPAPER_397)
+   FREEINK_DEVICE_STICKY || FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_X4CLASSIC || FREEINK_DEVICE_PAPERMONO || \
+   FREEINK_DEVICE_PAPERS3 || FREEINK_DEVICE_MURPHY_M4 || FREEINK_DEVICE_EEGO_A4 ||                         \
+   FREEINK_DEVICE_WAVESHARE_EPAPER_397)
 #define FREEINK_MCU_ESP32 (FREEINK_DEVICE_M5PAPER)
 #if (FREEINK_MCU_C3 + FREEINK_MCU_S3 + FREEINK_MCU_ESP32) != 1
 #error \
@@ -106,7 +110,7 @@
 // use SSD1677, UC8179, or UC8279, recovered from OEM firmware and hardware
 // references — see docs/xteink-x4pro-support.md.
 #if FREEINK_DEVICE_X4 || FREEINK_DEVICE_DELINK || FREEINK_DEVICE_STICKY || FREEINK_DEVICE_X4PRO || \
-    FREEINK_DEVICE_MURPHY_M4 || FREEINK_DEVICE_WAVESHARE_EPAPER_397
+    FREEINK_DEVICE_X4CLASSIC || FREEINK_DEVICE_MURPHY_M4 || FREEINK_DEVICE_WAVESHARE_EPAPER_397
 #define FREEINK_DRIVER_SSD1677 1
 #else
 #define FREEINK_DRIVER_SSD1677 0
@@ -139,7 +143,7 @@
 #else
 #define FREEINK_DRIVER_UC8279 0
 #endif
-#if FREEINK_DEVICE_X4 || FREEINK_DEVICE_X4PRO
+#if FREEINK_DEVICE_X4 || FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_X4CLASSIC
 #define FREEINK_DRIVER_UC8179 1
 #define FREEINK_DRIVER_UC8279_X4 1
 #else
@@ -253,8 +257,9 @@
 // ACTIVE.batteryGauge.gaugeAddr != 0) — required because X3 (gauge) and X4 (ADC)
 // share one C3 binary.
 #ifndef FREEINK_BATTERY_I2C_GAUGE
-#define FREEINK_BATTERY_I2C_GAUGE \
-  (FREEINK_DEVICE_X3 || FREEINK_DEVICE_LILYGO || FREEINK_DEVICE_STICKY || FREEINK_DEVICE_X4PRO)
+#define FREEINK_BATTERY_I2C_GAUGE                                                            \
+  (FREEINK_DEVICE_X3 || FREEINK_DEVICE_LILYGO || FREEINK_DEVICE_STICKY || FREEINK_DEVICE_X4PRO || \
+   FREEINK_DEVICE_X4CLASSIC)
 #endif
 #ifndef FREEINK_CAP_COLOR
 #define FREEINK_CAP_COLOR (FREEINK_DEVICE_M5)
@@ -272,15 +277,15 @@
 // I2C driver only when its flag is set; otherwise it links stub bodies.
 #ifndef FREEINK_CAP_RTC
 #define FREEINK_CAP_RTC                                                                             \
-  (FREEINK_DEVICE_X3 || FREEINK_DEVICE_STICKY || FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_PAPERMONO || \
-   FREEINK_DEVICE_PAPERS3 || FREEINK_DEVICE_EEGO_A4 || FREEINK_DEVICE_MURPHY_M4 ||                    \
-   FREEINK_DEVICE_WAVESHARE_EPAPER_397 || FREEINK_DEVICE_LILYGO)
+  (FREEINK_DEVICE_X3 || FREEINK_DEVICE_STICKY || FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_X4CLASSIC || \
+   FREEINK_DEVICE_PAPERMONO || FREEINK_DEVICE_PAPERS3 || FREEINK_DEVICE_EEGO_A4 ||                   \
+   FREEINK_DEVICE_MURPHY_M4 || FREEINK_DEVICE_WAVESHARE_EPAPER_397 || FREEINK_DEVICE_LILYGO)
 #endif
 #ifndef FREEINK_CAP_TEMP_HUMIDITY
 #define FREEINK_CAP_TEMP_HUMIDITY (FREEINK_DEVICE_STICKY)
 #endif
 #ifndef FREEINK_CAP_IMU
-#define FREEINK_CAP_IMU (FREEINK_DEVICE_X3 || FREEINK_DEVICE_STICKY)
+#define FREEINK_CAP_IMU (FREEINK_DEVICE_X3 || FREEINK_DEVICE_STICKY || FREEINK_DEVICE_X4CLASSIC)
 #endif
 // LEDC PWM buzzer (tone beeper). The Buzzer lib drives the AudioConfig.buzzer
 // pin; on for boards that wire one (Sticky GPIO48, Murphy GPIO46, PaperS3
@@ -317,9 +322,9 @@
 // must define USE_BLOCK_DEVICE_INTERFACE=1 for the SdFat FsVolume these mount on.
 // Override with -DFREEINK_SD_SDMMC=0/1.
 #ifndef FREEINK_SD_SDMMC
-#define FREEINK_SD_SDMMC \
-  (FREEINK_DEVICE_DELINK || FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_PAPERMONO || FREEINK_DEVICE_MURPHY_M4 || \
-   FREEINK_DEVICE_WAVESHARE_EPAPER_397)
+#define FREEINK_SD_SDMMC                                                                                     \
+  (FREEINK_DEVICE_DELINK || FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_X4CLASSIC || FREEINK_DEVICE_PAPERMONO || \
+   FREEINK_DEVICE_MURPHY_M4 || FREEINK_DEVICE_WAVESHARE_EPAPER_397)
 #endif
 
 // Serial log transport hint for consumer firmware. Boards can share the same MCU
@@ -363,6 +368,7 @@ enum class Board : uint8_t {
   XteinkX3,
   XteinkX3Uc8279,  // newer X3 production run: same board/glass, UC8279d controller
   XteinkX4Pro,     // ESP32-S3 sibling of the C3 X4: SSD1677 + GT911 touch + warm/cold frontlight
+  XteinkX4Classic, // ESP32-S3 X4 Classic: X4 Pro display stack without touch/frontlight
   M5StackPaperColor,
   MurphyM3,
   MurphyM4,
@@ -1655,6 +1661,41 @@ static_assert(WAVESHARE_EPAPER_397.sdmmc.busWidth == 4, "Waveshare 3.97 SD must 
 static_assert(WAVESHARE_EPAPER_397.input.confirm == 5 && WAVESHARE_EPAPER_397.input.power == PIN_UNASSIGNED,
               "Waveshare 3.97 GPIO5 must be confirm-only; power is reported by the AXP2101");
 
+// --- Xteink X4 Classic (X4C) — ESP32-S3, 800x480 EPD, no touch/frontlight ---
+// Recovered from the stock X4C image. It shares the X4 Pro display stack while
+// reusing the touch/frontlight GPIOs as four discrete front keys.
+constexpr BoardProfile XTEINK_X4_CLASSIC = {
+    Board::XteinkX4Classic,
+    "xteink_x4_classic",
+    InputStyle::DigitalButtons,
+    DisplayController::SSD1677,
+    800,
+    480,
+    {12, 11, 13, 14, 10, 18, PIN_UNASSIGNED},
+    20000000,
+    {41, 40, 42, 45, 6, true, 0, false},
+    // Side page keys GPIO0/7, bottom back/confirm/left/right GPIO9/8/2/5,
+    // and power GPIO3. GPIO4 is not interrupt-backed and is not a button.
+    {9, 8, 2, 5, 0, 7, 3, false},
+    PIN_UNASSIGNED,
+    21,
+    2.0f,
+    PIN_UNASSIGNED,
+    NO_TOUCH,
+    NO_FRONTLIGHT,
+    NO_AUDIO,
+    NO_LEDS,
+    NO_FLIP,
+    {41, 42, 40, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, 1},
+    {39, 38, 400000, 0x63, 0, 0, GaugeType::Cw2017},
+    NO_MIC,
+    {39, 38, 400000, 0x51, 0, 0x6B, 0, RtcType::Pcf8563, ImuType::Qmi8658},
+    1.0f,
+    {1, PIN_UNASSIGNED},
+    0,
+    {9, 7, 3, 7},
+    true};
+
 // Largest framebuffer (bytes) over the devices compiled into this build, derived
 // from the profiles above. The display facade sizes its static framebuffer to
 // this so one binary holds whichever panel is runtime-selected; a single-device
@@ -1671,7 +1712,8 @@ constexpr uint32_t MAX_FRAMEBUFFER_BYTES = cmax(
     cmax(cmax(cmax(FREEINK_DEVICE_DELINK ? panelBytes(DE_LINK) : 0u,
                    FREEINK_DEVICE_LILYGO ? panelBytes(LILYGO_T5S3) : 0u),
               cmax(FREEINK_DEVICE_M5PAPER ? panelBytes(M5PAPER_V11) : 0u,
-                   FREEINK_DEVICE_X4PRO ? panelBytes(XTEINK_X4_PRO) : 0u)),
+                   cmax(FREEINK_DEVICE_X4PRO ? panelBytes(XTEINK_X4_PRO) : 0u,
+                        FREEINK_DEVICE_X4CLASSIC ? panelBytes(XTEINK_X4_CLASSIC) : 0u))),
          cmax(cmax(cmax(FREEINK_DEVICE_STICKY ? panelBytes(STICKY) : 0u,
                         FREEINK_DEVICE_PAPERMONO ? panelBytes(PAPER_MONO) : 0u),
                    cmax(FREEINK_DEVICE_PAPERS3 ? panelBytes(M5PAPER_S3) : 0u,
@@ -1702,6 +1744,8 @@ constexpr BoardProfile DEFAULT_DEVICE = M5PAPER_S3;
 constexpr BoardProfile DEFAULT_DEVICE = STICKY;
 #elif FREEINK_DEVICE_X4PRO
 constexpr BoardProfile DEFAULT_DEVICE = XTEINK_X4_PRO;
+#elif FREEINK_DEVICE_X4CLASSIC
+constexpr BoardProfile DEFAULT_DEVICE = XTEINK_X4_CLASSIC;
 #elif FREEINK_DEVICE_EEGO_A4
 constexpr BoardProfile DEFAULT_DEVICE = EEGO_A4;
 #elif FREEINK_DEVICE_WAVESHARE_EPAPER_397
@@ -1778,6 +1822,11 @@ inline bool selectDevice(Board which) {
       ACTIVE = XTEINK_X4_PRO;
       break;
 #endif
+#if FREEINK_DEVICE_X4CLASSIC
+    case Board::XteinkX4Classic:
+      ACTIVE = XTEINK_X4_CLASSIC;
+      break;
+#endif
 #if FREEINK_DEVICE_PAPERMONO
     case Board::PaperMono:
       ACTIVE = PAPER_MONO;
@@ -1816,6 +1865,7 @@ inline bool isM5PaperV11() { return ACTIVE.board == Board::M5PaperV11; }
 inline bool isM5PaperS3() { return ACTIVE.board == Board::M5PaperS3; }
 inline bool isSticky() { return ACTIVE.board == Board::Sticky; }
 inline bool isX4Pro() { return ACTIVE.board == Board::XteinkX4Pro; }
+inline bool isX4Classic() { return ACTIVE.board == Board::XteinkX4Classic; }
 inline bool isPaperMono() { return ACTIVE.board == Board::PaperMono; }
 inline bool isEegoA4() { return ACTIVE.board == Board::EegoA4; }
 inline bool isMurphyM4() { return ACTIVE.board == Board::MurphyM4; }

@@ -395,20 +395,34 @@ public:
     SheetProps themed = props;
     if (themed.radius == RADIUS_INHERIT)
       themed.radius = theme_.sheetRadius;
-    const Rect bounds = frame_.safeRect();
+    // A sheet is an edge overlay: draw its body FULL-BLEED to the screen edge so it
+    // covers the bezel/status area (nothing behind it peeks out at the anchored
+    // edge). Only the ANCHORED edge bleeds out; the free edge (and its grabber)
+    // stays at the safe-area position `height` describes, so we grow the body by
+    // the anchored-edge inset rather than shifting it. Content is still clamped to
+    // the safe area below, so rows clear the rounded corners.
+    const Rect full = frame_.device().screen();
+    const Rect safe = frame_.safeRect();
+    const int16_t topInset =
+        safe.y > full.y ? static_cast<int16_t>(safe.y - full.y) : 0;
+    const int16_t bottomInset =
+        full.bottom() > safe.bottom() ? static_cast<int16_t>(full.bottom() - safe.bottom()) : 0;
     const Rect rect =
         themed.anchor == SheetEdge::Top
-            ? Rect{bounds.x, bounds.y, bounds.width, height}
-            : Rect{bounds.x, static_cast<int16_t>(bounds.bottom() - height),
-                   bounds.width, height};
+            ? Rect{full.x, full.y, full.width, static_cast<int16_t>(height + topInset)}
+            : Rect{full.x, static_cast<int16_t>(full.bottom() - height - bottomInset),
+                   full.width, static_cast<int16_t>(height + bottomInset)};
     ui::sheet(frame_, rect, themed);
     const Rect content = sheetContentRect(rect, themed);
-    setContentMargin(Insets{
-        static_cast<int16_t>(content.y - bounds.y),
-        0,
-        static_cast<int16_t>(bounds.bottom() - content.bottom()),
-        0});
-    return content;
+    // setContentMargin() insets from safeRect, so content already clears the side
+    // bezel; here we only push it to the sheet's content band vertically.
+    const int16_t topMargin =
+        content.y > safe.y ? static_cast<int16_t>(content.y - safe.y) : 0;
+    const int16_t bottomMargin = safe.bottom() > content.bottom()
+                                     ? static_cast<int16_t>(safe.bottom() - content.bottom())
+                                     : 0;
+    setContentMargin(Insets{topMargin, 0, bottomMargin, 0});
+    return body();
   }
 
   void dropdown(const DropdownProps &props,

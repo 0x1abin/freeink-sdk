@@ -2,6 +2,7 @@
 
 #if FREEINK_CAP_FRONTLIGHT
 #include <M5Pm1.h>
+#include <Wire.h>
 #ifdef FREEINK_FRONTLIGHT_LS
 #include <driver/gpio.h>
 #include <driver/ledc.h>

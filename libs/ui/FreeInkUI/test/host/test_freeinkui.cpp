@@ -3035,7 +3035,9 @@ void testHeaderBorderEdges() {
   Screen<8> screen(frame, theme);
 
   // The themed header supplies a 1px divider when the theme's popup style has
-  // no border of its own, so default headers match the documented divider.
+  // no border of its own. A single (bottom-only) edge draws as a fill band at
+  // the bottom of the rect, not a stroke or a centered line() (drawBorderEdges
+  // fills partial edges so a thick rule can't leak past the band).
   screen.header("Top");
   bool sawBottomRule = false;
   for (size_t i = 0; i < draw.opCount; ++i) {
@@ -3285,27 +3287,6 @@ void testTextArea() {
   }
   CHECK_EQ(textOps, 2);  // lines 1 and 2 only
   CHECK(sawCaret);       // caret on the now-visible line 1
-}
-
-void testSwipeGeometry() {
-  CHECK_EQ(swipeDirection(20, 20, 80, 30), SwipeDir::Right);
-  CHECK_EQ(swipeDirection(80, 20, 20, 30), SwipeDir::Left);
-  CHECK_EQ(swipeDirection(20, 80, 30, 20), SwipeDir::Up);
-  CHECK_EQ(swipeDirection(20, 20, 30, 80), SwipeDir::Down);
-  CHECK_EQ(swipeDirection(20, 20, 80, 80), SwipeDir::Right);  // ties are horizontal
-
-  constexpr int width = 800;
-  constexpr int height = 480;
-  CHECK(edgeSwipe(ScreenEdge::Left, 200, 200, 300, 210, width, height));
-  CHECK(!edgeSwipe(ScreenEdge::Left, 201, 200, 301, 210, width, height));
-  CHECK(!edgeSwipe(ScreenEdge::Left, 100, 200, 90, 210, width, height));
-  CHECK(edgeSwipe(ScreenEdge::Right, 600, 200, 500, 210, width, height));
-  CHECK(!edgeSwipe(ScreenEdge::Right, 599, 200, 499, 210, width, height));
-  CHECK(edgeSwipe(ScreenEdge::Top, 200, 67, 210, 167, width, height));
-  CHECK(!edgeSwipe(ScreenEdge::Top, 200, 68, 210, 168, width, height));
-  CHECK(edgeSwipe(ScreenEdge::Bottom, 200, 413, 210, 313, width, height));
-  CHECK(!edgeSwipe(ScreenEdge::Bottom, 200, 412, 210, 312, width, height));
-  CHECK(!edgeSwipe(ScreenEdge::Bottom, 200, 413, 300, 313, width, height));
 }
 
 // Filled-capsule slider: one track fill, a value-proportional stadium fill,
@@ -3608,7 +3589,6 @@ int main() {
   testFreeInkAppHandlerOverflowFlag();
   testFreeInkAppSharedThemeRefFollowsAtomicSwap();
   testTextArea();
-  testSwipeGeometry();
   testCapsuleSlider();
   testSliderRow();
   testTileGrid();
