@@ -43,8 +43,8 @@ constexpr uint8_t SCAN_TB_FLIP = 0x01;        // OR into the scan byte for mirro
 }  // namespace
 
 const Ssd1677Config& ssd1677DefaultConfig() {
-  // Xteink X4 / GDEQ0426T82 defaults. The stock X4 firmware's B/W update paths
-  // use absolute SSD1677 sequences rather than the incremental 0x1C assembly:
+  // Xteink X4 / GDEQ0426T82 defaults. The stock X4 paths and the X4 Pro 7.4.4
+  // SSD1677 firmware use absolute sequences rather than incremental 0x1C:
   // INIT:  0C=AE C7 C3 C0 80, 3C=80
   // FULL:  3C=C0, 22=F7, 20, ~1800 ms
   // HALF:  3C=C0, 1A=5A, 22=D7, 20

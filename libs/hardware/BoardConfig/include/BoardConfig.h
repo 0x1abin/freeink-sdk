@@ -1482,16 +1482,9 @@ constexpr BoardProfile STICKY = {
 // `XTEINK_X4` above: the same display size, but an ESP32-S3 with 8 MB PSRAM, a
 // GT911 capacitive digitizer, and a dual warm/cold color-temperature frontlight.
 //
-// Confidence summary:
-//   CONFIRMED : display SPI + panel pins, GT911 controller/address, ADC-ladder input style.
-//   HIGH      : GT911 I2C/INT/RST pins, SD SPI bus + CS (m_csPin=GPIO45) + enable GPIO5 (driven
-//     HIGH), the BM8563 RTC (0x51 on the shared touch bus), and the GPIO1 master rail (driven
-//     HIGH first in board init) — all from the board pin-init table at IROM 0x420a2240.
-//   PENDING hardware validation: panel orientation (ships NO_FLIP), touch swap/flip, the exact
-//     frontlight GPIO(s)/freq (warm+cold; the SDK models one channel — primary brightness here),
-//     the GPIO5 SD-enable role and GPIO2 (a board-init output driven LOW, role unknown), and
-//     battery/VBUS pins. The ADC-ladder pins are UNKNOWN — GPIO1/GPIO2 (the old guess) are power
-//     outputs, not ladder inputs. See the findings doc before trusting any PENDING value.
+// Hardware-confirmed profile: display pins, GT911 pins/orientation, digital buttons,
+// GPIO8/GPIO9 frontlight channels, 1-bit SDMMC with GPIO5 enable, BM8563 RTC, and
+// CW2017 gauge. Panel mount orientation and USB/VBUS detection remain unconfirmed.
 constexpr BoardProfile XTEINK_X4_PRO = {
     Board::XteinkX4Pro,
     "xteink_x4_pro",
@@ -1568,12 +1561,13 @@ constexpr BoardProfile XTEINK_X4_PRO = {
     // Frontlight: dual warm/cold LEDC PWM with color temperature (NVS lightWarmValue/
     // lightColdValue/lightCT/lightBri/lightOn). Recovered from the OEM LEDC init (IROM
     // 0x420a2130 → helper 0x420a20c0): two channels — GPIO8 on LEDC ch4 and GPIO9 on ch5 —
-    // both at 10 kHz / 10-bit, active-HIGH (init drives the pin LOW = off, brightness raises
-    // duty). The SDK's FrontlightConfig models ONE channel, so this carries GPIO8 as the
-    // primary brightness pin, GPIO9 as the warm channel — FrontlightManager mixes them for
-    // color-temperature control. Which of GPIO8/GPIO9 is physically warm vs cold is not yet
-    // known; if reversed, the CT direction just inverts (user-flippable).
-    {8, 10000, 10, true, 9},
+    // The original bring-up dump used 10 kHz; stock 7.0.8 passes 25 kHz / 10-bit to
+    // the frontlight initializer on the same pins. Use that directly recovered value.
+    // Both channels are active-HIGH (init drives the pin LOW = off, brightness raises
+    // duty).
+    // GPIO8 is the hardware-confirmed cool channel and GPIO9 the warm channel;
+    // FrontlightManager mixes them for color-temperature control.
+    {8, 25000, 10, true, 9},
     NO_AUDIO,
     NO_LEDS,
     NO_FLIP,  // panel mount transform pending hardware; native SSD1677 scan is 800x480 landscape
