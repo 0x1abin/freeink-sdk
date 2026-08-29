@@ -46,8 +46,13 @@ class FrontlightManager {
 #ifdef FREEINK_FRONTLIGHT_LS
   void park();
 
-  // Undo park() at boot so begin() can re-attach the LEDC channels. Safe to call
-  // unconditionally; a no-op when not parked.
+  // Undo park() at boot so begin() can re-attach the LEDC channels. The release is
+  // UNCONDITIONAL: park() latches a digital pad hold that survives deep sleep AND
+  // the wake reset, while _lsParked (a DRAM flag) is lost on reset — so after a
+  // wake the hold is still present even though _lsParked reads false. Releasing
+  // unconditionally (gpio_hold_dis on a non-held pad is a harmless no-op) is the
+  // only way to guarantee the held pad is cleared; every other driver releases
+  // holds unconditionally before driving for this reason.
   void releaseOnWake();
 #endif
 
