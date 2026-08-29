@@ -966,6 +966,109 @@ void testListCanUseFullTitleWidthWithShortValue() {
   CHECK_EQ(fullWidthDraw.ops[2].rect.width, 424);
 }
 
+// RTL mirrors list()'s row layout: icon and label move to the trailing
+// (right) edge, value/toggle move to the leading (left) edge. Verifies both
+// halves of the swap against the same single-row fixture in one pass.
+void testListRtlMirrorsIconAndValueSides() {
+  static const uint8_t iconBits[4] = {0, 0, 0, 0};
+  BitmapRef icon{iconBits, 16, 16, BitmapFormat::BW1, false};
+
+  ListItem item{};
+  item.label = "Setting";
+  item.value = "On";
+  item.icon = icon;
+
+  ListProps props;
+  props.items = &item;
+  props.count = 1;
+  props.rowHeight = 40;
+  props.valueInset = 4;
+  props.sidePadding = 0;  // zero out the default 8px inset so row math below is exact
+
+  DeviceContext device = makeDevice();
+  InputSnapshot input;
+
+  FakeDrawTarget ltrDraw;
+  InteractionBuffer<4> ltrInteractions;
+  Frame<4> ltrFrame(ltrDraw, device, input, ltrInteractions);
+  list(ltrFrame, Rect{0, 0, 480, 40}, props);
+
+  props.rtl = true;
+  FakeDrawTarget rtlDraw;
+  InteractionBuffer<4> rtlInteractions;
+  Frame<4> rtlFrame(rtlDraw, device, input, rtlInteractions);
+  list(rtlFrame, Rect{0, 0, 480, 40}, props);
+
+  // Icon: LTR hugs the row's left edge; RTL hugs the right edge.
+  size_t ltrIconIdx = 0, rtlIconIdx = 0;
+  for (size_t i = 0; i < ltrDraw.opCount; ++i)
+    if (ltrDraw.ops[i].kind == FakeDrawTarget::Op::Bitmap) ltrIconIdx = i;
+  for (size_t i = 0; i < rtlDraw.opCount; ++i)
+    if (rtlDraw.ops[i].kind == FakeDrawTarget::Op::Bitmap) rtlIconIdx = i;
+  CHECK_EQ(ltrDraw.ops[ltrIconIdx].rect.x, 0);
+  CHECK_EQ(rtlDraw.ops[rtlIconIdx].rect.x, 480 - 16);
+
+  // Value text: list() draws the value slot before the label, so the FIRST
+  // Text op is the value, not the last. LTR sits near the row's right edge;
+  // RTL sits near the left, just past the icon-free band start
+  // (band.x + valueInset).
+  size_t ltrValueIdx = 0, rtlValueIdx = 0;
+  for (size_t i = 0; i < ltrDraw.opCount; ++i) {
+    if (ltrDraw.ops[i].kind == FakeDrawTarget::Op::Text) {
+      ltrValueIdx = i;
+      break;
+    }
+  }
+  for (size_t i = 0; i < rtlDraw.opCount; ++i) {
+    if (rtlDraw.ops[i].kind == FakeDrawTarget::Op::Text) {
+      rtlValueIdx = i;
+      break;
+    }
+  }
+  CHECK(ltrDraw.ops[ltrValueIdx].rect.x > 400);  // right side in LTR
+  CHECK_EQ(rtlDraw.ops[rtlValueIdx].rect.x, 4);  // band.x(0) + valueInset(4) in RTL
+}
+
+// Same swap, but for a toggle row instead of a value row: the switch itself
+// (not just its knob) must relocate, since activateSelectedRow-style callers
+// rely on the toggle's on-screen position matching its touch hit region.
+void testListRtlMirrorsToggleSide() {
+  ListItem item{};
+  item.label = "Enabled";
+  item.toggle = true;
+  item.toggleChecked = true;
+
+  ListProps props;
+  props.items = &item;
+  props.count = 1;
+  props.rowHeight = 40;
+  props.valueInset = 4;
+  props.toggleWidth = 38;
+  props.sidePadding = 0;  // zero out the default 8px inset so row math below is exact
+
+  DeviceContext device = makeDevice();
+  InputSnapshot input;
+
+  FakeDrawTarget ltrDraw;
+  InteractionBuffer<4> ltrInteractions;
+  Frame<4> ltrFrame(ltrDraw, device, input, ltrInteractions);
+  list(ltrFrame, Rect{0, 0, 480, 40}, props);
+
+  props.rtl = true;
+  FakeDrawTarget rtlDraw;
+  InteractionBuffer<4> rtlInteractions;
+  Frame<4> rtlFrame(rtlDraw, device, input, rtlInteractions);
+  list(rtlFrame, Rect{0, 0, 480, 40}, props);
+
+  // The toggle track is the first Fill after the row background fill.
+  CHECK(ltrDraw.opCount >= 2);
+  CHECK(rtlDraw.opCount >= 2);
+  CHECK_EQ(ltrDraw.ops[1].kind, FakeDrawTarget::Op::Fill);
+  CHECK_EQ(rtlDraw.ops[1].kind, FakeDrawTarget::Op::Fill);
+  CHECK_EQ(ltrDraw.ops[1].rect.x, 480 - 38 - 4);  // right edge in LTR
+  CHECK_EQ(rtlDraw.ops[1].rect.x, 4);             // left edge (band.x + valueInset) in RTL
+}
+
 void testButtonRegistersExpandedHit() {
   FakeDrawTarget draw;
   DeviceContext device = makeDevice();
@@ -3438,6 +3541,8 @@ int main() {
   testListNavLayoutFeedback();
   testListNavConvergesThroughRealList();
   testListCanUseFullTitleWidthWithShortValue();
+  testListRtlMirrorsIconAndValueSides();
+  testListRtlMirrorsToggleSide();
   testButtonRegistersExpandedHit();
   testProgressBarClamps();
   testBatteryIndicator();

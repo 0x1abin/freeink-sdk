@@ -102,6 +102,13 @@ struct ListProps {
   // behind a bezel). -1 = inherit the theme's listScrollInset.
   int16_t scrollIndicatorInset = -1;
   bool centerSingleLine = false;
+  // Mirrors row layout for RTL languages: icon and label move to the
+  // trailing (right) edge, value/toggle move to the leading (left) edge --
+  // matching BaseTheme::drawList()'s "title right, value left" convention.
+  // Callers must set this themselves (I18N.isRtl()); list() has no built-in
+  // language awareness. Off by default so every existing caller is
+  // unaffected.
+  bool rtl = false;
   // Shrink each row's background/hit area to its label width plus side
   // padding instead of the full rect width (hug-content menu rows).
   bool hugContents = false;
@@ -528,26 +535,41 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
                                    ? props.iconSize
                                    : static_cast<int16_t>(icon.width);
       // Centered on the full row content, not the title band: with a subtitle
-      // the icon belongs to the label+subtitle block as a whole.
+      // the icon belongs to the label+subtitle block as a whole. RTL mirrors
+      // the icon to the row's trailing (right) edge, matching
+      // BaseTheme::drawList's "title anchored right" convention, and shrinks
+      // content from that side instead so the label/value slots below
+      // reflow to the left of it.
+      const int16_t iconX = props.rtl
+          ? static_cast<int16_t>(content.x + content.width - iconSize)
+          : content.x;
       Rect iconRect{
-          content.x,
+          iconX,
           static_cast<int16_t>(content.y + (content.height - iconSize) / 2),
           iconSize, iconSize};
       frame.target().bitmap(iconRect, icon, BitmapMode::Contain,
                             style.foreground);
-      content.x = static_cast<int16_t>(content.x + iconSize + props.textGap);
+      if (!props.rtl)
+        content.x = static_cast<int16_t>(content.x + iconSize + props.textGap);
       content.width =
           static_cast<int16_t>(content.width - iconSize - props.textGap);
       band.x = content.x;
       band.width = content.width;
     }
 
+    // RTL: the value/toggle slot moves to the band's leading (left) edge and
+    // the label fills whatever remains on the trailing (right) edge, next to
+    // the icon -- computed below via labelX once the slot width is known.
+    int16_t labelX = band.x;
     int16_t availW = band.width;
     if (item.toggle) {
       const int16_t togW = props.toggleWidth < 18 ? 18 : props.toggleWidth;
       const int16_t togH = props.toggleHeight < 12 ? 12 : props.toggleHeight;
+      const int16_t togX = props.rtl
+          ? static_cast<int16_t>(band.x + props.valueInset)
+          : static_cast<int16_t>(band.x + band.width - togW - props.valueInset);
       Rect toggleRect{
-          static_cast<int16_t>(band.x + band.width - togW - props.valueInset),
+          togX,
           static_cast<int16_t>(band.y + (band.height - togH) / 2), togW, togH};
       // The switch draws in row-foreground ink with the foreground's opposite
       // as "paper", so it inverts along with the row when selected.
@@ -579,20 +601,25 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
       }
       availW = static_cast<int16_t>(availW - togW - props.valueInset -
                                     props.textGap);
+      if (props.rtl)
+        labelX = static_cast<int16_t>(band.x + band.width - availW);
     } else if (item.value) {
       TextStyle valueStyle =
           textStyleWithForeground(props.valueText, style.foreground);
-      valueStyle.align = TextAlign::Right;
+      valueStyle.align = props.rtl ? TextAlign::Left : TextAlign::Right;
       const int16_t valueW =
           frame.target()
               .measureText(valueStyle.font, item.value, valueStyle)
               .width;
-      Rect valueRect{
-          static_cast<int16_t>(band.x + availW - valueW - props.valueInset),
-          band.y, valueW, band.height};
+      const int16_t valueX = props.rtl
+          ? static_cast<int16_t>(band.x + props.valueInset)
+          : static_cast<int16_t>(band.x + availW - valueW - props.valueInset);
+      Rect valueRect{valueX, band.y, valueW, band.height};
       frame.target().text(valueRect, item.value, valueStyle);
       availW = static_cast<int16_t>(availW - valueW - props.valueInset -
                                     props.textGap);
+      if (props.rtl)
+        labelX = static_cast<int16_t>(band.x + band.width - availW);
     }
 
     if (props.balanceWrappedLabelWithValue && labelStyle.maxLines > 1 && (item.toggle || item.value) && item.label) {
@@ -610,8 +637,10 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
       }
     }
 
+    if (props.rtl && !props.centerSingleLine)
+      labelStyle.align = TextAlign::Right;
     if (item.subtitle) {
-      frame.target().text(Rect{band.x, band.y, availW, band.height}, item.label,
+      frame.target().text(Rect{labelX, band.y, availW, band.height}, item.label,
                           labelStyle);
       frame.target().text(
           Rect{content.x, static_cast<int16_t>(band.y + band.height),
@@ -621,15 +650,20 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
     } else {
       if (props.centerSingleLine)
         labelStyle.align = TextAlign::Center;
-      frame.target().text(Rect{band.x, band.y, availW, band.height}, item.label,
+      frame.target().text(Rect{labelX, band.y, availW, band.height}, item.label,
                           labelStyle);
     }
 
     if (props.selectedIndex == static_cast<int16_t>(i) &&
         props.selectionMarker != SelectionMarker::None) {
       if (props.selectionMarker == SelectionMarker::Underline) {
+        // RTL mirrors which edge carries markerInset's extra gap, matching
+        // the label's own trailing/leading swap above.
+        const int16_t underlineX = props.rtl
+            ? static_cast<int16_t>(row.x + sidePad)
+            : static_cast<int16_t>(row.x + sidePad + props.markerInset);
         frame.target().fill(
-            Rect{static_cast<int16_t>(row.x + sidePad + props.markerInset),
+            Rect{underlineX,
                  static_cast<int16_t>(row.bottom() - props.markerThickness),
                  static_cast<int16_t>(row.width - sidePad * 2 -
                                       props.markerInset),
