@@ -23,6 +23,8 @@
 
 #include <algorithm>
 #include <string>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace freeink {
@@ -135,6 +137,25 @@ class GfxRendererTarget final : public DrawTarget {
     renderer.fillPolygon(xs, ys, 3, paint.color != Color::White);
   }
 
+  // Dithered (gray) text needs GfxRenderer::drawTextDither /
+  // drawTextRotated90CWDither. Firmwares that predate them still compile:
+  // detected per-method, with a solid-ink fallback (the old collapse-to-black
+  // behavior) when a method is absent, so the adapter never hard-requires the
+  // newer renderer API.
+  template <typename R, typename = void>
+  struct HasTextDither : std::false_type {};
+  template <typename R>
+  struct HasTextDither<R, std::void_t<decltype(std::declval<const R&>().drawTextDither(
+                              0, 0, 0, static_cast<const char*>(nullptr),
+                              std::declval<::Color>(), std::declval<EpdFontFamily::Style>()))>> : std::true_type {};
+  template <typename R, typename = void>
+  struct HasRotatedTextDither : std::false_type {};
+  template <typename R>
+  struct HasRotatedTextDither<R, std::void_t<decltype(std::declval<const R&>().drawTextRotated90CWDither(
+                                     0, 0, 0, static_cast<const char*>(nullptr),
+                                     std::declval<::Color>(), std::declval<EpdFontFamily::Style>()))>>
+      : std::true_type {};
+
   void text(const Rect rect, const char* text, const TextStyle style) override {
     if (!text || rect.empty()) return;
     const int fontId = gfxFont(style.font);
@@ -163,8 +184,13 @@ class GfxRendererTarget final : public DrawTarget {
         if (style.align == TextAlign::Center) y = rect.y + (rect.height + textLen) / 2;
         if (style.align == TextAlign::Right) y = rect.bottom();
         const int x = rect.x + std::max(0, (rect.width - lh) / 2);
-        if (dithered) renderer.drawTextRotated90CWDither(fontId, x, y, textLine.c_str(), gfxColor(inkColor), epdStyle);
-        else renderer.drawTextRotated90CW(fontId, x, y, textLine.c_str(), black, epdStyle);
+        if constexpr (HasRotatedTextDither<GfxRenderer>::value) {
+          if (dithered) {
+            renderer.drawTextRotated90CWDither(fontId, x, y, textLine.c_str(), gfxColor(inkColor), epdStyle);
+            return;
+          }
+        }
+        renderer.drawTextRotated90CW(fontId, x, y, textLine.c_str(), black || dithered, epdStyle);
         return;
       }
     }
@@ -176,8 +202,13 @@ class GfxRendererTarget final : public DrawTarget {
         x = style.align == TextAlign::Center ? rect.x + (rect.width - textW) / 2 : rect.x + rect.width - textW;
         if (x < rect.x) x = rect.x;
       }
-      if (dithered) renderer.drawTextDither(fontId, x, y, textLine, gfxColor(inkColor), epdStyle);
-      else renderer.drawText(fontId, x, y, textLine, black, epdStyle);
+      if constexpr (HasTextDither<GfxRenderer>::value) {
+        if (dithered) {
+          renderer.drawTextDither(fontId, x, y, textLine, gfxColor(inkColor), epdStyle);
+          return;
+        }
+      }
+      renderer.drawText(fontId, x, y, textLine, black || dithered, epdStyle);
     };
 
     // Fast path for the common case: text that already fits on one line draws
