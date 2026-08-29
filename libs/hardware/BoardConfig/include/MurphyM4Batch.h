@@ -1,13 +1,10 @@
 #pragma once
 
-#include <array>
-#include <cstddef>
 #include <cstdint>
 
 namespace freeink {
 
 enum class MurphyM4Batch : uint8_t { First, Second };
-enum class MurphyM4BatchProbe : uint8_t { Inconclusive, First, Second };
 
 constexpr MurphyM4Batch defaultMurphyM4Batch() {
 #if defined(FREEINK_MURPHY_M4_BATCH1) && FREEINK_MURPHY_M4_BATCH1
@@ -15,35 +12,6 @@ constexpr MurphyM4Batch defaultMurphyM4Batch() {
 #else
   return MurphyM4Batch::Second;
 #endif
-}
-
-constexpr std::size_t MURPHY_M4_BATCH_SAMPLE_COUNT = 7;
-constexpr uint32_t MURPHY_M4_BATCH2_RISE_MIN_US = 2000;
-constexpr uint32_t MURPHY_M4_BATCH2_RISE_MAX_US = 4500;
-constexpr uint32_t MURPHY_M4_BATCH1_RISE_MIN_US = 5200;
-constexpr uint32_t MURPHY_M4_BATCH1_RISE_MAX_US = 10000;
-
-constexpr uint32_t medianMurphyM4RiseTime(std::array<uint32_t, MURPHY_M4_BATCH_SAMPLE_COUNT>& samples) {
-  for (std::size_t i = 1; i < samples.size(); ++i) {
-    const uint32_t value = samples[i];
-    std::size_t j = i;
-    while (j > 0 && samples[j - 1] > value) {
-      samples[j] = samples[j - 1];
-      --j;
-    }
-    samples[j] = value;
-  }
-  return samples[samples.size() / 2];
-}
-
-constexpr MurphyM4BatchProbe classifyMurphyM4RiseTime(const uint32_t riseTimeUs) {
-  if (riseTimeUs >= MURPHY_M4_BATCH2_RISE_MIN_US && riseTimeUs <= MURPHY_M4_BATCH2_RISE_MAX_US) {
-    return MurphyM4BatchProbe::Second;
-  }
-  if (riseTimeUs >= MURPHY_M4_BATCH1_RISE_MIN_US && riseTimeUs <= MURPHY_M4_BATCH1_RISE_MAX_US) {
-    return MurphyM4BatchProbe::First;
-  }
-  return MurphyM4BatchProbe::Inconclusive;
 }
 
 struct MurphyM4TouchRange {
