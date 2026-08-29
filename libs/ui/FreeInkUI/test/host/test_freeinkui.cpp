@@ -2893,6 +2893,43 @@ void testScreenKeyboardUsesResponsiveHeight() {
   CHECK(interactions.data()[30].rect.bottom() <= device.height);
 }
 
+void testScreenContentMarginCoordinateSpaces() {
+  FakeDrawTarget draw;
+  DeviceContext device = makeDevice(100, 100);
+  device.safeArea = Insets{10, 8, 6, 4};
+  InputSnapshot input;
+  InteractionBuffer<1> interactions;
+  Frame<1> frame(draw, device, input, interactions);
+  ThemeTokens theme;
+  Screen<1> screen(frame, theme);
+
+  // Regular content margins remain relative to the safe rectangle.
+  screen.setContentMargin(Insets{20, 18, 16, 14});
+  Rect content = screen.contentRect();
+  CHECK_EQ(content.x, 18);
+  CHECK_EQ(content.y, 30);
+  CHECK_EQ(content.width, 56);
+  CHECK_EQ(content.height, 48);
+
+  // Screen-relative margins reserve the requested physical edge bands without
+  // applying the safe-area insets twice.
+  screen.setContentMarginFromScreen(Insets{20, 18, 16, 14});
+  content = screen.contentRect();
+  CHECK_EQ(content.x, 14);
+  CHECK_EQ(content.y, 20);
+  CHECK_EQ(content.width, 68);
+  CHECK_EQ(content.height, 64);
+
+  // Reservations contained entirely under the bezel leave the safe rectangle
+  // unchanged.
+  screen.setContentMarginFromScreen(Insets{5, 7, 3, 2});
+  content = screen.contentRect();
+  CHECK_EQ(content.x, 4);
+  CHECK_EQ(content.y, 10);
+  CHECK_EQ(content.width, 88);
+  CHECK_EQ(content.height, 84);
+}
+
 void testEReaderChromeMenusAndPanels() {
   FakeDrawTarget draw;
   DeviceContext device = makeDevice(300, 400);
@@ -3583,6 +3620,7 @@ int main() {
   testKeyboardBottomHitOverflow();
   testHeaderLeadingButton();
   testScreenKeyboardUsesResponsiveHeight();
+  testScreenContentMarginCoordinateSpaces();
   testEReaderChromeMenusAndPanels();
   testEReaderBookSurfaces();
   testHeaderBorderEdges();
