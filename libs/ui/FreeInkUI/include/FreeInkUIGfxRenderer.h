@@ -139,22 +139,34 @@ class GfxRendererTarget final : public DrawTarget {
 
   // Dithered (gray) text needs GfxRenderer::drawTextDither /
   // drawTextRotated90CWDither. Firmwares that predate them still compile:
-  // detected per-method, with a solid-ink fallback (the old collapse-to-black
-  // behavior) when a method is absent, so the adapter never hard-requires the
-  // newer renderer API.
-  template <typename R, typename = void>
-  struct HasTextDither : std::false_type {};
+  // each helper's method-calling overload only instantiates when the renderer
+  // has the method (the int/long parameter breaks the tie in its favor);
+  // otherwise the fallback overload wins, returns false, and the caller draws
+  // solid ink -- the old collapse-to-black behavior. The renderer type must
+  // arrive as a template parameter so the lookup is dependent; naming
+  // GfxRenderer directly would hard-require the newer API again.
   template <typename R>
-  struct HasTextDither<R, std::void_t<decltype(std::declval<const R&>().drawTextDither(
-                              0, 0, 0, static_cast<const char*>(nullptr),
-                              std::declval<::Color>(), std::declval<EpdFontFamily::Style>()))>> : std::true_type {};
-  template <typename R, typename = void>
-  struct HasRotatedTextDither : std::false_type {};
+  static auto tryDrawTextDither(const R& r, const int fontId, const int x, const int y, const char* line,
+                                const ::Color color, const EpdFontFamily::Style st, int)
+      -> decltype(r.drawTextDither(fontId, x, y, line, color, st), true) {
+    r.drawTextDither(fontId, x, y, line, color, st);
+    return true;
+  }
   template <typename R>
-  struct HasRotatedTextDither<R, std::void_t<decltype(std::declval<const R&>().drawTextRotated90CWDither(
-                                     0, 0, 0, static_cast<const char*>(nullptr),
-                                     std::declval<::Color>(), std::declval<EpdFontFamily::Style>()))>>
-      : std::true_type {};
+  static bool tryDrawTextDither(const R&, int, int, int, const char*, ::Color, EpdFontFamily::Style, long) {
+    return false;
+  }
+  template <typename R>
+  static auto tryDrawTextRotatedDither(const R& r, const int fontId, const int x, const int y, const char* line,
+                                       const ::Color color, const EpdFontFamily::Style st, int)
+      -> decltype(r.drawTextRotated90CWDither(fontId, x, y, line, color, st), true) {
+    r.drawTextRotated90CWDither(fontId, x, y, line, color, st);
+    return true;
+  }
+  template <typename R>
+  static bool tryDrawTextRotatedDither(const R&, int, int, int, const char*, ::Color, EpdFontFamily::Style, long) {
+    return false;
+  }
 
   void text(const Rect rect, const char* text, const TextStyle style) override {
     if (!text || rect.empty()) return;
@@ -163,9 +175,11 @@ class GfxRendererTarget final : public DrawTarget {
     // A solid foreground maps to the legacy 1-bit `black` flag; a dithered
     // foreground (a disabled row's dither(LightGray)) is passed through to the
     // renderer's dithered text path so it renders gray instead of solid black.
-    const Color inkColor = style.inverted && style.color != Color::Transparent
-                               ? invertedColor(style.color)
-                               : style.color;
+    // `inverted` marks paper-colored text (textStyleWithForeground sets it
+    // alongside a White color for labels on filled elements); honor it as
+    // "draw paper", NOT as a color flip -- flipping the White-and-inverted
+    // pair lands back on black and paints filled tiles' labels invisible.
+    const Color inkColor = style.inverted ? Color::White : style.color;
     const bool black = inkColor == Color::Black;
     const bool dithered = inkColor != Color::Black && inkColor != Color::White;
     const int lh = renderer.getLineHeight(fontId);
@@ -184,11 +198,9 @@ class GfxRendererTarget final : public DrawTarget {
         if (style.align == TextAlign::Center) y = rect.y + (rect.height + textLen) / 2;
         if (style.align == TextAlign::Right) y = rect.bottom();
         const int x = rect.x + std::max(0, (rect.width - lh) / 2);
-        if constexpr (HasRotatedTextDither<GfxRenderer>::value) {
-          if (dithered) {
-            renderer.drawTextRotated90CWDither(fontId, x, y, textLine.c_str(), gfxColor(inkColor), epdStyle);
-            return;
-          }
+        if (dithered && tryDrawTextRotatedDither(renderer, fontId, x, y, textLine.c_str(), gfxColor(inkColor),
+                                                 epdStyle, 0)) {
+          return;
         }
         renderer.drawTextRotated90CW(fontId, x, y, textLine.c_str(), black || dithered, epdStyle);
         return;
@@ -202,11 +214,8 @@ class GfxRendererTarget final : public DrawTarget {
         x = style.align == TextAlign::Center ? rect.x + (rect.width - textW) / 2 : rect.x + rect.width - textW;
         if (x < rect.x) x = rect.x;
       }
-      if constexpr (HasTextDither<GfxRenderer>::value) {
-        if (dithered) {
-          renderer.drawTextDither(fontId, x, y, textLine, gfxColor(inkColor), epdStyle);
-          return;
-        }
+      if (dithered && tryDrawTextDither(renderer, fontId, x, y, textLine, gfxColor(inkColor), epdStyle, 0)) {
+        return;
       }
       renderer.drawText(fontId, x, y, textLine, black || dithered, epdStyle);
     };
