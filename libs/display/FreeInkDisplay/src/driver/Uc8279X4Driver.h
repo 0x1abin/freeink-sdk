@@ -79,10 +79,6 @@ class Uc8279X4Driver : public PanelDriver {
 
   void requestResync(uint8_t settlePasses) override;
   void skipInitialResync() override;
-  // Inverted (dark-background) content: fast refreshes rewrite the OLD plane
-  // as the complement of the target so every pixel is re-driven toward its
-  // target each update. See displayStart().
-  void setBackgroundHint(bool darkBackground) override { _darkBackground = darkBackground; }
 
   // --- 4-level grayscale (anti-aliasing) ---
   // External-LUT path (ported from the UC8179 sibling). CrossPoint supplies DELTA
@@ -136,7 +132,6 @@ class Uc8279X4Driver : public PanelDriver {
   uint32_t _bufferSize;
 
   bool _isScreenOn = false;
-  bool _darkBackground = false;
   bool _needFullClear = true;
   bool _oldPlaneValid = false;
 
@@ -154,8 +149,7 @@ class Uc8279X4Driver : public PanelDriver {
   // charge the plain B/W fast diff can't scrub (the B/W baseline records those
   // pixels as white), so it accumulates under rapid page turns → garble. Consumed
   // by the next B/W displayStart to RE-DRIVE every pixel to its target (DTM1 =
-  // ~newframe), scrubbing the residue with a cheap DU (no GC flash) — the same
-  // trick as _darkBackground, applied once after AA.
+  // ~newframe), scrubbing the residue with a cheap DU (no GC flash).
   bool _redriveAfterGray = false;
 
   // Async split state (see Uc8179Driver for the contract).
