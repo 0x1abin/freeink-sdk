@@ -139,7 +139,14 @@ class GfxRendererTarget final : public DrawTarget {
     if (!text || rect.empty()) return;
     const int fontId = gfxFont(style.font);
     const EpdFontFamily::Style epdStyle = fontStyle(style);
-    const bool black = !style.inverted && style.color != Color::White;
+    // A solid foreground maps to the legacy 1-bit `black` flag; a dithered
+    // foreground (a disabled row's dither(LightGray)) is passed through to the
+    // renderer's dithered text path so it renders gray instead of solid black.
+    const Color inkColor = style.inverted && style.color != Color::Transparent
+                               ? invertedColor(style.color)
+                               : style.color;
+    const bool black = inkColor == Color::Black;
+    const bool dithered = inkColor != Color::Black && inkColor != Color::White;
     const int lh = renderer.getLineHeight(fontId);
     const uint8_t maxLines = style.maxLines > 0 ? style.maxLines : 1;
 
@@ -156,7 +163,8 @@ class GfxRendererTarget final : public DrawTarget {
         if (style.align == TextAlign::Center) y = rect.y + (rect.height + textLen) / 2;
         if (style.align == TextAlign::Right) y = rect.bottom();
         const int x = rect.x + std::max(0, (rect.width - lh) / 2);
-        renderer.drawTextRotated90CW(fontId, x, y, textLine.c_str(), black, epdStyle);
+        if (dithered) renderer.drawTextRotated90CWDither(fontId, x, y, textLine.c_str(), gfxColor(inkColor), epdStyle);
+        else renderer.drawTextRotated90CW(fontId, x, y, textLine.c_str(), black, epdStyle);
         return;
       }
     }
@@ -168,7 +176,8 @@ class GfxRendererTarget final : public DrawTarget {
         x = style.align == TextAlign::Center ? rect.x + (rect.width - textW) / 2 : rect.x + rect.width - textW;
         if (x < rect.x) x = rect.x;
       }
-      renderer.drawText(fontId, x, y, textLine, black, epdStyle);
+      if (dithered) renderer.drawTextDither(fontId, x, y, textLine, gfxColor(inkColor), epdStyle);
+      else renderer.drawText(fontId, x, y, textLine, black, epdStyle);
     };
 
     // Fast path for the common case: text that already fits on one line draws
