@@ -1655,7 +1655,7 @@ constexpr BoardProfile XTEINK_X4_CLASSIC = {
     // from NVS screenType. GPIO1 supplies the panel/peripheral rail.
     // {SCLK, MOSI, CS, DC, RST, BUSY, powerEnable}
     {12, 11, 13, 14, 10, 18, PIN_UNASSIGNED},
-    2000000,  // conservative bring-up clock; OEM operation is faster
+    20000000,  // displaySpiHz: UC8279 serial-write maximum; avoids throttling full-plane AA uploads
     // SD SPI view retained only for consistency; the card mounts via the native SDMMC
     // block device (sdmmc field below). GPIO6 is its active-low enable; the stock mount
     // pulses HIGH->LOW and leaves it LOW while the card is in use.
