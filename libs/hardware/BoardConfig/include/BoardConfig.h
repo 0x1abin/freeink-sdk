@@ -39,6 +39,9 @@
 #ifndef FREEINK_DEVICE_X4PRO
 #define FREEINK_DEVICE_X4PRO 0
 #endif
+#ifndef FREEINK_DEVICE_X4CLASSIC
+#define FREEINK_DEVICE_X4CLASSIC 0
+#endif
 #ifndef FREEINK_DEVICE_M5
 #define FREEINK_DEVICE_M5 0
 #endif
@@ -71,11 +74,12 @@
 #endif
 
 // --- 2) Coherence: exactly one MCU family, at least one device ---------------
-#if !(FREEINK_DEVICE_X4 || FREEINK_DEVICE_X3 || FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_M5 || FREEINK_DEVICE_MURPHY || \
-      FREEINK_DEVICE_DELINK || FREEINK_DEVICE_LILYGO || FREEINK_DEVICE_M5PAPER || FREEINK_DEVICE_STICKY ||            \
-      FREEINK_DEVICE_PAPERMONO || FREEINK_DEVICE_PAPERS3 || FREEINK_DEVICE_MURPHY_M4 || FREEINK_DEVICE_EEGO_A4)
+#if !(FREEINK_DEVICE_X4 || FREEINK_DEVICE_X3 || FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_X4CLASSIC || FREEINK_DEVICE_M5 || \
+      FREEINK_DEVICE_MURPHY || FREEINK_DEVICE_DELINK || FREEINK_DEVICE_LILYGO || FREEINK_DEVICE_M5PAPER ||               \
+      FREEINK_DEVICE_STICKY || FREEINK_DEVICE_PAPERMONO || FREEINK_DEVICE_PAPERS3 || FREEINK_DEVICE_MURPHY_M4 ||         \
+      FREEINK_DEVICE_EEGO_A4)
 #error \
-    "FreeInk: no device selected. Pass at least one -DFREEINK_DEVICE_<NAME> (X4, X3, X4PRO, M5, MURPHY, DELINK, LILYGO, M5PAPER, STICKY, PAPERMONO, PAPERS3, MURPHY_M4, EEGO_A4) in your build env — see platformio.sample.ini."
+    "FreeInk: no device selected. Pass at least one -DFREEINK_DEVICE_<NAME> (X4, X3, X4PRO, X4CLASSIC, M5, MURPHY, DELINK, LILYGO, M5PAPER, STICKY, PAPERMONO, PAPERS3, MURPHY_M4, EEGO_A4) in your build env — see platformio.sample.ini."
 #endif
 // Each device belongs to one MCU family; a binary targets exactly one. X3/X4 are
 // ESP32-C3; M5 PaperColor/Murphy/de-link/LilyGo are ESP32-S3; M5Paper v1.1 is the
@@ -84,8 +88,8 @@
 #define FREEINK_MCU_C3 (FREEINK_DEVICE_X3 || FREEINK_DEVICE_X4)
 #define FREEINK_MCU_S3                                                                                    \
   (FREEINK_DEVICE_M5 || FREEINK_DEVICE_MURPHY || FREEINK_DEVICE_DELINK || FREEINK_DEVICE_LILYGO ||        \
-   FREEINK_DEVICE_STICKY || FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_PAPERMONO || FREEINK_DEVICE_PAPERS3 ||  \
-   FREEINK_DEVICE_MURPHY_M4 || FREEINK_DEVICE_EEGO_A4)
+   FREEINK_DEVICE_STICKY || FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_X4CLASSIC || FREEINK_DEVICE_PAPERMONO ||  \
+   FREEINK_DEVICE_PAPERS3 || FREEINK_DEVICE_MURPHY_M4 || FREEINK_DEVICE_EEGO_A4)
 #define FREEINK_MCU_ESP32 (FREEINK_DEVICE_M5PAPER)
 #if (FREEINK_MCU_C3 + FREEINK_MCU_S3 + FREEINK_MCU_ESP32) != 1
 #error \
@@ -100,7 +104,7 @@
 // use SSD1677, UC8179, or UC8279, recovered from OEM firmware and hardware
 // references — see docs/xteink-x4pro-support.md.
 #if FREEINK_DEVICE_X4 || FREEINK_DEVICE_DELINK || FREEINK_DEVICE_STICKY || FREEINK_DEVICE_X4PRO || \
-    FREEINK_DEVICE_MURPHY_M4
+    FREEINK_DEVICE_X4CLASSIC || FREEINK_DEVICE_MURPHY_M4
 #define FREEINK_DRIVER_SSD1677 1
 #else
 #define FREEINK_DRIVER_SSD1677 0
@@ -128,7 +132,7 @@
 #else
 #define FREEINK_DRIVER_UC8279 0
 #endif
-#if FREEINK_DEVICE_X4 || FREEINK_DEVICE_X4PRO
+#if FREEINK_DEVICE_X4 || FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_X4CLASSIC
 #define FREEINK_DRIVER_UC8179 1
 #define FREEINK_DRIVER_UC8279_X4 1
 #else
@@ -250,8 +254,9 @@
 // ACTIVE.batteryGauge.gaugeAddr != 0) — required because X3 (gauge) and X4 (ADC)
 // share one C3 binary.
 #ifndef FREEINK_BATTERY_I2C_GAUGE
-#define FREEINK_BATTERY_I2C_GAUGE \
-  (FREEINK_DEVICE_X3 || FREEINK_DEVICE_LILYGO || FREEINK_DEVICE_STICKY || FREEINK_DEVICE_X4PRO)
+#define FREEINK_BATTERY_I2C_GAUGE                                                            \
+  (FREEINK_DEVICE_X3 || FREEINK_DEVICE_LILYGO || FREEINK_DEVICE_STICKY || FREEINK_DEVICE_X4PRO || \
+   FREEINK_DEVICE_X4CLASSIC)
 #endif
 #ifndef FREEINK_CAP_COLOR
 #define FREEINK_CAP_COLOR (FREEINK_DEVICE_M5)
@@ -269,14 +274,14 @@
 // I2C driver only when its flag is set; otherwise it links stub bodies.
 #ifndef FREEINK_CAP_RTC
 #define FREEINK_CAP_RTC                                                                             \
-  (FREEINK_DEVICE_X3 || FREEINK_DEVICE_STICKY || FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_PAPERMONO || \
-   FREEINK_DEVICE_PAPERS3 || FREEINK_DEVICE_LILYGO || FREEINK_DEVICE_EEGO_A4)
+  (FREEINK_DEVICE_X3 || FREEINK_DEVICE_STICKY || FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_X4CLASSIC || \
+   FREEINK_DEVICE_PAPERMONO || FREEINK_DEVICE_PAPERS3 || FREEINK_DEVICE_LILYGO || FREEINK_DEVICE_EEGO_A4)
 #endif
 #ifndef FREEINK_CAP_TEMP_HUMIDITY
 #define FREEINK_CAP_TEMP_HUMIDITY (FREEINK_DEVICE_STICKY)
 #endif
 #ifndef FREEINK_CAP_IMU
-#define FREEINK_CAP_IMU (FREEINK_DEVICE_X3 || FREEINK_DEVICE_STICKY)
+#define FREEINK_CAP_IMU (FREEINK_DEVICE_X3 || FREEINK_DEVICE_STICKY || FREEINK_DEVICE_X4CLASSIC)
 #endif
 // LEDC PWM buzzer (tone beeper). The Buzzer lib drives the AudioConfig.buzzer
 // pin; on for boards that wire one (Sticky GPIO48, Murphy GPIO46, PaperS3
@@ -313,8 +318,9 @@
 // must define USE_BLOCK_DEVICE_INTERFACE=1 for the SdFat FsVolume these mount on.
 // Override with -DFREEINK_SD_SDMMC=0/1.
 #ifndef FREEINK_SD_SDMMC
-#define FREEINK_SD_SDMMC \
-  (FREEINK_DEVICE_DELINK || FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_PAPERMONO || FREEINK_DEVICE_MURPHY_M4)
+#define FREEINK_SD_SDMMC                                                                            \
+  (FREEINK_DEVICE_DELINK || FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_X4CLASSIC || FREEINK_DEVICE_PAPERMONO || \
+   FREEINK_DEVICE_MURPHY_M4)
 #endif
 
 // Serial log transport hint for consumer firmware. Boards can share the same MCU
@@ -358,6 +364,8 @@ enum class Board : uint8_t {
   XteinkX3,
   XteinkX3Uc8279,  // newer X3 production run: same board/glass, UC8279d controller
   XteinkX4Pro,     // ESP32-S3 sibling of the C3 X4: SSD1677 + GT911 touch + warm/cold frontlight
+  XteinkX4Classic,  // ESP32-S3 "X4 Classic" (X4C): same panel/glass as the X4 Pro but NO touch and
+                    // NO frontlight — those pins become four extra discrete front keys
   M5StackPaperColor,
   MurphyM3,
   MurphyM4,
@@ -1603,6 +1611,98 @@ constexpr BoardProfile XTEINK_X4_PRO = {
     {9, 7, 3, 7},
     true};  // batteryChargeStatusActiveHigh: GPIO21 STAT is driven HIGH while charging
 
+// --- Xteink X4 Classic (X4C) — ESP32-S3, 800x480 EPD, NO touch, NO frontlight ---
+// The X4C shares the X4 Pro's ESP32-S3 board, glass, and display stack (SSD1677 /
+// UC8179 / UC8279, selected the same way at boot), but DROPS the GT911 touchscreen
+// and the warm/cool frontlight. The GPIOs those freed up (touch-power GPIO2,
+// SD-power GPIO5, frontlight GPIO8/GPIO9) are reused as four extra discrete front
+// ("Bottom Key") buttons.
+//
+// Evidence: reverse-engineered from the stock flash dump (flashx4c.bin, app0 =
+// xteink_app v7.0.11). Board tag `ESP32S3_X4_CLA` (rev `ESP32S3_X4R2_CLA`), default
+// panel string `ESP32S3_X4_CLA_SSD1677`. The single board hardware-init function
+// FUN_4214c798 constructs the SPI display bus (FUN_4214d260(bus,11,12,13,14) ->
+// MOSI11/SCLK12/CS13/DC14), the BM8563 RTC and the Cw2017 gauge on I2C SDA39/SCL38
+// @400kHz, and registers every GPIO. The GPIO config call's mode arg is decoded from
+// unambiguous pins: SPI drive lines + the GPIO1 rail use mode 1 = OUTPUT, the STAT
+// line uses mode 0 = plain INPUT, buttons use mode 2 = input+ISR. Confidence:
+//   HIGH   : display MOSI11/SCLK12/CS13/DC14/RST10/BUSY18. FUN_4214d260 stores
+//            GPIO14 as the derived bus's D/C pin. The boot path binds the remaining
+//            display tuple as bus/GPIO10/GPIO18; FUN_42148418 pulses tuple[1]
+//            HIGH->LOW->HIGH as RESET, while tuple[2] is the BUSY input. GPIO6 is
+//            attached
+//            to the storage object; FUN_4214d4a8 pulses it HIGH for 80 ms, LOW for
+//            120 ms, then runs SDMMC with the active-low gate held LOW. Also confirmed:
+//            GPIO1 power rail, the discrete button GPIOs (0/7/3 primary cluster +
+//            2/5/8/9 front keys), charge-STAT=GPIO21, touch ABSENT, frontlight ABSENT,
+//            and the SSD1677/UC8179/UC8279 controller set + hw_calib/screenType.
+// Physical button layout is the X4 Pro's two SIDE keys (page turn) plus the C3
+// X4's four BOTTOM keys, so the mapping mirrors both boards (see the input field).
+// As a buttons-only device (DigitalButtons + NO_TOUCH) with all six nav actions
+// mapped, the UI shows side-bezel button hints, like the X4/X3.
+//   PENDING hardware: the role of GPIO4 (configured as an input but NOT
+//            interrupt-attached, so not a button), plus confirmation of the
+//            charge-STAT polarity and panel orientation. See
+//            docs/xteink-x4c-support.md.
+constexpr BoardProfile XTEINK_X4_CLASSIC = {
+    Board::XteinkX4Classic,
+    "xteink_x4_classic",
+    InputStyle::DigitalButtons,
+    DisplayController::SSD1677,  // boot default; NVS screenType selects UC8179/UC8279
+    800,
+    480,
+    // Display SPI, recovered from the stock X4C image. No MISO; the controller comes
+    // from NVS screenType. GPIO1 supplies the panel/peripheral rail.
+    // {SCLK, MOSI, CS, DC, RST, BUSY, powerEnable}
+    {12, 11, 13, 14, 10, 18, PIN_UNASSIGNED},
+    2000000,  // conservative bring-up clock; OEM operation is faster
+    // SD SPI view retained only for consistency; the card mounts via the native SDMMC
+    // block device (sdmmc field below). GPIO6 is its active-low enable; the stock mount
+    // pulses HIGH->LOW and leaves it LOW while the card is in use.
+    {41, 40, 42, 45, 6, true, 0, false},
+    // Seven discrete active-low GPIO buttons (each an input+ISR in the board init;
+    // NOT an ADC ladder): six navigation keys plus power. Physical layout = the two
+    // side keys of the X4 Pro PLUS the
+    // four bottom keys of the C3 X4, so the logical mapping mirrors both:
+    //   * Two SIDE keys (page turn, like the X4 Pro): Left=GPIO0 -> up/prev,
+    //     Right=GPIO7 -> down/next.
+    //   * Four BOTTOM keys (like the normal X4's cluster): left/right/confirm/back on
+    //     GPIO2/5/8/9 (stock "Bottom Key 1-4", array order 2,5,8,9). Because there is
+    //     no touchscreen, these physical keys are how the reader gets back/confirm, and
+    //     with all six nav actions mapped the UI renders side-bezel button hints (the
+    //     device is InputStyle::DigitalButtons + NO_TOUCH, like the X4/X3). This order
+    //     is confirmed by hardware testing: the old GPIO8/9 left/right assignment made
+    //     the physical Confirm/Back keys act as Up/Down.
+    //   * Power=GPIO3. (GPIO4 is a non-interrupt input, role PENDING — not a button.)
+    // {back, confirm, left, right, up, down, power, powerActiveHigh}
+    {9, 8, 2, 5, 0, 7, 3, false},
+    PIN_UNASSIGNED,  // batteryAdc: uses the CW2017 gauge, not an ADC pin
+    21,              // batteryChargeStatus: GPIO21 STAT (carried from X4 Pro), active-HIGH (tail)
+    2.0f,
+    PIN_UNASSIGNED,  // usbDetect: native S3 USB detects the cable
+    NO_TOUCH,        // no touchscreen — stock instantiates NoTouchDriver
+    NO_FRONTLIGHT,   // no frontlight — stock reports "Frontlight hardware is disabled on this board"
+    NO_AUDIO,
+    NO_LEDS,
+    NO_FLIP,  // panel mount transform pending hardware; native SSD1677 scan is 800x480 landscape
+    // Native SDMMC 1-bit: CLK=41 CMD=42 DAT0=40, slot 1. D1/D2/D3 are unused.
+    // Its GPIO6 gate is carried by sd.powerEnable above.
+    {41, 42, 40, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, 1},
+    // CW2017 fuel gauge at I2C 0x63 on the shared bus SDA39/SCL38 400 kHz (same as X4 Pro).
+    {39, 38, 400000, 0x63, 0, 0, GaugeType::Cw2017},
+    NO_MIC,
+    // Shared I2C bus SDA39/SCL38 @400k: BM8563 RTC (PCF8563-compatible) @0x51, plus a
+    // QMI8658 6-axis IMU @0x6B (RE-confirmed: WHO_AM_I reg0==0x05, CTRL1/2/3/7 init on
+    // addr 0x6B, no INT pin). {sda,scl,hz,rtcAddr,tempHumAddr,imuAddr,bus,rtcType,imuType}
+    {39, 38, 400000, 0x51, 0, 0x6B, 0, RtcType::Pcf8563, ImuType::Qmi8658},
+    1.0f,  // uiScale: button-navigated device (no touch) — original pixel-era chrome sizes
+    // GPIO1 is the board's master peripheral/panel rail. GPIO10 is display RESET,
+    // not a power latch, and is initialized by EpdBus.
+    {1, PIN_UNASSIGNED},
+    0,  // displayControllerVariant: filled by the boot probe
+    {9, 7, 3, 7},  // bezel insets: carried from X4 Pro (same glass), pending measurement
+    true};  // batteryChargeStatusActiveHigh: GPIO21 STAT driven HIGH while charging
+
 // Largest framebuffer (bytes) over the devices compiled into this build, derived
 // from the profiles above. The display facade sizes its static framebuffer to
 // this so one binary holds whichever panel is runtime-selected; a single-device
@@ -1619,7 +1719,8 @@ constexpr uint32_t MAX_FRAMEBUFFER_BYTES = cmax(
     cmax(cmax(cmax(FREEINK_DEVICE_DELINK ? panelBytes(DE_LINK) : 0u,
                    FREEINK_DEVICE_LILYGO ? panelBytes(LILYGO_T5S3) : 0u),
               cmax(FREEINK_DEVICE_M5PAPER ? panelBytes(M5PAPER_V11) : 0u,
-                   FREEINK_DEVICE_X4PRO ? panelBytes(XTEINK_X4_PRO) : 0u)),
+                   cmax(FREEINK_DEVICE_X4PRO ? panelBytes(XTEINK_X4_PRO) : 0u,
+                        FREEINK_DEVICE_X4CLASSIC ? panelBytes(XTEINK_X4_CLASSIC) : 0u))),
          cmax(cmax(FREEINK_DEVICE_STICKY ? panelBytes(STICKY) : 0u,
                    FREEINK_DEVICE_PAPERMONO ? panelBytes(PAPER_MONO) : 0u),
               cmax(cmax(FREEINK_DEVICE_PAPERS3 ? panelBytes(M5PAPER_S3) : 0u,
@@ -1651,6 +1752,8 @@ constexpr BoardProfile DEFAULT_DEVICE = M5PAPER_S3;
 constexpr BoardProfile DEFAULT_DEVICE = STICKY;
 #elif FREEINK_DEVICE_X4PRO
 constexpr BoardProfile DEFAULT_DEVICE = XTEINK_X4_PRO;
+#elif FREEINK_DEVICE_X4CLASSIC
+constexpr BoardProfile DEFAULT_DEVICE = XTEINK_X4_CLASSIC;
 #elif FREEINK_DEVICE_X3 && !FREEINK_DEVICE_X4
 constexpr BoardProfile DEFAULT_DEVICE = XTEINK_X3;  // X3-only binary
 #else
@@ -1723,6 +1826,11 @@ inline bool selectDevice(Board which) {
       ACTIVE = XTEINK_X4_PRO;
       break;
 #endif
+#if FREEINK_DEVICE_X4CLASSIC
+    case Board::XteinkX4Classic:
+      ACTIVE = XTEINK_X4_CLASSIC;
+      break;
+#endif
 #if FREEINK_DEVICE_PAPERMONO
     case Board::PaperMono:
       ACTIVE = PAPER_MONO;
@@ -1756,6 +1864,7 @@ inline bool isM5PaperV11() { return ACTIVE.board == Board::M5PaperV11; }
 inline bool isM5PaperS3() { return ACTIVE.board == Board::M5PaperS3; }
 inline bool isSticky() { return ACTIVE.board == Board::Sticky; }
 inline bool isX4Pro() { return ACTIVE.board == Board::XteinkX4Pro; }
+inline bool isX4Classic() { return ACTIVE.board == Board::XteinkX4Classic; }
 inline bool isPaperMono() { return ACTIVE.board == Board::PaperMono; }
 inline bool isEegoA4() { return ACTIVE.board == Board::EegoA4; }
 inline bool hasTouch() { return ACTIVE.touch.controller != TouchController::None; }
