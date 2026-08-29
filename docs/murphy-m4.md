@@ -31,20 +31,24 @@ so it creates no queue or heap allocation. The native IDF I²C1 driver serialize
 touch and RX8010 transactions. Deep sleep pauses the sampler and waits for any
 in-flight read before disabling GPIO45.
 
-The consumer detects the two production batches from the GPIO1/KEY1 RC network
-before `InputManager::begin()`, then calls `InputManager::setMurphyM4Batch()`
-and `FreeInkDisplay::setMurphyM4Batch()` before display initialization. The
-display facade retains the selection and constructs the SSD1677 singleton from
-one of two immutable configurations; it does not mutate shared driver config.
-Batch 1 (no R13) uses HALF/window
-pseudo-temperature `0x3C` and touch short-axis range `[-52,553]`; batch 2 (R13
-fitted) uses `0x50` and `[-47,514]`. Batch 2 remains the inconclusive-probe
-fallback. Define `FREEINK_MURPHY_M4_BATCH1=1` only for recovery or diagnostics.
-First-batch hardware produced a 6008 µs median across 101 samples
-(6004–6059 µs, 0.379% coefficient of variation), satisfying the batch-1 and
-stability thresholds. Runtime detection uses seven `uint32_t` samples (28 bytes)
-on the caller's stack and adds no heap allocation. Second-batch hardware
-validation remains pending.
+The SDK owns no board-revision probe or thresholds. Before
+`InputManager::begin()`, the consumer selects a final batch and calls
+`InputManager::setMurphyM4Batch()` and
+`FreeInkDisplay::setMurphyM4Batch()` before display initialization. The display
+facade retains the selection and constructs the SSD1677 singleton from one of
+two immutable configurations; it does not mutate shared driver config. Batch 1
+(no R13) uses HALF/window pseudo-temperature `0x3C` and touch short-axis range
+`[-52,553]`; batch 2 (R13 fitted) uses `0x50` and `[-47,514]`. Define
+`FREEINK_MURPHY_M4_BATCH1=1` only for recovery or diagnostics.
+
+GPIO1 reference data overlaps across batches: first-batch hardware measured a
+6008 µs median across 101 samples (6004–6059 µs, 0.379% coefficient of
+variation), and known second-batch hardware measured 6218 µs (6170–6233 µs,
+101/101 valid). This disproves GPIO1-only detection. The consumer therefore may
+compare GPIO2/R13 against GPIO1 to positively confirm batch 1, but must use
+batch 2 as the default for every other result. A first-batch restart has also
+confirmed that the consumer's existing v2 First cache reaches these SDK display
+and touch selections unchanged.
 
 On first-batch hardware, the touch task retained at least 1120 bytes of its
 3072-byte static stack during a 70-second diagnostic run. Free/minimum/largest
