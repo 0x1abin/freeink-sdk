@@ -167,6 +167,7 @@ void AudioManager::powerDown() {
   const auto& cfg = BoardConfig::ACTIVE.audio;
   if (!begun_) return;
   stop();
+  teardownI2s();
   if (cfg.output == BoardConfig::AudioOutput::I2sEs8311) {
     // Like M5Unified's disable path: drop the amp and the codec rail.
     setAmp(false);
@@ -338,11 +339,13 @@ bool AudioManager::playBuffer(const uint8_t* data, size_t len, bool loop) {
 }
 
 void AudioManager::stop() {
-  if (!playing_) return;
-  stopRequested_ = true;
-  // The task deletes itself; wait for it to drain (bounded).
-  for (int i = 0; i < 200 && playing_; ++i) {
-    vTaskDelay(pdMS_TO_TICKS(10));
+  if (!begun_) return;
+  if (playing_) {
+    stopRequested_ = true;
+    // The task deletes itself; wait for it to drain (bounded).
+    for (int i = 0; i < 200 && playing_; ++i) {
+      vTaskDelay(pdMS_TO_TICKS(10));
+    }
   }
   // Drop the amp and mute the DAC so nothing residual reaches the output
   // between alarms.
@@ -419,6 +422,7 @@ void AudioManager::taskLoop() {
     size_t written = 0;
     if (i2s_channel_write(tx, outBuf, sizeof(outBuf), &written, pdMS_TO_TICKS(200)) != ESP_OK) break;
   }
+  setAmp(false);
   i2s_channel_disable(tx);
   chanEnabled_ = false;
 
