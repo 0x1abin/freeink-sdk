@@ -53,8 +53,8 @@
 #if FREEINK_DRIVER_IT8951
 #include "driver/It8951Driver.h"
 #endif
-#if FREEINK_DRIVER_SSD1683
-#include "driver/Ssd1683Driver.h"
+#if FREEINK_DRIVER_PAPER_MONO
+#include "driver/PaperMonoDriver.h"
 #endif
 
 namespace freeink {
@@ -112,6 +112,10 @@ void FreeInkDisplay::setDisplayM5PaperColor() {
   displayWidthBytes = 600 / 8;
   bufferSize = static_cast<uint32_t>(displayWidthBytes) * displayHeight;
 }
+
+#if FREEINK_DEVICE_MURPHY_M4
+void FreeInkDisplay::setMurphyM4Batch(const MurphyM4Batch batch) { _murphyM4Batch = batch; }
+#endif
 
 void FreeInkDisplay::selectDriver() {
   // Selection is purely _panelSel + the linked FREEINK_DRIVER_* set — no device
@@ -172,9 +176,15 @@ void FreeInkDisplay::selectDriver() {
       }
 #endif
 #if FREEINK_DRIVER_SSD1677
+#if FREEINK_DEVICE_MURPHY_M4
+      if (BoardConfig::ACTIVE.board == BoardConfig::Board::MurphyM4) {
+        _driver = &ssd1677MurphyM4Driver(_murphyM4Batch);
+        break;
+      }
+#endif
       _driver = &ssd1677Driver();
-#elif FREEINK_DRIVER_SSD1683
-      _driver = &ssd1683Driver();
+#elif FREEINK_DRIVER_PAPER_MONO
+      _driver = &paperMonoDriver();
 #elif FREEINK_DRIVER_UC8253_MURPHY
       _driver = &uc8253MurphyDriver();
 #elif FREEINK_DRIVER_M5_OFFICIAL
@@ -849,7 +859,7 @@ void FreeInkDisplay::copyGrayscaleMsbBuffers(const uint8_t* msbBuffer) {
 
 void FreeInkDisplay::writeGrayscalePlaneStrip(GrayPlane plane, const uint8_t* rows, uint16_t yStart, uint16_t numRows) {
   if (_inverted) return;
-  // SSD1683 retains these bytes in PSRAM and performs no bus access here, so
+  // Paper Mono retains these bytes in PSRAM and performs no bus access here, so
   // staging can overlap the B/W waveform. Other drivers may write controller
   // RAM and must drain the pending refresh first.
   if (!_driver->supportsBusyGrayscaleStaging()) syncPendingAsync();
@@ -928,6 +938,14 @@ void FreeInkDisplay::controllerIdle() {
 
 void FreeInkDisplay::requestCompleteWaveformNextRefresh() {
   if (_driver) _driver->requestCompleteWaveformNextRefresh();
+}
+
+void FreeInkDisplay::setFullRefreshCompletesWaveform(bool enabled) {
+  if (_driver) _driver->setFullRefreshCompletesWaveform(enabled);
+}
+
+void FreeInkDisplay::setAccentPlaneSlot(uint8_t slot, const uint8_t* plane, uint8_t colorCode) {
+  if (_driver) _driver->setAccentPlaneSlot(slot, plane, colorCode);
 }
 
 void FreeInkDisplay::setFastRefreshCutoffMs(uint16_t ms) {

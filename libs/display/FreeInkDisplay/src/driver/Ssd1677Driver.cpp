@@ -100,19 +100,37 @@ static const Ssd1677Config& ssd1677StickyConfig() {
   return cfg;
 }
 
-// Mofei M4 keeps the generic SSD1677 waveform but its two panel batches need
-// different pseudo-temperature values for HALF refresh. Batch 2 (R13 fitted)
-// is the shipping default; define FREEINK_MOFEI_M4_BATCH1=1 for the earlier
-// no-R13 panel. Keep this compile-time until both batches are hardware-verified.
-static const Ssd1677Config& ssd1677MofeiM4Config() {
+// Murphy M4 keeps the generic SSD1677 waveform but its two panel batches need
+// different pseudo-temperature values for HALF and window refresh.
+static Ssd1677Config makeSsd1677MurphyM4Config(const uint8_t halfRefreshTemp) {
+  Ssd1677Config value = ssd1677DefaultConfig();
+  value.halfRefreshTemp = halfRefreshTemp;
+  value.halfSeqOverride = 0xD4;
+  return value;
+}
+
+static const Ssd1677Config& ssd1677MurphyM4Config(const MurphyM4Batch batch = defaultMurphyM4Batch()) {
+  static const Ssd1677Config first = makeSsd1677MurphyM4Config(0x3C);
+  static const Ssd1677Config second = makeSsd1677MurphyM4Config(0x50);
+  switch (batch) {
+    case MurphyM4Batch::First:
+      return first;
+    case MurphyM4Batch::Second:
+      return second;
+  }
+  return second;
+}
+
+// Waveshare ESP32-S3 ePaper 3.97. Inherit the default FULL/HALF sequences;
+// override only the panel-specific partial, grayscale, and sleep behavior.
+static const Ssd1677Config& ssd1677Waveshare397Config() {
   static const Ssd1677Config cfg = [] {
     Ssd1677Config value = ssd1677DefaultConfig();
-#if defined(FREEINK_MOFEI_M4_BATCH1) && FREEINK_MOFEI_M4_BATCH1
-    value.halfRefreshTemp = 0x3C;  // batch 1: 60°C
-#else
-    value.halfRefreshTemp = 0x50;  // batch 2: 80°C
-#endif
-    value.halfSeqOverride = 0xD4;
+    value.halfRefreshTemp = 0x6A;
+    value.grayLut = lut_grayscale_waveshare;
+    value.fastSeqOverride = 0xFF;
+    value.grayPowerUpFirst = true;
+    value.borderWaveformGray = 0x80;
     return value;
   }();
   return cfg;
@@ -153,6 +171,21 @@ static const Ssd1677Config& ssd1677X4Config() {
 }
 #endif
 
+// Xteink X4 Pro with the fast-DU shortcut — OPT-IN via
+// -DFREEINK_X4PRO_FAST_DU_SHORTCUT. The X4 Pro paints on the stock X4 config
+// (same GDEQ0426T82 panel class — see ssd1677ActiveConfig), so the same
+// ~85 ms/refresh win applies, and so does the same panel-variance caveat: 0x1C
+// skips the per-refresh temperature load and power sequencing, and artifacts
+// tend to appear only over long sessions and across temperature. Enable only
+// after validating on your unit. SSD1677-batch units only — UC8179/UC8279
+// batches select a different driver and never reach this config.
+#ifdef FREEINK_X4PRO_FAST_DU_SHORTCUT
+static const Ssd1677Config& ssd1677X4ProConfig() {
+  static const Ssd1677Config cfg = fastDuRefreshShortcut(ssd1677DefaultConfig());
+  return cfg;
+}
+#endif
+
 Ssd1677Driver::Ssd1677Driver(const Ssd1677Config& cfg)
     : _cfg(cfg),
       _w(BoardConfig::ACTIVE.displayWidth),
@@ -183,6 +216,10 @@ void Ssd1677Driver::initController(EpdBus& bus) {
   constexpr uint8_t TEMP_SENSOR_INTERNAL = 0x80;
 
   bus.cmd(CMD_SOFT_RESET);
+  // The X4 Pro production sequence requires a fixed 10 ms settle after
+  // SWRESET. Active-high BUSY may not have asserted by the first GPIO sample,
+  // so waitBusy() alone is not a substitute for this delay.
+  delay(10);
   bus.waitBusy(" CMD_SOFT_RESET");
 
   bus.cmd(CMD_TEMP_SENSOR_CONTROL);
@@ -275,6 +312,7 @@ void Ssd1677Driver::writeRamInverted(EpdBus& bus, uint8_t ramCmd, const uint8_t*
 }
 
 void Ssd1677Driver::refresh(EpdBus& bus, RefreshMode mode, bool turnOff, bool async) {
+  _pendingPowerOff = false;
 #if defined(SSD1677_PROBE_DEBUG) && SSD1677_PROBE_DEBUG
   const uint32_t dbgStart = millis();
   const char* dbgMode = (mode == RefreshMode::Full) ? "FULL" : (mode == RefreshMode::Half) ? "HALF" : "FAST";
@@ -310,14 +348,17 @@ void Ssd1677Driver::refresh(EpdBus& bus, RefreshMode mode, bool turnOff, bool as
     bus.data(seqOverride);
     bus.cmd(CMD_MASTER_ACTIVATION);
     if (!async) bus.waitRefreshComplete("refresh");
-    // The sequence powered the panel down at the end, but keep the flag truthful
-    // to intent: leave it "on" between active updates so display() doesn't force a
-    // full HALF refresh next time (which would defeat fast refresh). turnOff marks
-    // it off for the sleep path. The vendor sequences self-cycle power: if they
-    // include the disable bits (0x03) the panel is OFF afterward — track that so the
-    // next refresh (e.g. the custom-LUT grayscale path) powers it back on instead of
-    // issuing a display command against a powered-down panel (which hangs BUSY).
-    _isScreenOn = (seqOverride & 0x03) ? false : !turnOff;
+    // Only sequences carrying the low two disable bits physically power down.
+    // X4 Pro DU (0xFC) does not, so a turnOff request must run the documented
+    // 0x3C=0x80, 0x22=0x03, 0x20 sequence after the waveform completes instead
+    // of merely changing the software flag.
+    const bool sequencePowersOff = (seqOverride & 0x03) != 0;
+    _isScreenOn = !sequencePowersOff;
+    if (turnOff && !sequencePowersOff) {
+      // Defer until displayImpl/displayWindow has completed any post-refresh RAM
+      // rewire. Async updates consume the same flag in displayFinish().
+      _pendingPowerOff = true;
+    }
 #if defined(SSD1677_PROBE_DEBUG) && SSD1677_PROBE_DEBUG
     esp_rom_printf("[SSD1677] %s refresh %ums (ctrl2=0x%x, seq)\n", dbgMode, (unsigned)(millis() - dbgStart),
                    seqOverride);
@@ -374,6 +415,20 @@ void Ssd1677Driver::powerOn(EpdBus& bus) {
   _isScreenOn = true;
 }
 
+void Ssd1677Driver::powerOffController(EpdBus& bus) {
+  if (!_isScreenOn) return;
+  bus.cmd(CMD_BORDER_WAVEFORM);
+  bus.data(_cfg.borderWaveformInit);  // X4 Pro: 0x80
+  bus.cmd(CMD_DISPLAY_UPDATE_CTRL2);
+  bus.data(0x03);  // ANALOG_OFF_PHASE | CLOCK_OFF
+  bus.cmd(CMD_MASTER_ACTIVATION);
+  // Production X4 Pro power-off time. If BUSY remains asserted after the fixed
+  // interval, wait out the remainder before changing the state flag.
+  delay(200);
+  bus.waitBusy(" display power-down");
+  _isScreenOn = false;
+}
+
 void Ssd1677Driver::display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) {
   displayImpl(bus, fb, prev, mode, turnOff, /*async=*/false);
 }
@@ -390,6 +445,10 @@ bool Ssd1677Driver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t* 
 void Ssd1677Driver::displayFinish(EpdBus& bus, const uint8_t* fb) {
   (void)fb;  // X4 post-waveform needs nothing from the host frame
   bus.waitRefreshComplete("refresh");
+  if (_pendingPowerOff) {
+    _pendingPowerOff = false;
+    powerOffController(bus);
+  }
 }
 
 void Ssd1677Driver::displayImpl(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff,
@@ -473,6 +532,10 @@ void Ssd1677Driver::displayImpl(EpdBus& bus, const uint8_t* fb, const uint8_t* p
     writeRam(bus, CMD_WRITE_RAM_BW, fb, _bufferSize);
     writeRam(bus, CMD_WRITE_RAM_RED, fb, _bufferSize);
   }
+  if (!async && _pendingPowerOff) {
+    _pendingPowerOff = false;
+    powerOffController(bus);
+  }
 }
 
 void Ssd1677Driver::displayWindow(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, uint16_t x, uint16_t y,
@@ -527,12 +590,22 @@ void Ssd1677Driver::displayWindow(EpdBus& bus, const uint8_t* fb, const uint8_t*
     writeRam(bus, CMD_WRITE_RAM_RED, previousWindow.data(), windowBufferSize);
   }
 
+#if FREEINK_DEVICE_MURPHY_M4
+  if (BoardConfig::ACTIVE.board == BoardConfig::Board::MurphyM4) {
+    bus.cmd(CMD_WRITE_TEMP);
+    bus.data(_cfg.halfRefreshTemp);
+  }
+#endif
   refresh(bus, RefreshMode::Fast, turnOff);
 
   if (prev == nullptr) {
     setRamArea(bus, x, y, w, h);
     writeRam(bus, CMD_WRITE_RAM_BW, windowBuffer.data(), windowBufferSize);
     writeRam(bus, CMD_WRITE_RAM_RED, windowBuffer.data(), windowBufferSize);
+  }
+  if (_pendingPowerOff) {
+    _pendingPowerOff = false;
+    powerOffController(bus);
   }
 }
 
@@ -653,20 +726,19 @@ void Ssd1677Driver::deepSleep(EpdBus& bus) {
   // Stock parity (_powerOff): park the border at its init value so it is not left
   // driven with the full-refresh waveform through deep sleep, then power down
   // analog/clock. Stock does not touch CTRL1 here.
-  if (_isScreenOn) {
-    bus.cmd(CMD_BORDER_WAVEFORM);
-    bus.data(_cfg.borderWaveformInit);
-    bus.cmd(CMD_DISPLAY_UPDATE_CTRL2);
-    bus.data(0x03);  // ANALOG_OFF_PHASE | CLOCK_OFF
-    bus.cmd(CMD_MASTER_ACTIVATION);
-    bus.waitBusy(" display power-down");
-    _isScreenOn = false;
-  }
+  powerOffController(bus);
   // Stock parity: deep sleep mode 2 (0x03) discards controller RAM. Nothing may
   // treat RAM as a valid diff baseline after wake — initController() re-arms
   // _needsInitialFull, so the first paint is an absolute clean anyway.
   bus.cmd(CMD_DEEP_SLEEP);
-  bus.data(0x03);
+#if FREEINK_DEVICE_WAVESHARE_EPAPER_397
+  if (BoardConfig::ACTIVE.board == BoardConfig::Board::WaveshareEpaper397) {
+    bus.data(0x01);
+  } else
+#endif
+  {
+    bus.data(0x03);
+  }
 }
 
 // Per-board waveform/LUT injection: a board supplies its own SSD1677 config
@@ -685,14 +757,20 @@ static const Ssd1677Config& ssd1677ActiveConfig() {
   switch (BoardConfig::ACTIVE.board) {
     case BoardConfig::Board::Sticky:
       return ssd1677StickyConfig();
-    case BoardConfig::Board::MofeiM4:
-      return ssd1677MofeiM4Config();
+    case BoardConfig::Board::WaveshareEpaper397:
+      return ssd1677Waveshare397Config();
     // X4 Pro runs on the stock X4/GDEQ0426T82 config — same controller and panel
     // class, confirmed painting on hardware. No custom LUT or drive voltages needed.
+    // Layers the fast-DU shortcut only when the build opts in (ssd1677X4ProConfig).
+#ifdef FREEINK_X4PRO_FAST_DU_SHORTCUT
+    case BoardConfig::Board::XteinkX4Pro:
+      return ssd1677X4ProConfig();
+#else
     case BoardConfig::Board::XteinkX4Pro:
       return ssd1677DefaultConfig();
-      // X4 layers the fast-DU shortcut on the default only when the build has
-      // opted in (see ssd1677X4Config); stock 0xFC parity otherwise.
+#endif
+    // X4 layers the fast-DU shortcut on the default only when the build has
+    // opted in (see ssd1677X4Config); stock 0xFC parity otherwise.
 #ifdef FREEINK_X4_FAST_DU_SHORTCUT
     case BoardConfig::Board::XteinkX4:
       return ssd1677X4Config();
@@ -707,5 +785,12 @@ PanelDriver& ssd1677Driver() {
   static Ssd1677Driver instance(ssd1677ActiveConfig());
   return instance;
 }
+
+#if FREEINK_DEVICE_MURPHY_M4
+PanelDriver& ssd1677MurphyM4Driver(const MurphyM4Batch batch) {
+  static Ssd1677Driver instance(ssd1677MurphyM4Config(batch));
+  return instance;
+}
+#endif
 
 }  // namespace freeink

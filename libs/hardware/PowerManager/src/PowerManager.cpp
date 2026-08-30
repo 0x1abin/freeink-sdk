@@ -72,19 +72,20 @@ void holdRailLevel(int8_t pin, uint8_t level) {
 
 void PowerManager::powerDownRailsForSleep() {
   const auto& b = BoardConfig::ACTIVE;
-  // Hold the display RESET line at its idle level (HIGH) through deep sleep.
-  // esp_sleep_config_gpio_isolate() otherwise floats it high-Z; a drifting
-  // active-low RST can pull a controller out of its deep-sleep hold. The SSD1677
-  // tolerates that (no external booster, and its deepSleep actively discharges),
-  // but the UC8179 — which runs an explicit BTST-programmed DC-DC booster — does
-  // not stay collapsed, so its analog restarts and drains the pack through "off"
-  // (field report: dead in ~36 h). Holding RST high is the controller's normal
-  // idle level, so it's harmless for the SSD1677 batch. Released on wake in
-  // EpdBus::begin() before the reset pulse.
-  holdRailLevel(b.display.rst, HIGH);
-  // Keep battery-latch rails asserted while the switchable peripherals sleep.
-  holdRailLevel(b.power.latch0, HIGH);
-  holdRailLevel(b.power.latch1, HIGH);
+  // Keep RESET defined through deep sleep, but never drive an unpowered panel's
+  // input HIGH: on boards with a gated EPD rail (Sticky), that can back-power the
+  // controller through its RESET protection diode and turn sleep into a
+  // milliamp-level drain. Hold RESET LOW alongside a switched-off rail. Boards
+  // whose panel rail remains powered (X4 Pro) keep RESET HIGH so a UC8179 cannot
+  // drift out of DSLP and restart its analog booster. EpdBus and XteinkDetect
+  // release the hold before issuing a reset pulse on wake.
+  const uint8_t resetSleepLevel = b.display.powerEnable >= 0 ? LOW : HIGH;
+  holdRailLevel(b.display.rst, resetSleepLevel);
+#if FREEINK_DEVICE_EEGO_A4
+  // EEGO's GPIO4 battery latch must stay asserted for GPIO8 to wake the S3
+  // from real deep sleep instead of forcing the next press through a cold boot.
+  if (BoardConfig::isEegoA4()) holdRailLevel(b.power.latch0, HIGH);
+#endif
   holdRailLevel(b.display.powerEnable, LOW);
   // SD enable OFF = the inactive level: LOW for active-high enables, HIGH for the
   // active-low ones (e.g. X4 Pro's GPIO5, which powers the card while held LOW).

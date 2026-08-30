@@ -23,6 +23,8 @@ struct ListItem {
   bool toggleChecked = false;
 };
 
+struct ListNav;
+
 enum class SelectionMarker : uint8_t {
   None,      // selection shown by the row's selected BoxStyle
   Underline, // thin line under the selected row's content
@@ -33,6 +35,20 @@ enum class SelectionMarker : uint8_t {
 struct ListProps {
   const ListItem *items = nullptr;
   uint16_t count = 0;
+  // First absolute index items[0] corresponds to. Lets `items` be a small
+  // window around the viewport instead of an array of all `count` entries —
+  // a several-hundred-row list (an EPUB table of contents) would otherwise
+  // pin tens of KB of ListItems + label strings for rows that are never
+  // drawn. list() only touches indexes in [topIndex, topIndex + visible],
+  // so the caller must keep the window covering that range (refresh it after
+  // viewport changes, before list()). 0 = items is the full array.
+  uint16_t itemsWindowFirst = 0;
+  // Number of ListItems supplied in `items` when it is a virtual window.
+  // Set this whenever itemsWindowFirst is non-zero (or the supplied array is
+  // otherwise shorter than count), so optional previews can stay within the
+  // materialized data. 0 preserves the full-array behavior for existing
+  // callers.
+  uint16_t itemsWindowCount = 0;
   // First item index drawn at the top of the rect. The list is virtualized:
   // only the rows that fully fit inside the rect are laid out, drawn, and
   // registered for interaction. Use listVisibleRows()/listTopIndexFor() to
@@ -42,6 +58,7 @@ struct ListProps {
   ActionId action = NO_ACTION;
   uint16_t inputMask = InputDefault | InputPrev | InputNext;
   TextStyle labelText{};
+  TextStyle emphasizedText{};
   TextStyle subtitleText{};
   TextStyle valueText{};
   StyleSet rowStyles{};
@@ -60,6 +77,8 @@ struct ListProps {
   // trailing chevron/value keeps air from the row edge on themes with tight
   // row padding.
   int16_t valueInset = 0;
+  // -1 = inherit from ThemeTokens; 0 = unlimited.
+  int16_t valueMaxWidth = -1;
   // When a multi-line label would otherwise overlap its trailing value, keep
   // the wrapped title band visually balanced with that value. Callers with a
   // short, secondary value (such as a file extension) can disable this to
@@ -85,6 +104,10 @@ struct ListProps {
   // Inward offset of the scroll track from the band edge (for panels recessed
   // behind a bezel). -1 = inherit the theme's listScrollInset.
   int16_t scrollIndicatorInset = -1;
+  SeparatorStyle separator = SeparatorStyle::Inherit;
+  // -1 = inherit, 0 = keep the selection inside the scroll reservation,
+  // 1 = paint the selected background across the full list width.
+  int8_t selectionCoversScrollReservation = -1;
   bool centerSingleLine = false;
   // Shrink each row's background/hit area to its label width plus side
   // padding instead of the full rect width (hug-content menu rows).
@@ -113,6 +136,137 @@ struct ListProps {
   int16_t headerRowHeight = 0; // 0 = headerText line height + underline gap
   int16_t sectionGap = 16;     // extra padding above a non-first header
   bool headerUnderline = true;
+  // Optional viewport-feedback channel: when set, list() reports the laid-out
+  // viewport back to the nav (effective top, indexes that actually fit,
+  // whether the selected row was drawn). Variable-height rows (wrapped
+  // labels, subtitles) can fit fewer rows than the fixed-height
+  // listVisibleRows() estimate; without feedback the selection can sit on a
+  // never-drawn row and page jumps can skip rows entirely.
+  // ListNav::syncToProps() wires this automatically.
+  ListNav *nav = nullptr;
+};
+
+// Stateful companion to the immediate-mode list helpers in FreeInkUICore.h:
+// the selection-vs-viewport protocol most list screens want on e-paper.
+// Drag/swipe scrolling moves the viewport (top) WITHOUT moving the selection —
+// the selection may scroll off-screen; key/button navigation moves the
+// selection and the caller re-follows (follow()) so the viewport is pulled the
+// minimal amount to keep it visible. The first syncToProps() after reset()
+// snaps the viewport to the selection (a list can open on an entry past the
+// first page). How the selection index itself moves (wrap, paging) stays with
+// the caller.
+struct ListNav {
+  int selected = 0;
+  int top = 0;
+  int visibleRows = 1; // measured by syncToProps(); 1 until the first build
+  bool followOnBuild = true;
+  // Indexes the last list() build actually laid out from top (0 = no build
+  // yet). With variable-height rows this is the real page size, unlike the
+  // fixed-height visibleRows estimate.
+  int drawnRows = 0;
+  // A follow() is awaiting confirmation from onListRendered() that the
+  // selection was actually drawn. Swipe scrolling (scrollBy) never sets this:
+  // the selection is allowed off-screen there by design.
+  bool followPending = false;
+  // onListRendered() advanced the viewport after layout; the caller should
+  // rebuild the screen (consumeRebuildNeeded()) before displaying.
+  bool rebuildNeeded = false;
+
+  void reset(const int selectedIndex = 0) {
+    selected = selectedIndex;
+    top = 0;
+    visibleRows = 1;
+    followOnBuild = true;
+    drawnRows = 0;
+    followPending = false;
+    rebuildNeeded = false;
+  }
+
+  // Real rows per page once a build has run; the fixed-height estimate before.
+  int pageRows() const { return drawnRows > 0 ? drawnRows : visibleRows; }
+
+
+  // Layout feedback from list(): the effective top it drew from, how many
+  // indexes fit, and whether the selected row was among them. When a pending
+  // follow finds the selection clipped below the drawn range, advance the
+  // viewport minimally and request a rebuild; each pass moves top strictly
+  // forward and a viewport starting at the selection always draws it, so the
+  // rebuild loop converges.
+  void onListRendered(const uint16_t effectiveTop, const int drawn,
+                      const bool selectedDrawn) {
+    top = effectiveTop;
+    if (drawn > 0)
+      drawnRows = drawn;
+    if (!followPending)
+      return;
+    if (selectedDrawn || selected < top) {
+      followPending = false;
+      return;
+    }
+    int next = selected - (drawn > 0 ? drawn : 1) + 1;
+    if (next <= top)
+      next = top + 1;
+    if (next > selected)
+      next = selected;
+    top = next;
+    rebuildNeeded = true;
+  }
+
+  bool consumeRebuildNeeded() {
+    const bool needed = rebuildNeeded;
+    rebuildNeeded = false;
+    return needed;
+  }
+
+  // Scroll the viewport by deltaRows, clamped to the valid range; the
+  // selection stays put. Returns true when the viewport actually moved.
+  // The clamp uses the measured page size when it is smaller than the
+  // fixed-height estimate: with variable-height rows the true last page
+  // holds fewer rows, and clamping to count - visibleRows would make the
+  // tail rows unreachable (and fight onListRendered's follow correction).
+  bool scrollBy(const int deltaRows, const int count) {
+    const int pageSize =
+        drawnRows > 0 && drawnRows < visibleRows ? drawnRows : visibleRows;
+    int maxTop = count - pageSize;
+    if (maxTop < 0)
+      maxTop = 0;
+    int next = top + deltaRows;
+    if (next > maxTop)
+      next = maxTop;
+    if (next < 0)
+      next = 0;
+    if (next == top)
+      return false;
+    top = next;
+    return true;
+  }
+
+  // Pull the viewport the minimal amount so the selection is visible.
+  void follow(const int count) {
+    followPending = true; // confirmed (or corrected) by onListRendered()
+    const uint16_t rows =
+        visibleRows > 0 ? static_cast<uint16_t>(visibleRows) : 1;
+    top = listTopIndexFor(static_cast<int16_t>(selected),
+                          static_cast<uint16_t>(top < 0 ? 0 : top), rows,
+                          static_cast<uint16_t>(count < 0 ? 0 : count));
+  }
+
+  // Screen-build sync: measure the rows that fit the band, apply the one-shot
+  // follow-on-build, clamp the viewport, and write selection/viewport into the
+  // props. Call from the screen builder right before list().
+  void syncToProps(const Rect body, const int16_t rowHeight,
+                   const int16_t rowGap, const int count, ListProps &props) {
+    const uint16_t rows = listVisibleRows(body, rowHeight, rowGap);
+    visibleRows = rows > 0 ? rows : 1;
+    if (followOnBuild) {
+      followOnBuild = false;
+      follow(count);
+    }
+    scrollBy(0, count); // clamp to range
+    props.selectedIndex = static_cast<int16_t>(selected);
+    props.topIndex = static_cast<uint16_t>(top);
+    props.nav = this; // list() reports its layout back (onListRendered)
+  }
 };
 
 inline void drawListScrollIndicator(DrawTarget &target, const Rect rect,
@@ -161,7 +315,13 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
   uint16_t top = props.topIndex;
   if (top > props.count - 1)
     top = props.count - 1;
-  if (overflows && top > props.count - visible)
+  // Nav-managed lists (props.nav set) clamp their own viewport with the
+  // MEASURED page size (ListNav::scrollBy / onListRendered). The fixed-height
+  // clamp below would undo the nav's follow correction when wrapped rows fit
+  // fewer than `visible`: the nav advances top, this clamp pulls it back, and
+  // the last row(s) can never be drawn (the rebuild loop oscillates instead
+  // of converging).
+  if (overflows && !props.nav && top > props.count - visible)
     top = static_cast<uint16_t>(props.count - visible);
   if (!overflows)
     top = 0;
@@ -173,7 +333,9 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
     rowArea.x = static_cast<int16_t>(rowArea.x + rowInset);
     rowArea.width = static_cast<int16_t>(rowArea.width - rowInset * 2);
   }
-  if (props.scrollIndicator && overflows && scrollW > 0) {
+  const bool drawsScrollIndicator =
+      props.scrollIndicator && overflows && scrollW > 0;
+  if (drawsScrollIndicator) {
     // Rows only give up width when the row inset margin doesn't already
     // clear the track (plus its bezel inset) plus 2px of air.
     const int16_t needed = static_cast<int16_t>(scrollW + scrollInset + 2);
@@ -183,8 +345,9 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
       if (scrollLeft)
         rowArea.x = static_cast<int16_t>(rowArea.x + cut);
     }
-    drawListScrollIndicator(frame.target(), rect, props.count, visible, top,
-                            scrollW, scrollLeft ? 1 : 0, scrollInset);
+    if (props.selectionCoversScrollReservation <= 0)
+      drawListScrollIndicator(frame.target(), rect, props.count, visible, top,
+                              scrollW, scrollLeft ? 1 : 0, scrollInset);
   }
 
   // Cursor-based layout: section header rows are shorter than item rows, so
@@ -195,12 +358,21 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
                               : static_cast<int16_t>(headerLh + 4);
   int16_t cursorY = rowArea.y;
   uint16_t drawnRows = 0;
+  uint16_t consumedIndexes = 0; // item AND header indexes laid out from top
+  bool selectedDrawn = false;
   for (uint16_t i = top; i < props.count; ++i) {
-    const ListItem &item = props.items[i];
+    // Stop before reading the next window entry. The size/layout work below
+    // dereferences `item`, so checking after it would require callers that
+    // virtualize their data to provide one extra, otherwise out-of-window row.
+    if (drawnRows >= visible || i >= end || i < props.itemsWindowFirst ||
+        (props.itemsWindowCount > 0 && i - props.itemsWindowFirst >= props.itemsWindowCount))
+      break;
+    const ListItem &item = props.items[i - props.itemsWindowFirst];
     if (item.isHeader) {
       const int16_t pad = i != top ? props.sectionGap : 0;
       if (static_cast<int16_t>(cursorY + pad + headerH) > rowArea.bottom())
         break;
+      ++consumedIndexes;
       cursorY = static_cast<int16_t>(cursorY + pad);
       Rect headerRow{static_cast<int16_t>(rowArea.x + sidePad), cursorY,
                      static_cast<int16_t>(rowArea.width - sidePad * 2),
@@ -215,18 +387,100 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
       cursorY = static_cast<int16_t>(cursorY + headerH + rowGap);
       continue;
     }
-    if (static_cast<int16_t>(cursorY + rowH) > rowArea.bottom() ||
-        drawnRows >= visible || i >= end)
+    // Per-item height: text whose style allows wrapping (maxLines > 1) and
+    // that overflows its slot grows the row by exactly the extra lines it
+    // USES — measured, not maxLines: a two-line title in a three-line budget
+    // costs one extra line, not two. In a subtitle row the label band takes
+    // its wrapped lines and the subtitle, which may itself wrap, moves below
+    // them; vertical padding stays what a single-line row carries. Label-only
+    // rows keep the "would maxLines already fit rowH" gate, so touch-sized
+    // rows stay unaffected; a subtitle row's rowH is sized for one label line
+    // by construction, so any wrap grows it.
+    int16_t itemH = rowH;
+    int16_t subH = 0;
+    uint8_t labelLines = 1;
+    const TextStyle &itemLabelText =
+        hasState(item.state, StateEmphasized) ? props.emphasizedText
+                                              : props.labelText;
+    const int16_t labelLh = frame.target().lineHeight(itemLabelText.font);
+    // Width the wrapped text is laid out in, shared by this sizing pass and
+    // the draw below: the row content minus the leading icon.
+    int16_t contentAvail = static_cast<int16_t>(rowArea.width - sidePad * 2);
+    if (item.icon || item.iconAsset) {
+      const BitmapRef ic =
+          item.icon ? item.icon : resolveBitmap(frame.assets(), item.iconAsset);
+      const int16_t iconSize = props.iconSize > 0
+                                   ? props.iconSize
+                                   : static_cast<int16_t>(ic.width);
+      contentAvail =
+          static_cast<int16_t>(contentAvail - iconSize - props.textGap);
+    }
+    if (item.label && itemLabelText.maxLines > 1 &&
+        (item.subtitle != nullptr ||
+         static_cast<int16_t>(labelLh * itemLabelText.maxLines) > rowH)) {
+      // The label band also loses the trailing value/toggle slot.
+      int16_t labelAvail = contentAvail;
+      if (item.toggle) {
+        labelAvail = static_cast<int16_t>(
+            labelAvail - (props.toggleWidth < 18 ? 18 : props.toggleWidth) -
+            props.valueInset - props.textGap);
+      } else if (item.value) {
+        int16_t valueW =
+            frame.target()
+                .measureText(props.valueText.font, item.value, props.valueText)
+                .width;
+        if (props.valueMaxWidth > 0 && valueW > props.valueMaxWidth)
+          valueW = props.valueMaxWidth;
+        labelAvail = static_cast<int16_t>(
+            labelAvail - valueW - props.valueInset - props.textGap);
+      }
+      // The cheap single-line width check gates the full wrap layout, so
+      // rows whose label fits pay one measure and nothing else.
+      if (labelAvail > 0 &&
+          frame.target()
+                  .measureText(itemLabelText.font, item.label, itemLabelText)
+                  .width > labelAvail) {
+        const Size wrapped = measureWrappedText(
+            frame.target(), item.label, itemLabelText, labelAvail);
+        const int16_t lines =
+            labelLh > 0 ? static_cast<int16_t>(wrapped.height / labelLh) : 1;
+        if (lines > 1)
+          labelLines = static_cast<uint8_t>(lines);
+      }
+    }
+    if (item.subtitle) {
+      // The subtitle owns its own line(s) under the label, spanning the full
+      // content width. A maxLines > 1 subtitle reserves its wrapped height so
+      // the row grows to fit the extra lines; the default single-line case
+      // keeps the old lineHeight fast path.
+      const int16_t subLh = frame.target().lineHeight(props.subtitleText.font);
+      subH = props.subtitleText.maxLines > 1
+                 ? measureWrappedText(frame.target(), item.subtitle,
+                                      props.subtitleText, contentAvail)
+                       .height
+                 : subLh;
+      const int16_t basePad = static_cast<int16_t>(rowH - labelLh - subLh);
+      const int16_t needed = static_cast<int16_t>(
+          labelLh * labelLines + subH + (basePad > 0 ? basePad : 0));
+      if (needed > rowH)
+        itemH = needed;
+    } else if (labelLines > 1) {
+      itemH = static_cast<int16_t>(rowH + labelLh * (labelLines - 1));
+    }
+    if (static_cast<int16_t>(cursorY + itemH) > rowArea.bottom())
       break;
     ++drawnRows;
-    Rect row{rowArea.x, cursorY, rowArea.width, rowH};
-    cursorY = static_cast<int16_t>(cursorY + rowH + rowGap);
+    ++consumedIndexes;
+    if (props.selectedIndex == static_cast<int16_t>(i))
+      selectedDrawn = true;
+    Rect row{rowArea.x, cursorY, rowArea.width, itemH};
+    cursorY = static_cast<int16_t>(cursorY + itemH + rowGap);
     if (props.hugContents && item.label) {
       // Hug-content rows shrink to the label width plus padding so the
       // selection pill wraps the text instead of spanning the rect.
       const int16_t labelW =
           frame.target()
-              .measureText(props.labelText.font, item.label, props.labelText)
+              .measureText(itemLabelText.font, item.label, itemLabelText)
               .width;
       const int16_t hugW = static_cast<int16_t>(labelW + sidePad * 2);
       if (hugW < row.width)
@@ -252,11 +506,24 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
         props.rowStyles.unset() ? defaultListRowStyles() : props.rowStyles;
     if (props.rowRadius > 0)
       setStyleRadius(styles, props.rowRadius);
-    const BoxStyle &style = styles.resolve(state);
-    frame.target().fill(row, style.background, style.radius, style.corners);
+    // A disabled bit carried by an enabled item is visual-only dimming. Keep
+    // it while idle, but let the selected style stay visible for navigation.
+    State visualState = state;
+    if (item.enabled && hasState(visualState, StateSelected))
+      visualState = static_cast<State>(
+          static_cast<int>(visualState) & ~static_cast<int>(StateDisabled));
+    const BoxStyle &style = styles.resolve(visualState);
+    Rect backgroundRow = row;
+    if (hasState(state, StateSelected) &&
+        props.selectionCoversScrollReservation > 0) {
+      backgroundRow.x = rect.x;
+      backgroundRow.width = rect.width;
+    }
+    frame.target().fill(backgroundRow, style.background, style.radius,
+                        style.corners);
     if (style.border.kind != PaintKind::None && style.borderWidth > 0) {
-      frame.target().stroke(row, style.border, style.borderWidth, style.radius,
-                            style.corners);
+      frame.target().stroke(backgroundRow, style.border, style.borderWidth,
+                            style.radius, style.corners);
     }
 
     Rect content = row.inset(Insets{0, sidePad, 0, sidePad});
@@ -265,17 +532,20 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
     // icon and value align to it; the subtitle spans the full content width
     // under the band so it never collides with the value.
     TextStyle labelStyle =
-        textStyleWithForeground(props.labelText, style.foreground);
+        textStyleWithForeground(itemLabelText, style.foreground);
     const int16_t labelH = frame.target().lineHeight(labelStyle.font);
-    const int16_t subH =
-        item.subtitle ? frame.target().lineHeight(props.subtitleText.font) : 0;
+    // The band holds every label line the height pre-pass measured (usually
+    // one); the subtitle and the row's growth both follow it.
+    const int16_t labelBlockH = static_cast<int16_t>(labelH * labelLines);
+    // subH carries over from the sizing pass: the subtitle's wrapped height,
+    // or its single line height, or 0 without a subtitle.
     Rect band = content;
     if (item.subtitle) {
       int16_t bandTop = static_cast<int16_t>(
-          content.y + (content.height - labelH - subH) / 2);
+          content.y + (content.height - labelBlockH - subH) / 2);
       if (bandTop < content.y)
         bandTop = content.y;
-      band = Rect{content.x, bandTop, content.width, labelH};
+      band = Rect{content.x, bandTop, content.width, labelBlockH};
     }
 
     const BitmapRef icon =
@@ -340,10 +610,12 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
       TextStyle valueStyle =
           textStyleWithForeground(props.valueText, style.foreground);
       valueStyle.align = TextAlign::Right;
-      const int16_t valueW =
+      int16_t valueW =
           frame.target()
               .measureText(valueStyle.font, item.value, valueStyle)
               .width;
+      if (props.valueMaxWidth > 0 && valueW > props.valueMaxWidth)
+        valueW = props.valueMaxWidth;
       Rect valueRect{
           static_cast<int16_t>(band.x + availW - valueW - props.valueInset),
           band.y, valueW, band.height};
@@ -371,8 +643,8 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
       frame.target().text(Rect{band.x, band.y, availW, band.height}, item.label,
                           labelStyle);
       frame.target().text(
-          Rect{content.x, static_cast<int16_t>(band.y + labelH), content.width,
-               subH},
+          Rect{content.x, static_cast<int16_t>(band.y + band.height),
+               content.width, subH},
           item.subtitle,
           textStyleWithForeground(props.subtitleText, style.foreground));
     } else {
@@ -417,14 +689,26 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
                                 props.markerPaint);
       }
     }
+    drawHorizontalSeparator(
+        frame.target(),
+        Rect{rect.x, static_cast<int16_t>(row.bottom() - 1), rect.width, 1},
+        props.separator);
   }
 
-  if (props.partialTrailingRow && overflows && visible > 0) {
-    const uint16_t partialIndex = static_cast<uint16_t>(top + visible);
+  if (props.nav)
+    props.nav->onListRendered(top, consumedIndexes, selectedDrawn);
+
+  if (props.partialTrailingRow && visible > 0) {
+    // First index the loop above did NOT lay out. With wrapped rows fewer
+    // indexes fit than the fixed-height `visible` estimate, so top + visible
+    // would preview an item past the real next one (skipping the rows in
+    // between — pressing Next then selects a different item than previewed).
+    const uint16_t partialIndex = static_cast<uint16_t>(top + consumedIndexes);
     const int16_t remainingH = static_cast<int16_t>(rowArea.bottom() - cursorY);
-    if (partialIndex < props.count &&
+    if (partialIndex < props.count && partialIndex >= props.itemsWindowFirst &&
+        (props.itemsWindowCount == 0 || partialIndex - props.itemsWindowFirst < props.itemsWindowCount) &&
         remainingH >= props.partialTrailingMinHeight) {
-      const ListItem &item = props.items[partialIndex];
+      const ListItem &item = props.items[partialIndex - props.itemsWindowFirst];
       if (!item.isHeader && item.label != nullptr && item.label[0] != '\0') {
         Rect row{rowArea.x, cursorY, rowArea.width, remainingH};
         StyleSet styles =
@@ -486,6 +770,10 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
       }
     }
   }
+
+  if (drawsScrollIndicator && props.selectionCoversScrollReservation > 0)
+    drawListScrollIndicator(frame.target(), rect, props.count, visible, top,
+                            scrollW, scrollLeft ? 1 : 0, scrollInset);
 }
 
 } // namespace ui

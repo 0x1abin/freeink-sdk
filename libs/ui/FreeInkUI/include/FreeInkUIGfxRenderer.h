@@ -53,6 +53,14 @@ class GfxRendererTarget final : public DrawTarget {
     // FreeInkUI components and the firmware's own tap path map taps identically.
     device.touchOrientation = touchOrientationFor(device.orientation);
     device.hasButtons = true;
+    // Board viewable insets (bezel / rounded-corner clearance), oriented to the
+    // current rotation, become the fui safe area — so every fui screen's body,
+    // list, and popups lay out inside the bezel automatically. Zero on
+    // rectangular panels. Insets order is {top, right, bottom, left}.
+    int viTop = 0, viRight = 0, viBottom = 0, viLeft = 0;
+    renderer.getOrientedViewableTRBL(&viTop, &viRight, &viBottom, &viLeft);
+    device.safeArea = Insets{static_cast<int16_t>(viTop), static_cast<int16_t>(viRight),
+                             static_cast<int16_t>(viBottom), static_cast<int16_t>(viLeft)};
     return device;
   }
 
@@ -153,19 +161,30 @@ class GfxRendererTarget final : public DrawTarget {
       }
     }
 
-    const auto drawAligned = [&](const std::string& textLine, const int y) {
+    const auto drawAligned = [&](const char* textLine, const int y) {
       int x = rect.x;
       if (style.align != TextAlign::Left) {
-        const int textW = renderer.getTextWidth(fontId, textLine.c_str(), epdStyle);
+        const int textW = renderer.getTextWidth(fontId, textLine, epdStyle);
         x = style.align == TextAlign::Center ? rect.x + (rect.width - textW) / 2 : rect.x + rect.width - textW;
         if (x < rect.x) x = rect.x;
       }
-      renderer.drawText(fontId, x, y, textLine.c_str(), black, epdStyle);
+      renderer.drawText(fontId, x, y, textLine, black, epdStyle);
     };
+
+    // Fast path for the common case: text that already fits on one line draws
+    // straight from the caller's buffer after a single measure — no truncation
+    // string, and for maxLines > 1 no word-splitting wrap walk (whose per-word
+    // re-measures made every wrapped-capable label pay for wrapping it never
+    // needed). Matters on e-paper list screens that rebuild every row per
+    // repaint.
+    if (renderer.getTextWidth(fontId, text, epdStyle) <= rect.width) {
+      drawAligned(text, rect.y + std::max(0, (rect.height - lh) / 2));
+      return;
+    }
 
     if (maxLines == 1) {
       const std::string textLine = renderer.truncatedText(fontId, text, rect.width, epdStyle);
-      drawAligned(textLine, rect.y + std::max(0, (rect.height - lh) / 2));
+      drawAligned(textLine.c_str(), rect.y + std::max(0, (rect.height - lh) / 2));
       return;
     }
 
@@ -173,7 +192,7 @@ class GfxRendererTarget final : public DrawTarget {
     const int blockH = static_cast<int>(lines.size()) * lh;
     int y = rect.y + std::max(0, (rect.height - blockH) / 2);
     for (const auto& textLine : lines) {
-      drawAligned(textLine, y);
+      drawAligned(textLine.c_str(), y);
       y += lh;
     }
   }

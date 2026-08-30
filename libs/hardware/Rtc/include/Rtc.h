@@ -1,6 +1,6 @@
 #pragma once
 
-// FreeInk real-time clock (PCF8563, DS3231, RX8130, or RX8010).
+// FreeInk real-time clock (PCF8563, PCF85063, DS3231, RX8130, or RX8010).
 //
 // Reads/sets wall-clock time on the I2C RTC described by
 // BoardConfig::ACTIVE.sensors (rtcAddr / sensor bus pins). Dependency-free

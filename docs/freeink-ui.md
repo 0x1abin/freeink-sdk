@@ -585,6 +585,14 @@ tied to any application's screen structure:
 - `button`
 - `checkbox`
 - `slider`
+- `capsuleSlider` (finger-height filled-capsule slider with an edge-riding
+  handle; touch-drag routed)
+- `sliderRow` (caption + value readout over `[-]` capsule `[+]`, with an
+  optional trailing icon toggle)
+- `tileGrid` (quick-setting tile cards in fixed columns; checked tiles fill
+  solid)
+- `sheet` (partial-height sheet chrome: card body, edge rule, grabber, and an
+  optional tap-outside dismiss action)
 - `gestureBar`
 - `header`
 - `list` (virtualized; see below — supports hug-content pill rows and
@@ -630,7 +638,10 @@ props (`ButtonProps::radius`, `SettingRowProps::radius`,
 `ToggleRowProps::radius`/`knobRadius`, `StepperRowProps::buttonRadius`,
 `CheckboxProps::radius`, `SliderProps::radius`, `DropdownProps::radius`,
 `RadioGroupProps::radius`, `TableProps::cellRadius`, or
-`QwertyKeyboardProps::keyRadius`) when a product theme wants rounded controls.
+`QwertyKeyboardProps::keyRadius`) when a product theme wants rounded
+controls. The control-center pieces are card language and default rounded
+instead (`SliderRowProps::buttonRadius`, `TileGridProps::radius`; 0 gives
+square cards), and `SheetProps::radius` rounds the sheet's free-edge corners.
 The builder exposes the same fields in the inspector and JSON schema.
 Dropdowns use a stroked chevron indicator by default; tune
 `DropdownProps::indicatorWidth`, `indicatorSize`, and `indicatorStroke` for a
@@ -656,6 +667,47 @@ font.increment = ActionFontLarger;
 font.controlSize = 14; // explicit plus/minus strokes, independent of font glyphs
 stepperRow(ui, rowRect, font);
 ```
+
+Control-panel surfaces (a pull-down control center, a bottom sheet of quick
+settings) compose from `sheet`, `sliderRow`/`capsuleSlider`, and `tileGrid`:
+
+```cpp
+freeink::ui::SheetProps panel;             // top-anchored card with a grabber
+panel.dismissAction = ActionClosePanel;    // tap outside the sheet closes it
+sheet(ui, panelRect, panel);
+
+freeink::ui::SliderRowProps brightness;    // caption + [-] [capsule] [+] [lamp]
+brightness.label = "Brightness";
+brightness.value = "62%";                  // caller-formatted readout
+brightness.sliderValue = 62;
+brightness.sliderAction = ActionBrightness;   // drag/tap; dragPermille carries the position
+brightness.decrement = ActionBrightnessStep;  // value -1 / +1 per press
+brightness.increment = ActionBrightnessStep;
+brightness.toggleAction = ActionLightToggle;  // trailing icon button
+brightness.toggleIcon = lampIcon;
+sliderRow(ui, rowRect, brightness);
+
+freeink::ui::TileGridItem tiles[2];
+tiles[0].label = "Night mode";
+tiles[0].value = TileNightMode;            // stable id, not grid position
+tiles[0].state = nightMode ? freeink::ui::StateChecked : freeink::ui::StateNormal;
+tiles[1].label = "Refresh";
+tiles[1].value = TileRefresh;
+freeink::ui::TileGridProps grid;
+grid.items = tiles;
+grid.count = 2;
+grid.action = ActionTile;                  // event value = the tile's id
+tileGrid(ui, gridRect, grid);
+```
+
+`sheetContentRect()` returns the part of the sheet its content may use (the
+rect minus the grabber band), `sliderRowHeight()` and `tileGridHeight()` size
+the bands, and the `Screen` wrappers (`screen.sheet(...)`, `screen.sliderRow(...)`,
+`screen.tileGrid(...)`) apply theme fonts and spacing and reserve the bands
+automatically. The capsule slider is the drag surface; the step buttons exist
+because a drag on matte glass is unreliable and single steps land exact
+values. On a rect too narrow for the capsule's handle the track is skipped
+entirely and the step buttons alone drive the value.
 
 Text-entry screens can use the generic `keyGrid` for compact custom pads,
 `keyboard` for data-driven rows, or `qwertyKeyboard` for a ready-made four-row
@@ -702,6 +754,38 @@ kb.mode();            // enter/leave the symbol layers
 
 // Each frame, mirror the layer flags into the props:
 freeink::ui::applyEntry(keys, kb);
+```
+
+Apps with cursor editing or their own text container can reuse the controller
+pieces without adopting `KeyboardEntry`'s fixed buffer:
+
+- `keyboardActivationFor(layout, value, longPress)` resolves a rendered key to
+  text, Shift, mode, language, delete, or submit semantics.
+- `utf8PreviousBoundary()` / `utf8NextBoundary()` move a byte cursor without
+  splitting a UTF-8 code point.
+- `KeyboardNavigator` owns row/column selection for irregular keyboard grids,
+  including wrapping and proportional movement between differently sized rows.
+
+When input and rendering run on different tasks, capture completed one-shot
+taps before testing whether the interaction table is available. `TouchTapQueue`
+is a fixed-capacity, allocation-free queue for that boundary:
+
+```cpp
+freeink::ui::TouchTapQueue<16> pendingTaps;
+int16_t tapX = 0;
+int16_t tapY = 0;
+
+// Every input update, even while a renderer rebuilds hit targets:
+if (tapCompleted) pendingTaps.push(tapX, tapY);
+
+// Once the last complete interaction table is safe to route against:
+while (interactionsReady && pendingTaps.pop(tapX, tapY)) {
+  freeink::ui::InputSnapshot tap;
+  tap.touchReleased = true;
+  tap.touchX = tapX;
+  tap.touchY = tapY;
+  interactions.route(tap);
+}
 ```
 
 For custom or app-provided layouts, pass `KeyboardProps` directly:
@@ -1093,16 +1177,6 @@ freeink::ui::InputSnapshot input = freeink::ui::snapshotFrom(inputManager);
 CONFIRM/BACK mapping per board. Long-press and swipe synthesis stay
 app-owned. Apps with their own input layer write the same few lines against
 it.
-
-`InputManager` uses two motion thresholds: moving more than 28 px cancels the
-held tap candidate used for press highlighting, while a completed contact
-remains a tap through 59 px. Motion from 60 px is eligible for swipe
-classification, so finger roll does not create a tap/swipe dead zone.
-
-Apps that already have swipe endpoints in logical screen coordinates can use
-`swipeDirection()` for axis classification and `edgeSwipe()` for bezel-origin
-checks. These helpers are stateless and allocation-free; the app remains the
-owner of the resulting back, menu, home, or paging action.
 
 Touch hit areas are declarative: `minTouchSize` center-expands small targets,
 `ButtonProps.hitPadding` extends a button's tap band per edge (give adjacent
