@@ -313,7 +313,7 @@ tight. Each defaults on when an included device needs it; force with `=0`/`=1`:
 | `FREEINK_CAP_TOUCH` | capacitive touch decoder (InputManager) | on if a device has touch |
 | `FREEINK_CAP_FRONTLIGHT` | PWM frontlight (FrontlightManager) | on if a device has a frontlight |
 | `FREEINK_CAP_COLOR` | color panel code | on for M5 |
-| `FREEINK_CAP_AUDIO` | audio output (AudioManager: ES8388/ES8311 codec + I2S WAV playback) | on for Murphy and M5 |
+| `FREEINK_CAP_AUDIO` | audio output (AudioManager: ES8388/ES8311 codec + I2S WAV/PCM playback) | on for Murphy and M5 |
 | `FREEINK_CAP_MIC` | microphone capture (Microphone lib: PDM mic → 16-bit PCM via i2s_pdm RX) | on for Sticky and Paper Mono |
 | `FREEINK_CAP_RTC` | real-time clock (Rtc lib: PCF8563 / DS3231 / RX8130 over I²C, per profile) | on for X3, Sticky, X4 Pro, and Paper Mono |
 | `FREEINK_CAP_TEMP_HUMIDITY` | temperature + humidity (EnvironmentSensor lib: SHT40 over I²C) | on for Sticky |
@@ -823,7 +823,7 @@ libs/
   hardware/MemoryManager/   on-demand cache-sink reclaim + heap reporting
   hardware/FrontlightManager/  PWM frontlight (LEDC or PMIC-PWM)
   hardware/LedManager/      RGB LEDs (M5 PaperColor addressable, Paper Mono discrete)
-  hardware/AudioManager/    I2S codec WAV playback (Murphy, M5 PaperColor)
+  hardware/AudioManager/    I2S codec WAV/PCM playback (Murphy, M5 PaperColor)
   network/SecureNet/        wolfSSL TLS 1.3 client + HTTP shim (opt-in)
 ```
 

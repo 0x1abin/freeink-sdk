@@ -297,6 +297,32 @@ bool AudioManager::play(const WavSource& source, bool loop) {
   }
   if (!source.seek(info.dataStart)) return false;
 
+  return startPlayback(source, info, loop);
+}
+
+bool AudioManager::playPcm(const PcmSource& source, uint32_t sampleRate, uint8_t channels) {
+  if (!source.read || sampleRate < 8000 || sampleRate > 48000 || (channels != 1 && channels != 2)) {
+    log_e("unsupported PCM (need 16-bit LE, 1-2ch, 8-48 kHz)");
+    return false;
+  }
+  if (!begun_ && !begin()) return false;
+  stop();
+  if (!ensureI2s(sampleRate)) {
+    log_e("i2s setup failed");
+    return false;
+  }
+
+  WavInfo info;
+  info.sampleRate = sampleRate;
+  info.channels = channels;
+  info.bitsPerSample = 16;
+
+  WavSource wavSource;
+  wavSource.read = source.read;
+  return startPlayback(wavSource, info, false);
+}
+
+bool AudioManager::startPlayback(const WavSource& source, const WavInfo& info, bool loop) {
   // Unmute the DAC (stop() mutes it). Codec writes stay on the caller's core
   // so the shared I2C bus is never touched from the audio task. The speaker
   // amp comes up in the playback task once silence is flowing — enabling it
@@ -357,7 +383,7 @@ void AudioManager::taskEntry(void* self) { static_cast<AudioManager*>(self)->tas
 
 void AudioManager::taskLoop() {
   i2s_chan_handle_t tx = (i2s_chan_handle_t)txChan_;
-  uint8_t inBuf[READ_CHUNK];
+  alignas(int16_t) uint8_t inBuf[READ_CHUNK];
   // Mono is duplicated into both slots, so the out buffer is 2x.
   int16_t outBuf[READ_CHUNK];
 
@@ -393,6 +419,11 @@ void AudioManager::taskLoop() {
         consumed = 0;
         continue;
       }
+      break;
+    }
+    const size_t frameBytes = static_cast<size_t>(wav_.channels) * sizeof(int16_t);
+    if (n > static_cast<int>(want) || static_cast<size_t>(n) % frameBytes != 0) {
+      log_e("PCM source returned an invalid byte count");
       break;
     }
     consumed += n;
@@ -440,10 +471,12 @@ bool AudioManager::present() const { return false; }
 bool AudioManager::begin() { return false; }
 void AudioManager::setVolume(uint8_t) {}
 bool AudioManager::play(const WavSource&, bool) { return false; }
+bool AudioManager::playPcm(const PcmSource&, uint32_t, uint8_t) { return false; }
 bool AudioManager::playBuffer(const uint8_t*, size_t, bool) { return false; }
 void AudioManager::stop() {}
 void AudioManager::powerDown() {}
 bool AudioManager::parseWavHeader(const WavSource&, WavInfo&) { return false; }
+bool AudioManager::startPlayback(const WavSource&, const WavInfo&, bool) { return false; }
 bool AudioManager::ensureI2s(uint32_t) { return false; }
 void AudioManager::teardownI2s() {}
 bool AudioManager::codecInit() { return false; }
