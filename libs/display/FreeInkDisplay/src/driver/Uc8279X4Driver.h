@@ -79,9 +79,6 @@ class Uc8279X4Driver : public PanelDriver {
 
   void requestResync(uint8_t settlePasses) override;
   void skipInitialResync() override;
-  // Inverted (dark-background) content: fast refreshes rewrite the OLD plane
-  // as the complement of the target so every pixel is re-driven toward its
-  // target each update. See displayStart().
   void setBackgroundHint(bool darkBackground) override { _darkBackground = darkBackground; }
 
   // --- 4-level grayscale (anti-aliasing) ---
@@ -155,7 +152,7 @@ class Uc8279X4Driver : public PanelDriver {
   // pixels as white), so it accumulates under rapid page turns → garble. Consumed
   // by the next B/W displayStart to RE-DRIVE every pixel to its target (DTM1 =
   // ~newframe), scrubbing the residue with a cheap DU (no GC flash) — the same
-  // trick as _darkBackground, applied once after AA.
+  // mechanism used for dark-background refreshes.
   bool _redriveAfterGray = false;
 
   // Async split state (see Uc8179Driver for the contract).

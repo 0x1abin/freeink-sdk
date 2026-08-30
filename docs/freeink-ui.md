@@ -208,6 +208,9 @@ It manages a remaining content rectangle from `safeRect()`:
 - `status(props)` consumes the top status band
 - `footer(actions, count)` consumes the bottom footer band
 - `footer(props)` accepts `FooterProps` for nav spacing and button border edges
+- `setContentMargin(insets)` reserves space relative to the device safe area;
+  `setContentMarginFromScreen(insets)` reserves physical screen-edge chrome
+  without applying the safe-area insets twice
 - `button(label, action, value, state)` adds one full-width row button
 - `list(items, count, selected, action, topIndex)` fills the remaining body
 - `list(props)` uses a full `ListProps` when you need detailed styling

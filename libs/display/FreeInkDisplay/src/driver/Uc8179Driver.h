@@ -74,9 +74,6 @@ class Uc8179Driver : public PanelDriver {
 
   void requestResync(uint8_t settlePasses) override;
   void skipInitialResync() override;
-  // Inverted (dark-background) content: fast refreshes rewrite the OLD plane
-  // as the complement of the target so every pixel is re-driven toward its
-  // target each update. See displayStart().
   void setBackgroundHint(bool darkBackground) override { _darkBackground = darkBackground; }
 
   // --- 4-level grayscale (anti-aliasing) ---
