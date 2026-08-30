@@ -96,21 +96,20 @@ class Ssd1677Driver : public PanelDriver {
   void displayGray(EpdBus& bus, const uint8_t* fb, bool turnOff, const unsigned char* lut, bool factoryMode) override;
   void cleanupGrayscaleBuffers(EpdBus& bus, const uint8_t* bw) override;
 
-  // No grayscaleRevert override: stock parity — the OEM firmware has no revert
-  // waveform. Grayscale exits via cleanupGrayscaleBuffers (RED resync) or a
-  // promoted single-pass HALF clean in displayImpl/displayWindow.
+  // No grayscaleRevert override. Grayscale exits via cleanupGrayscaleBuffers
+  // (RED resync) or a promoted single-pass HALF clean in displayImpl/displayWindow.
+  // Stock 7.4.4 has a dedicated grey_revert waveform, but it is not yet ported.
   void setCustomLut(EpdBus& bus, bool enabled, const unsigned char* data) override;
-  // Inverted (dark-background) content: fast refreshes write the RED "old"
-  // plane as the complement of the target so every pixel — background included —
-  // is re-driven toward its target each update. See displayImpl().
+  // Inverted content re-drives every pixel during fast refreshes so dark
+  // backgrounds do not accumulate light residue.
   void setBackgroundHint(bool darkBackground) override { _darkBackground = darkBackground; }
 
  private:
   void initController(EpdBus& bus);
   void setRamArea(EpdBus& bus, uint16_t x, uint16_t y, uint16_t w, uint16_t h);
   void writeRam(EpdBus& bus, uint8_t ramCmd, const uint8_t* data, uint32_t size);
-  // Streams `size` bytes of ~data[i] after `ramCmd` without a host-side copy of
-  // the inverted frame (the C3 boards have no RAM to spare for one).
+  // Streams the complement in bounded stack chunks; no framebuffer-sized
+  // allocation is added on memory-constrained C3 boards.
   void writeRamInverted(EpdBus& bus, uint8_t ramCmd, const uint8_t* data, uint32_t size);
   // async: fire MASTER_ACTIVATION and return without waiting on BUSY.
   void refresh(EpdBus& bus, RefreshMode mode, bool turnOff, bool async = false);

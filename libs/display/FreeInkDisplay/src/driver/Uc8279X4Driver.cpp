@@ -304,12 +304,8 @@ bool Uc8279X4Driver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t*
       for (uint16_t y = 0; y < _tresH; y++) bus.data(whiteRow, wb);
     }
   } else if (_darkBackground || _redriveAfterGray) {
-    // Inverted content: the KW differential idles unchanged pixels, so the
-    // light residue of every white->black transition parks in the black
-    // background and accumulates between full flashes. Rewrite the OLD plane
-    // as the complement of the target: every pixel classifies as changed and
-    // is re-driven toward its target — optically invisible on pixels already
-    // at their endpoint. displayFinish()'s DTM1 sync restores the baseline.
+    // Re-drive every pixel for inverted content or once after grayscale,
+    // preventing dark-background residue and scrubbing residual AA edge charge.
     streamPlane(bus, CMD_DTM1, fb, /*invert=*/true);
   }
   // Consumed: the white-seed (!fast) or the re-drive above already scrubbed any
@@ -400,11 +396,12 @@ void Uc8279X4Driver::requestResync(uint8_t settlePasses) {
 void Uc8279X4Driver::skipInitialResync() { _needFullClear = false; }
 
 void Uc8279X4Driver::deepSleep(EpdBus& bus) {
-  if (_isScreenOn) {
-    bus.cmd(CMD_POWER_OFF);
-    bus.waitBusy(" 8279x4 power-down");
-    _isScreenOn = false;
-  }
+  // Always park before DSLP (see Uc8179Driver::deepSleep for the full
+  // rationale). This driver is also UcIdleHigh (Uc8279X4Driver.h) with a
+  // no-timeout waitBusy(), so only wait when the panel was actually on.
+  bus.cmd(CMD_POWER_OFF);
+  if (_isScreenOn) bus.waitBusy(" 8279x4 power-down");
+  _isScreenOn = false;
   bus.cmd(CMD_DEEP_SLEEP);
   bus.data(0xA5);
 }

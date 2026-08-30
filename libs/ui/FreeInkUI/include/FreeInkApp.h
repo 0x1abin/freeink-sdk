@@ -65,6 +65,16 @@ public:
   void setContentMargin(Insets margin) {
     content_ = insetClamped(frame_.safeRect(), margin);
   }
+  // Reserves chrome measured from the physical screen edges while preserving
+  // the device safe area. A reservation already covered by a safe-area inset
+  // does not inset the content a second time.
+  void setContentMarginFromScreen(Insets margin) {
+    const Insets safe = frame_.device().safeArea;
+    setContentMargin(Insets{marginBeyondSafeArea(margin.top, safe.top),
+                            marginBeyondSafeArea(margin.right, safe.right),
+                            marginBeyondSafeArea(margin.bottom, safe.bottom),
+                            marginBeyondSafeArea(margin.left, safe.left)});
+  }
   void insetContent(Insets margin) {
     content_ = insetClamped(content_, margin);
   }
@@ -656,6 +666,11 @@ private:
     return Rect{static_cast<int16_t>(x), static_cast<int16_t>(y),
                 static_cast<int16_t>(right - x),
                 static_cast<int16_t>(bottom - y)};
+  }
+
+  static int16_t marginBeyondSafeArea(const int16_t margin,
+                                      const int16_t safeInset) {
+    return margin > safeInset ? static_cast<int16_t>(margin - safeInset) : 0;
   }
 
   FrameType &frame_;

@@ -388,11 +388,29 @@ void testDragRouting() {
   CHECK_EQ(event.action, 1);
   CHECK_EQ(event.dragPermille, 1000);
 
+  // The release commits the drag at the LAST HELD position, even though the
+  // release frame itself arrives off-target (-1,-1: the tap classifier gave
+  // up on the contact). Without this the drag's final value depends on the
+  // release frame's coordinates -- the touch-down point for sub-swipe-length
+  // contacts (the value snaps back to where the drag started) or nothing at
+  // all for longer ones.
   InputSnapshot release;
   release.touchReleased = true;
   release.touchX = -1;
   release.touchY = -1;
-  CHECK(!buffer.route(release));
+  ActionEvent end = buffer.route(release);
+  CHECK_EQ(end.action, 1);
+  CHECK_EQ(end.dragPermille, 1000);
+
+  // Same, for a short drag whose release still classifies as a tap and so
+  // carries the touch-DOWN point: the drag's last position wins over it.
+  CHECK_EQ(buffer.route(contactAt(100, 20)).dragPermille, 500);
+  CHECK_EQ(buffer.route(contactAt(150, 20)).dragPermille, 750);
+  InputSnapshot tapRelease;
+  tapRelease.touchReleased = true;
+  tapRelease.touchX = 100;  // classifier reports where the contact began
+  tapRelease.touchY = 20;
+  CHECK_EQ(buffer.route(tapRelease).dragPermille, 750);
 
   // The landing point decides, not the live one: a contact beginning off the
   // slider never grabs it, however far it then travels across it. The button
@@ -1060,6 +1078,109 @@ void testSelectedVisualOnlyDisabledListRow() {
   CHECK(sawSelectedFill);
   CHECK_EQ(interactions.count(), 1u);
   CHECK(!hasState(interactions.data()[0].state, StateDisabled));
+}
+
+// RTL mirrors list()'s row layout: icon and label move to the trailing
+// (right) edge, value/toggle move to the leading (left) edge. Verifies both
+// halves of the swap against the same single-row fixture in one pass.
+void testListRtlMirrorsIconAndValueSides() {
+  static const uint8_t iconBits[4] = {0, 0, 0, 0};
+  BitmapRef icon{iconBits, 16, 16, BitmapFormat::BW1, false};
+
+  ListItem item{};
+  item.label = "Setting";
+  item.value = "On";
+  item.icon = icon;
+
+  ListProps props;
+  props.items = &item;
+  props.count = 1;
+  props.rowHeight = 40;
+  props.valueInset = 4;
+  props.sidePadding = 0;  // zero out the default 8px inset so row math below is exact
+
+  DeviceContext device = makeDevice();
+  InputSnapshot input;
+
+  FakeDrawTarget ltrDraw;
+  InteractionBuffer<4> ltrInteractions;
+  Frame<4> ltrFrame(ltrDraw, device, input, ltrInteractions);
+  list(ltrFrame, Rect{0, 0, 480, 40}, props);
+
+  props.rtl = true;
+  FakeDrawTarget rtlDraw;
+  InteractionBuffer<4> rtlInteractions;
+  Frame<4> rtlFrame(rtlDraw, device, input, rtlInteractions);
+  list(rtlFrame, Rect{0, 0, 480, 40}, props);
+
+  // Icon: LTR hugs the row's left edge; RTL hugs the right edge.
+  size_t ltrIconIdx = 0, rtlIconIdx = 0;
+  for (size_t i = 0; i < ltrDraw.opCount; ++i)
+    if (ltrDraw.ops[i].kind == FakeDrawTarget::Op::Bitmap) ltrIconIdx = i;
+  for (size_t i = 0; i < rtlDraw.opCount; ++i)
+    if (rtlDraw.ops[i].kind == FakeDrawTarget::Op::Bitmap) rtlIconIdx = i;
+  CHECK_EQ(ltrDraw.ops[ltrIconIdx].rect.x, 0);
+  CHECK_EQ(rtlDraw.ops[rtlIconIdx].rect.x, 480 - 16);
+
+  // Value text: list() draws the value slot before the label, so the FIRST
+  // Text op is the value, not the last. LTR sits near the row's right edge;
+  // RTL sits near the left, just past the icon-free band start
+  // (band.x + valueInset).
+  size_t ltrValueIdx = 0, rtlValueIdx = 0;
+  for (size_t i = 0; i < ltrDraw.opCount; ++i) {
+    if (ltrDraw.ops[i].kind == FakeDrawTarget::Op::Text) {
+      ltrValueIdx = i;
+      break;
+    }
+  }
+  for (size_t i = 0; i < rtlDraw.opCount; ++i) {
+    if (rtlDraw.ops[i].kind == FakeDrawTarget::Op::Text) {
+      rtlValueIdx = i;
+      break;
+    }
+  }
+  CHECK(ltrDraw.ops[ltrValueIdx].rect.x > 400);  // right side in LTR
+  CHECK_EQ(rtlDraw.ops[rtlValueIdx].rect.x, 4);  // band.x(0) + valueInset(4) in RTL
+}
+
+// Same swap, but for a toggle row instead of a value row: the switch itself
+// (not just its knob) must relocate, since activateSelectedRow-style callers
+// rely on the toggle's on-screen position matching its touch hit region.
+void testListRtlMirrorsToggleSide() {
+  ListItem item{};
+  item.label = "Enabled";
+  item.toggle = true;
+  item.toggleChecked = true;
+
+  ListProps props;
+  props.items = &item;
+  props.count = 1;
+  props.rowHeight = 40;
+  props.valueInset = 4;
+  props.toggleWidth = 38;
+  props.sidePadding = 0;  // zero out the default 8px inset so row math below is exact
+
+  DeviceContext device = makeDevice();
+  InputSnapshot input;
+
+  FakeDrawTarget ltrDraw;
+  InteractionBuffer<4> ltrInteractions;
+  Frame<4> ltrFrame(ltrDraw, device, input, ltrInteractions);
+  list(ltrFrame, Rect{0, 0, 480, 40}, props);
+
+  props.rtl = true;
+  FakeDrawTarget rtlDraw;
+  InteractionBuffer<4> rtlInteractions;
+  Frame<4> rtlFrame(rtlDraw, device, input, rtlInteractions);
+  list(rtlFrame, Rect{0, 0, 480, 40}, props);
+
+  // The toggle track is the first Fill after the row background fill.
+  CHECK(ltrDraw.opCount >= 2);
+  CHECK(rtlDraw.opCount >= 2);
+  CHECK_EQ(ltrDraw.ops[1].kind, FakeDrawTarget::Op::Fill);
+  CHECK_EQ(rtlDraw.ops[1].kind, FakeDrawTarget::Op::Fill);
+  CHECK_EQ(ltrDraw.ops[1].rect.x, 480 - 38 - 4);  // right edge in LTR
+  CHECK_EQ(rtlDraw.ops[1].rect.x, 4);             // left edge (band.x + valueInset) in RTL
 }
 
 void testButtonRegistersExpandedHit() {
@@ -2890,6 +3011,43 @@ void testScreenKeyboardUsesResponsiveHeight() {
   CHECK(interactions.data()[30].rect.bottom() <= device.height);
 }
 
+void testScreenContentMarginCoordinateSpaces() {
+  FakeDrawTarget draw;
+  DeviceContext device = makeDevice(100, 100);
+  device.safeArea = Insets{10, 8, 6, 4};
+  InputSnapshot input;
+  InteractionBuffer<1> interactions;
+  Frame<1> frame(draw, device, input, interactions);
+  ThemeTokens theme;
+  Screen<1> screen(frame, theme);
+
+  // Regular content margins remain relative to the safe rectangle.
+  screen.setContentMargin(Insets{20, 18, 16, 14});
+  Rect content = screen.contentRect();
+  CHECK_EQ(content.x, 18);
+  CHECK_EQ(content.y, 30);
+  CHECK_EQ(content.width, 56);
+  CHECK_EQ(content.height, 48);
+
+  // Screen-relative margins reserve the requested physical edge bands without
+  // applying the safe-area insets twice.
+  screen.setContentMarginFromScreen(Insets{20, 18, 16, 14});
+  content = screen.contentRect();
+  CHECK_EQ(content.x, 14);
+  CHECK_EQ(content.y, 20);
+  CHECK_EQ(content.width, 68);
+  CHECK_EQ(content.height, 64);
+
+  // Reservations contained entirely under the bezel leave the safe rectangle
+  // unchanged.
+  screen.setContentMarginFromScreen(Insets{5, 7, 3, 2});
+  content = screen.contentRect();
+  CHECK_EQ(content.x, 4);
+  CHECK_EQ(content.y, 10);
+  CHECK_EQ(content.width, 88);
+  CHECK_EQ(content.height, 84);
+}
+
 void testEReaderChromeMenusAndPanels() {
   FakeDrawTarget draw;
   DeviceContext device = makeDevice(300, 400);
@@ -3540,6 +3698,8 @@ int main() {
   testListCanUseFullTitleWidthWithShortValue();
   testInxListPrimitivesStayOptIn();
   testSelectedVisualOnlyDisabledListRow();
+  testListRtlMirrorsIconAndValueSides();
+  testListRtlMirrorsToggleSide();
   testButtonRegistersExpandedHit();
   testProgressBarClamps();
   testBatteryIndicator();
@@ -3580,6 +3740,7 @@ int main() {
   testKeyboardBottomHitOverflow();
   testHeaderLeadingButton();
   testScreenKeyboardUsesResponsiveHeight();
+  testScreenContentMarginCoordinateSpaces();
   testEReaderChromeMenusAndPanels();
   testEReaderBookSurfaces();
   testHeaderBorderEdges();
