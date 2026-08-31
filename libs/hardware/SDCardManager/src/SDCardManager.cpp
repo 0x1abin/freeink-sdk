@@ -113,7 +113,7 @@ bool SDCardManager::begin() {
     pinMode(BoardConfig::ACTIVE.sd.powerEnable, OUTPUT);
     // ON level: HIGH for active-high enables, LOW for active-low ones.
     digitalWrite(BoardConfig::ACTIVE.sd.powerEnable, BoardConfig::ACTIVE.sd.powerActiveHigh ? HIGH : LOW);
-    delay(10);
+    delay(80);
   }
 
   // Shared SPI bus: when the display controller sits on the same SCLK as the SD
@@ -142,7 +142,13 @@ bool SDCardManager::begin() {
     if (SD_SCLK >= 0 && SD_MOSI >= 0 && SD_MISO >= 0) {
       SPI.begin(SD_SCLK, SD_MISO, SD_MOSI, SD_CS);
     }
-    cardReady = sd.begin(SD_CS, SPI_FQ);
+    for (int attempt = 0; attempt < 5; ++attempt) {
+      if (sd.begin(SD_CS, SPI_FQ)) {
+        cardReady = true;
+        break;
+      }
+      delay(80);
+    }
 #if FREEINK_MCU_S3 || FREEINK_MCU_ESP32
   }
 #endif
