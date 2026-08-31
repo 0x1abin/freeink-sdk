@@ -4,7 +4,7 @@
 //
 // Drives the audio path described by BoardConfig::ACTIVE.audio: bring up the
 // control codec over its (possibly shared) I2C bus, master the I2S bus with
-// the new ESP-IDF i2s_std driver, and stream 16-bit PCM WAV data from a
+// the new ESP-IDF i2s_std driver, and stream 16-bit PCM data from a
 // caller-supplied byte source. Two codecs are supported, selected by
 // AudioConfig::output: ES8388 (Murphy M3, OEM-recovered register sequence)
 // and ES8311 (M5 PaperColor, mirroring M5Unified's speaker bring-up — the
@@ -34,6 +34,12 @@ class AudioManager {
     std::function<bool(size_t pos)> seek;
   };
 
+  struct PcmSource {
+    // Copy interleaved signed 16-bit little-endian PCM to dst. The callback
+    // may block; 0 ends playback and a negative result reports a source error.
+    std::function<int(uint8_t* dst, size_t len)> read;
+  };
+
   // Initializes the codec + enable pin. Returns false when the active board
   // has no audio path (callers can treat audio as absent).
   bool begin();
@@ -45,6 +51,10 @@ class AudioManager {
   // Starts WAV playback (16-bit PCM, mono or stereo, 8-48 kHz). Stops any
   // current playback first. loop=true replays until stop().
   bool play(const WavSource& source, bool loop);
+
+  // Starts headerless PCM playback. Mono samples are duplicated to both I2S
+  // slots. Only 16-bit little-endian, 1-2 channels, and 8-48 kHz are accepted.
+  bool playPcm(const PcmSource& source, uint32_t sampleRate, uint8_t channels);
 
   // Convenience: play from a memory buffer (e.g. an embedded default sound).
   bool playBuffer(const uint8_t* data, size_t len, bool loop);
@@ -67,6 +77,7 @@ class AudioManager {
   static void taskEntry(void* self);
   void taskLoop();
   bool parseWavHeader(const WavSource& source, WavInfo& info);
+  bool startPlayback(const WavSource& source, const WavInfo& info, bool loop);
   bool ensureI2s(uint32_t sampleRate);
   void teardownI2s();
 
