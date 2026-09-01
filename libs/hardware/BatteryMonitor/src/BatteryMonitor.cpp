@@ -456,8 +456,10 @@ uint16_t BatteryMonitor::readMillivolts() const {
   const uint16_t mv = esp_adc_cal_raw_to_voltage(raw, &adc_chars);
 #else
   // ESP-IDF 5.x has analogReadMilliVolts
+  // OnePage only: pause charging around the read. Other boards with a
+  // chargeEnable pin (e.g. Sticky) must NOT have it glitched during battery reads.
   uint16_t mv = 0;
-  if (BoardConfig::ACTIVE.power.chargeEnable >= 0) {
+  if (BoardConfig::isOnePage() && BoardConfig::ACTIVE.power.chargeEnable >= 0) {
     const int8_t ce = BoardConfig::ACTIVE.power.chargeEnable;
     const bool activeHigh = BoardConfig::ACTIVE.power.chargeEnableActiveHigh;
     pinMode(ce, OUTPUT);
