@@ -1668,9 +1668,9 @@ constexpr BoardProfile XTEINK_X4_CLASSIC = {
     {12, 11, 13, 14, 10, 18, PIN_UNASSIGNED},
     20000000,
     {41, 40, 42, 45, 6, true, 0, false},
-    // Side page keys GPIO0/7, bottom back/confirm/left/right GPIO9/8/2/5,
+    // Side page keys GPIO0/7, bottom back/confirm/left/right GPIO9/8/5/2,
     // and power GPIO3. GPIO4 is not interrupt-backed and is not a button.
-    {9, 8, 2, 5, 0, 7, 3, false},
+    {9, 8, 5, 2, 0, 7, 3, false},
     PIN_UNASSIGNED,
     21,
     2.0f,
