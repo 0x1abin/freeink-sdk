@@ -193,8 +193,6 @@ uint8_t InputManager::getPhysicalState() {
     return getDigitalState();
   }
 
-  uint8_t state = 0;
-
   // Read GPIO1 buttons
   const int adcValue1 = analogRead(BUTTON_ADC_PIN_1);
   const int button1 = getButtonFromADC(adcValue1, ADC_RANGES_1, NUM_BUTTONS_1);
