@@ -42,6 +42,10 @@ class InputManager {
   // Press edge since the previous update().
   bool wasPressed(uint8_t buttonIndex) const;
 
+  // Debounced hardware press edges before click/hold classification. Touch
+  // synthesized actions are excluded.
+  uint8_t physicalPressedMask() const { return physicalPressedEvents; }
+
   // Any button press edge since the previous update().
   bool wasAnyPressed() const;
 
@@ -316,6 +320,7 @@ class InputManager {
 
   int getButtonFromADC(int adcValue, const int ranges[], int numButtons);
   bool isDigitalPressed(int8_t pin) const;
+  uint8_t getPhysicalState();
   uint8_t getDigitalState() const;
   void updateConfirmBackHold(unsigned long currentTime);
   void updateConfirmPowerHold(unsigned long currentTime);
@@ -324,6 +329,7 @@ class InputManager {
   void updateFunctionMultiGesture(unsigned long currentTime);
 #endif
   void applyStateChange(uint8_t state, unsigned long currentTime);
+  void updatePhysicalPressed(uint8_t state, unsigned long currentTime);
 
   // Touch backend. Compiled only when FREEINK_CAP_TOUCH is set; dispatches on
   // BoardConfig::ACTIVE.touch.controller (CHSC6x, GT911, or FT5x06/FT6336U).
@@ -397,6 +403,10 @@ class InputManager {
   uint8_t lastState;
   uint8_t pressedEvents;
   uint8_t releasedEvents;
+  uint8_t physicalPressedEvents = 0;
+  uint8_t physicalCandidateState = 0;
+  uint8_t physicalStableState = 0;
+  unsigned long physicalCandidateChangedAt = 0;
   unsigned long lastDebounceTime;
   unsigned long buttonPressStart;
   unsigned long buttonPressFinish;

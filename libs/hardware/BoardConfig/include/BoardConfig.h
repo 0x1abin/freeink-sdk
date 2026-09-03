@@ -271,7 +271,8 @@
 #define FREEINK_CAP_COLOR (FREEINK_DEVICE_M5)
 #endif
 #ifndef FREEINK_CAP_AUDIO
-#define FREEINK_CAP_AUDIO (FREEINK_DEVICE_MURPHY || FREEINK_DEVICE_M5)
+#define FREEINK_CAP_AUDIO \
+  (FREEINK_DEVICE_MURPHY || FREEINK_DEVICE_M5 || FREEINK_DEVICE_WAVESHARE_EPAPER_397)
 #endif
 // Microphone capture (PDM in). Separate from FREEINK_CAP_AUDIO (output): the
 // Sticky has a PDM mic but no output codec. The Microphone lib compiles its
@@ -437,7 +438,7 @@ enum class TouchController : uint8_t {
 // recovered from the OEM firmware dump; see the consumer's audio notes.
 // M5 PaperColor ships an ES8311 mono codec + AW8737A speaker amp — the
 // contract comes from the official pin map and M5Unified's speaker bring-up.
-enum class AudioOutput : uint8_t { None, I2sDac, I2sEs8388, I2sEs8311, PwmBuzzer };
+enum class AudioOutput : uint8_t { None, I2sDac, I2sEs8388, I2sEs8311, I2sEs8311Mclk16k, PwmBuzzer };
 
 // Optional addressable RGB LED strip. PaperColor has two RGB LEDs on GPIO21
 // behind the M5PM1 LDO3V3 RGB rail.
@@ -599,6 +600,7 @@ struct AudioConfig {
   int8_t codecScl;
   uint8_t codecAddr;  // 7-bit codec address, 0 = no control codec
   int8_t buzzer;      // separate LEDC tone pin (PIN_UNASSIGNED if none)
+  uint16_t ampSettleMs = 0;  // silence after amp enable before PCM; board-calibrated
 };
 
 struct LedConfig {
@@ -818,6 +820,9 @@ constexpr AudioConfig MURPHY_AUDIO = {AudioOutput::I2sEs8388, 40, 39, 41,   42, 
 // (0x40) is not driven.
 constexpr AudioConfig M5_PAPERCOLOR_AUDIO = {
     AudioOutput::I2sEs8311, 40, 41, 38, PIN_UNASSIGNED, 45, true, 46, 3, 2, 0x18, PIN_UNASSIGNED};
+
+constexpr AudioConfig WAVESHARE_EPAPER_397_AUDIO = {
+    AudioOutput::I2sEs8311Mclk16k, 14, 47, 48, 13, PIN_UNASSIGNED, true, 39, 41, 42, 0x18, PIN_UNASSIGNED, 10};
 
 // Sticky has no output codec (PDM mic in only) — just the LEDC buzzer on GPIO48,
 // driven by the Buzzer lib. output=None so hasAudio() stays false; the buzzer
@@ -1612,7 +1617,7 @@ constexpr BoardProfile WAVESHARE_EPAPER_397 = {
     PIN_UNASSIGNED,
     NO_TOUCH,
     NO_FRONTLIGHT,
-    NO_AUDIO,
+    WAVESHARE_EPAPER_397_AUDIO,
     NO_LEDS,
     NO_FLIP,
     {16, 17, 15, 7, 8, 18, 4},
@@ -1663,6 +1668,13 @@ static_assert(WAVESHARE_EPAPER_397.displayWidth / 8 * WAVESHARE_EPAPER_397.displ
 static_assert(WAVESHARE_EPAPER_397.sdmmc.busWidth == 4, "Waveshare 3.97 SD must use 4-bit SDMMC");
 static_assert(WAVESHARE_EPAPER_397.input.confirm == 5 && WAVESHARE_EPAPER_397.input.power == PIN_UNASSIGNED,
               "Waveshare 3.97 GPIO5 must be confirm-only; power is reported by the AXP2101");
+static_assert(WAVESHARE_EPAPER_397.audio.output == AudioOutput::I2sEs8311Mclk16k &&
+                  WAVESHARE_EPAPER_397.audio.mclk == 13 && WAVESHARE_EPAPER_397.audio.bclk == 14 &&
+                  WAVESHARE_EPAPER_397.audio.lrclk == 47 && WAVESHARE_EPAPER_397.audio.dout == 48 &&
+                  WAVESHARE_EPAPER_397.audio.ampEnable == 39 && WAVESHARE_EPAPER_397.audio.codecSda == 41 &&
+                  WAVESHARE_EPAPER_397.audio.codecScl == 42 && WAVESHARE_EPAPER_397.audio.codecAddr == 0x18 &&
+                  WAVESHARE_EPAPER_397.audio.ampSettleMs == 10,
+              "Waveshare 3.97 audio profile must match the ES8311/NS4150B wiring");
 
 // --- Xteink X4 Classic (X4C) — ESP32-S3, 800x480 EPD, no touch/frontlight ---
 // Recovered from the stock X4C image. It shares the X4 Pro display stack while

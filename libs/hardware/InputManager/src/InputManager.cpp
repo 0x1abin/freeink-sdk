@@ -163,7 +163,7 @@ void InputManager::readButtonAdc(ButtonAdcSample& group1, ButtonAdcSample& group
   group2.button = b2 >= 0 ? b2 + 4 : -1;  // map group-2 local 0/1 to BTN_UP / BTN_DOWN
 }
 
-uint8_t InputManager::getState() {
+uint8_t InputManager::getPhysicalState() {
   uint8_t state = 0;
 
   if (BoardConfig::ACTIVE.inputStyle == BoardConfig::InputStyle::OnePageAdcLadder) {
@@ -186,17 +186,14 @@ uint8_t InputManager::getState() {
         state |= (1 << BTN_POWER);
       }
     }
-    state |= serviceTouch();
-    if (s_buttonHook) state |= s_buttonHook();
     return state;
   }
 
   if (BoardConfig::ACTIVE.inputStyle != BoardConfig::InputStyle::XteinkAdcLadder) {
-    state = getDigitalState();
-    state |= serviceTouch();                    // run the touch machine; OR any synthesized button
-    if (s_buttonHook) state |= s_buttonHook();  // board buttons (e.g. I2C expander)
-    return state;
+    return getDigitalState();
   }
+
+  uint8_t state = 0;
 
   // Read GPIO1 buttons
   const int adcValue1 = analogRead(BUTTON_ADC_PIN_1);
@@ -218,8 +215,13 @@ uint8_t InputManager::getState() {
     state |= (1 << BTN_POWER);
   }
 
+  return state;
+}
+
+uint8_t InputManager::getState() {
+  uint8_t state = getPhysicalState();
   state |= serviceTouch();
-  if (s_buttonHook) state |= s_buttonHook();  // board buttons (e.g. I2C expander)
+  if (s_buttonHook) state |= s_buttonHook();
   return state;
 }
 
@@ -383,9 +385,22 @@ void InputManager::applyStateChange(const uint8_t state, const unsigned long cur
   lastState = state;
 }
 
+void InputManager::updatePhysicalPressed(const uint8_t state, const unsigned long currentTime) {
+  if (state != physicalCandidateState) {
+    physicalCandidateState = state;
+    physicalCandidateChangedAt = currentTime;
+  }
+  if (physicalCandidateState != physicalStableState &&
+      currentTime - physicalCandidateChangedAt >= DEBOUNCE_DELAY) {
+    physicalPressedEvents |= physicalCandidateState & static_cast<uint8_t>(~physicalStableState);
+    physicalStableState = physicalCandidateState;
+  }
+}
+
 void InputManager::updateConfirmBackHold(const unsigned long currentTime) {
   const bool pressed = isDigitalPressed(BoardConfig::ACTIVE.input.confirm);
   const uint8_t nonSharedState = getDigitalState();
+  updatePhysicalPressed(nonSharedState | (pressed ? static_cast<uint8_t>(1u << BTN_CONFIRM) : 0), currentTime);
   bool emitConfirmClick = false;
 
   if (pressed && !confirmBackPhysicalPressed) {
@@ -422,9 +437,11 @@ void InputManager::updateConfirmPowerHold(const unsigned long currentTime) {
   const int8_t sharedPin =
       BoardConfig::ACTIVE.input.confirm >= 0 ? BoardConfig::ACTIVE.input.confirm : BoardConfig::ACTIVE.input.power;
   const bool pressed = isDigitalPressed(sharedPin);
-  uint8_t nonSharedState = getDigitalState();
+  const uint8_t physicalState = getDigitalState();
+  uint8_t nonSharedState = physicalState;
   nonSharedState |= serviceTouch();
   if (s_buttonHook) nonSharedState |= s_buttonHook();
+  updatePhysicalPressed(physicalState | (pressed ? static_cast<uint8_t>(1u << BTN_CONFIRM) : 0), currentTime);
   bool emitConfirmClick = false;
 
   if (pressed && !confirmPowerPhysicalPressed) {
@@ -469,6 +486,7 @@ void InputManager::updateDigitalTwoButton(const unsigned long currentTime) {
   const bool up = isDigitalPressed(BoardConfig::ACTIVE.input.up);
   const bool down = isDigitalPressed(BoardConfig::ACTIVE.input.down);
   const uint8_t physical = static_cast<uint8_t>((up ? 1u : 0u) | (down ? 2u : 0u));
+  updatePhysicalPressed(static_cast<uint8_t>((up ? 1u << BTN_UP : 0u) | (down ? 1u << BTN_DOWN : 0u)), currentTime);
   uint8_t auxiliaryState = serviceTouch();
   if (s_buttonHook) auxiliaryState |= s_buttonHook();
 #if FREEINK_DEVICE_PAPERMONO
@@ -533,6 +551,7 @@ void InputManager::updateFunctionMultiGesture(const unsigned long currentTime) {
   const auto state = functionButtonGesture.update(raw, currentTime);
   const uint8_t auxiliaryState = s_buttonHook ? s_buttonHook() : 0;
   applyStateChange(state.down | auxiliaryState, currentTime);
+  physicalPressedEvents = state.physicalPressed | (pressedEvents & (1u << BTN_POWER));
   pressedEvents |= state.pressed;
   releasedEvents |= state.released;
 
@@ -553,6 +572,7 @@ void InputManager::update() {
 
   pressedEvents = 0;
   releasedEvents = 0;
+  physicalPressedEvents = 0;
   touchPressedEvent = false;  // one-shot touch coord events, cleared each update()
   touchReleasedEvent = false;
   touchLongPressEvent = false;
@@ -582,7 +602,9 @@ void InputManager::update() {
   }
 #endif
 
-  const uint8_t state = getState();
+  const uint8_t physicalState = getPhysicalState();
+  uint8_t state = physicalState | serviceTouch();
+  if (s_buttonHook) state |= s_buttonHook();
 
   // Debounce
   if (state != lastState) {
@@ -593,6 +615,7 @@ void InputManager::update() {
   if ((currentTime - lastDebounceTime) > DEBOUNCE_DELAY) {
     if (state != currentState) {
       applyStateChange(state, currentTime);
+      physicalPressedEvents = pressedEvents & physicalState;
     }
   }
 #if FREEINK_DEVICE_EEGO_A4

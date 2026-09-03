@@ -50,6 +50,12 @@ constexpr RegVal ES8311_INIT[] = {
     {0x37, 0x08},  // DAC: bypass equalizer
 };
 
+constexpr RegVal ES8311_MCLK_16K_INIT[] = {
+    {0x00, 0x80}, {0x01, 0x3F}, {0x02, 0x00}, {0x03, 0x10}, {0x04, 0x20},
+    {0x05, 0x00}, {0x06, 0x03}, {0x07, 0x00}, {0x08, 0xFF}, {0x09, 0x0C},
+    {0x0D, 0x01}, {0x12, 0x00}, {0x13, 0x10}, {0x32, 0xCF}, {0x37, 0x08},
+};
+
 constexpr uint8_t ES8311_VOL_MAX_REG = 0xCF;  // +16 dB, 0.5 dB/step (0xBF = 0 dB)
 
 uint32_t readLE32(const uint8_t* p) {
@@ -57,11 +63,16 @@ uint32_t readLE32(const uint8_t* p) {
 }
 uint16_t readLE16(const uint8_t* p) { return (uint16_t)p[0] | ((uint16_t)p[1] << 8); }
 
+bool isEs8311(BoardConfig::AudioOutput output) {
+  return output == BoardConfig::AudioOutput::I2sEs8311 ||
+         output == BoardConfig::AudioOutput::I2sEs8311Mclk16k;
+}
+
 }  // namespace
 
 bool AudioManager::present() const {
   return BoardConfig::ACTIVE.audio.output == BoardConfig::AudioOutput::I2sEs8388 ||
-         BoardConfig::ACTIVE.audio.output == BoardConfig::AudioOutput::I2sEs8311 ||
+         isEs8311(BoardConfig::ACTIVE.audio.output) ||
          BoardConfig::ACTIVE.audio.output == BoardConfig::AudioOutput::I2sDac;
 }
 
@@ -79,7 +90,10 @@ bool AudioManager::codecInit() {
 
   const RegVal* seq;
   size_t seqLen;
-  if (cfg.output == BoardConfig::AudioOutput::I2sEs8311) {
+  if (cfg.output == BoardConfig::AudioOutput::I2sEs8311Mclk16k) {
+    seq = ES8311_MCLK_16K_INIT;
+    seqLen = sizeof(ES8311_MCLK_16K_INIT) / sizeof(ES8311_MCLK_16K_INIT[0]);
+  } else if (cfg.output == BoardConfig::AudioOutput::I2sEs8311) {
     seq = ES8311_INIT;
     seqLen = sizeof(ES8311_INIT) / sizeof(ES8311_INIT[0]);
   } else {
@@ -120,8 +134,15 @@ bool AudioManager::begin() {
     delay(10);  // codec rail ramp before the first I2C access
   }
 
+  if (cfg.output == BoardConfig::AudioOutput::I2sEs8311Mclk16k && !ensureI2s(16000)) {
+    log_e("audio mclk setup failed");
+    rollbackBegin();
+    return false;
+  }
+
   if (!codecInit()) {
     log_e("audio codec init failed");
+    rollbackBegin();
     return false;
   }
   begun_ = true;
@@ -132,7 +153,7 @@ void AudioManager::setVolume(uint8_t percent) {
   if (percent > 100) percent = 100;
   const auto& cfg = BoardConfig::ACTIVE.audio;
   if (cfg.codecAddr == 0) return;
-  if (cfg.output == BoardConfig::AudioOutput::I2sEs8311) {
+  if (isEs8311(cfg.output)) {
     // Single DAC volume register, 0.5 dB/step; full scale matches the init
     // value M5 ships for this speaker (+16 dB).
     codecWrite(0x32, (uint8_t)((uint16_t)percent * ES8311_VOL_MAX_REG / 100));
@@ -150,7 +171,7 @@ void AudioManager::setVolume(uint8_t percent) {
 void AudioManager::codecMute(bool mute) {
   const auto& cfg = BoardConfig::ACTIVE.audio;
   if (cfg.codecAddr == 0) return;
-  if (cfg.output == BoardConfig::AudioOutput::I2sEs8311) {
+  if (isEs8311(cfg.output)) {
     codecWrite(0x31, mute ? 0x60 : 0x00);  // DAC_MUTE bits
   } else {
     codecWrite(0x19, mute ? 0x04 : 0x00);  // ES8388 DACCONTROL3 soft mute
@@ -163,12 +184,21 @@ void AudioManager::setAmp(bool on) {
   digitalWrite(cfg.ampEnable, on ? HIGH : LOW);
 }
 
+void AudioManager::rollbackBegin() {
+  const auto& cfg = BoardConfig::ACTIVE.audio;
+  setAmp(false);
+  teardownI2s();
+  if (cfg.enable != BoardConfig::PIN_UNASSIGNED) {
+    digitalWrite(cfg.enable, cfg.enableActiveHigh ? LOW : HIGH);
+  }
+}
+
 void AudioManager::powerDown() {
   const auto& cfg = BoardConfig::ACTIVE.audio;
   if (!begun_) return;
   stop();
   teardownI2s();
-  if (cfg.output == BoardConfig::AudioOutput::I2sEs8311) {
+  if (isEs8311(cfg.output)) {
     // Like M5Unified's disable path: drop the amp and the codec rail.
     setAmp(false);
     if (cfg.enable != BoardConfig::PIN_UNASSIGNED) {
@@ -218,6 +248,10 @@ bool AudioManager::parseWavHeader(const WavSource& source, WavInfo& info) {
 
 bool AudioManager::ensureI2s(uint32_t sampleRate) {
   const auto& cfg = BoardConfig::ACTIVE.audio;
+  if (cfg.output == BoardConfig::AudioOutput::I2sEs8311Mclk16k && sampleRate != 16000) {
+    log_e("external-mclk ES8311 supports 16 kHz PCM only");
+    return false;
+  }
   i2s_chan_handle_t tx = (i2s_chan_handle_t)txChan_;
 
   if (tx && currentRate_ == sampleRate) {
@@ -307,6 +341,10 @@ bool AudioManager::playPcm(const PcmSource& source, uint32_t sampleRate, uint8_t
   }
   if (!begun_ && !begin()) return false;
   stop();
+  if (source.seek && !source.seek(0)) {
+    log_e("PCM source seek failed");
+    return false;
+  }
   if (!ensureI2s(sampleRate)) {
     log_e("i2s setup failed");
     return false;
@@ -319,6 +357,7 @@ bool AudioManager::playPcm(const PcmSource& source, uint32_t sampleRate, uint8_t
 
   WavSource wavSource;
   wavSource.read = source.read;
+  wavSource.seek = source.seek;
   return startPlayback(wavSource, info, false);
 }
 
@@ -332,14 +371,13 @@ bool AudioManager::startPlayback(const WavSource& source, const WavInfo& info, b
   source_ = source;
   wav_ = info;
   loop_ = loop;
-  stopRequested_ = false;
-  playing_ = true;
+  playbackState_.store(PlaybackState::Playing, std::memory_order_release);
 
   // Same shape as the OEM "musicTask" (high priority, core 0 — the Arduino
   // loop owns core 1); 8K stack covers the on-stack sample buffers.
   if (xTaskCreatePinnedToCore(taskEntry, "audio_play", 8192, this, 10, &task_, 0) != pdPASS) {
-    playing_ = false;
     task_ = nullptr;
+    playbackState_.store(PlaybackState::Idle, std::memory_order_release);
     return false;
   }
   return true;
@@ -364,14 +402,30 @@ bool AudioManager::playBuffer(const uint8_t* data, size_t len, bool loop) {
   return play(src, loop);
 }
 
+bool AudioManager::requestRestart() {
+  if (!source_.seek) return false;
+  PlaybackState state = playbackState_.load(std::memory_order_acquire);
+  for (;;) {
+    if (state == PlaybackState::RestartPending) return true;
+    if (state != PlaybackState::Playing) return false;
+    if (playbackState_.compare_exchange_weak(state, PlaybackState::RestartPending, std::memory_order_acq_rel,
+                                             std::memory_order_acquire)) {
+      return true;
+    }
+  }
+}
+
 void AudioManager::stop() {
   if (!begun_) return;
-  if (playing_) {
-    stopRequested_ = true;
-    // The task deletes itself; wait for it to drain (bounded).
-    for (int i = 0; i < 200 && playing_; ++i) {
-      vTaskDelay(pdMS_TO_TICKS(10));
+  PlaybackState state = playbackState_.load(std::memory_order_acquire);
+  while (state == PlaybackState::Playing || state == PlaybackState::RestartPending) {
+    if (playbackState_.compare_exchange_weak(state, PlaybackState::Stopping, std::memory_order_acq_rel,
+                                             std::memory_order_acquire)) {
+      break;
     }
+  }
+  for (int i = 0; i < 200 && playbackState_.load(std::memory_order_acquire) != PlaybackState::Idle; ++i) {
+    vTaskDelay(pdMS_TO_TICKS(10));
   }
   // Drop the amp and mute the DAC so nothing residual reaches the output
   // between alarms.
@@ -395,9 +449,54 @@ void AudioManager::taskLoop() {
     if (i2s_channel_write(tx, outBuf, sizeof(outBuf), &written, pdMS_TO_TICKS(200)) != ESP_OK) break;
   }
   setAmp(true);
+  if (BoardConfig::ACTIVE.audio.ampSettleMs > 0) {
+    vTaskDelay(pdMS_TO_TICKS(BoardConfig::ACTIVE.audio.ampSettleMs));
+  }
 
   size_t consumed = 0;
-  while (!stopRequested_) {
+  bool draining = false;
+  uint8_t drainBuffers = 0;
+  for (;;) {
+    PlaybackState state = playbackState_.load(std::memory_order_acquire);
+    if (state == PlaybackState::RestartPending) {
+      if (!source_.seek || !source_.seek(wav_.dataStart)) {
+        log_e("PCM source restart failed");
+        playbackState_.store(PlaybackState::Stopping, std::memory_order_release);
+      } else {
+        consumed = 0;
+        draining = false;
+        drainBuffers = 0;
+        PlaybackState pending = PlaybackState::RestartPending;
+        playbackState_.compare_exchange_strong(pending, PlaybackState::Playing, std::memory_order_acq_rel,
+                                               std::memory_order_acquire);
+      }
+      continue;
+    }
+    if (state == PlaybackState::Stopping && !draining) {
+      draining = true;
+      drainBuffers = 0;
+    }
+
+    if (draining) {
+      if (drainBuffers >= 6) {
+        if (state == PlaybackState::Stopping) break;
+        PlaybackState playing = PlaybackState::Playing;
+        if (playbackState_.compare_exchange_strong(playing, PlaybackState::Stopping, std::memory_order_acq_rel,
+                                                   std::memory_order_acquire)) {
+          break;
+        }
+        continue;
+      }
+      memset(outBuf, 0, sizeof(outBuf));
+      size_t written = 0;
+      if (i2s_channel_write(tx, outBuf, sizeof(outBuf), &written, pdMS_TO_TICKS(200)) != ESP_OK) {
+        playbackState_.store(PlaybackState::Stopping, std::memory_order_release);
+        break;
+      }
+      ++drainBuffers;
+      continue;
+    }
+
     size_t want = READ_CHUNK;
     if (wav_.dataLength > 0) {
       const size_t left = wav_.dataLength - consumed;
@@ -406,12 +505,17 @@ void AudioManager::taskLoop() {
           consumed = 0;
           continue;
         }
-        break;
+        draining = true;
+        continue;
       }
       if (want > left) want = left;
     }
-    want &= ~(size_t)3;  // keep sample alignment (16-bit stereo frames)
-    if (want < 4) want = 4;
+    const size_t frameBytes = static_cast<size_t>(wav_.channels) * sizeof(int16_t);
+    want -= want % frameBytes;
+    if (want == 0) {
+      draining = true;
+      continue;
+    }
 
     const int n = source_.read(inBuf, want);
     if (n <= 0) {
@@ -419,11 +523,12 @@ void AudioManager::taskLoop() {
         consumed = 0;
         continue;
       }
-      break;
+      draining = true;
+      continue;
     }
-    const size_t frameBytes = static_cast<size_t>(wav_.channels) * sizeof(int16_t);
     if (n > static_cast<int>(want) || static_cast<size_t>(n) % frameBytes != 0) {
       log_e("PCM source returned an invalid byte count");
+      playbackState_.store(PlaybackState::Stopping, std::memory_order_release);
       break;
     }
     consumed += n;
@@ -443,22 +548,18 @@ void AudioManager::taskLoop() {
     }
 
     size_t written = 0;
-    if (i2s_channel_write(tx, outBuf, outBytes, &written, pdMS_TO_TICKS(1000)) != ESP_OK) break;
+    if (i2s_channel_write(tx, outBuf, outBytes, &written, pdMS_TO_TICKS(1000)) != ESP_OK) {
+      playbackState_.store(PlaybackState::Stopping, std::memory_order_release);
+      break;
+    }
   }
 
-  // Flush silence through every DMA descriptor, then stop the channel
-  // entirely — a merely-idle channel replays stale DMA contents (stutter).
-  memset(outBuf, 0, sizeof(outBuf));
-  for (int i = 0; i < 6; ++i) {
-    size_t written = 0;
-    if (i2s_channel_write(tx, outBuf, sizeof(outBuf), &written, pdMS_TO_TICKS(200)) != ESP_OK) break;
-  }
   setAmp(false);
   i2s_channel_disable(tx);
   chanEnabled_ = false;
 
-  playing_ = false;
   task_ = nullptr;
+  playbackState_.store(PlaybackState::Idle, std::memory_order_release);
   vTaskDelete(nullptr);
 }
 
@@ -473,6 +574,7 @@ void AudioManager::setVolume(uint8_t) {}
 bool AudioManager::play(const WavSource&, bool) { return false; }
 bool AudioManager::playPcm(const PcmSource&, uint32_t, uint8_t) { return false; }
 bool AudioManager::playBuffer(const uint8_t*, size_t, bool) { return false; }
+bool AudioManager::requestRestart() { return false; }
 void AudioManager::stop() {}
 void AudioManager::powerDown() {}
 bool AudioManager::parseWavHeader(const WavSource&, WavInfo&) { return false; }
@@ -483,6 +585,7 @@ bool AudioManager::codecInit() { return false; }
 bool AudioManager::codecWrite(uint8_t, uint8_t) { return false; }
 void AudioManager::codecMute(bool) {}
 void AudioManager::setAmp(bool) {}
+void AudioManager::rollbackBegin() {}
 void AudioManager::taskEntry(void*) {}
 void AudioManager::taskLoop() {}
 }  // namespace freeink

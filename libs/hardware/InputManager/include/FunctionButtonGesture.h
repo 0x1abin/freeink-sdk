@@ -17,6 +17,7 @@ class FunctionButtonGesture {
     uint8_t down = 0;
     uint8_t pressed = 0;
     uint8_t released = 0;
+    uint8_t physicalPressed = 0;
     uint32_t startedMs = 0;
   };
 
@@ -35,6 +36,7 @@ class FunctionButtonGesture {
       stable_ = candidate_;
       pressed = stable_ & static_cast<uint8_t>(~old);
       released = old & static_cast<uint8_t>(~stable_);
+      state.physicalPressed = pressed;
       state.pressed = pressed & BACK;
       state.released = released & BACK;
 
