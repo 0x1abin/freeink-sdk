@@ -20,11 +20,14 @@
 
 #include <Arduino.h>
 
+#include <atomic>
 #include <functional>
 
 namespace freeink {
 
 class AudioManager {
+  enum class PlaybackState : uint8_t { Idle, Playing, Stopping, RestartPending };
+
  public:
   struct WavSource {
     // Copy up to len bytes to dst, returning the count (0 = EOF, <0 = error).
@@ -38,6 +41,9 @@ class AudioManager {
     // Copy interleaved signed 16-bit little-endian PCM to dst. The callback
     // may block; 0 ends playback and a negative result reports a source error.
     std::function<int(uint8_t* dst, size_t len)> read;
+    // Optional absolute byte seek. playPcm() starts at zero; restart requests
+    // require this callback.
+    std::function<bool(size_t pos)> seek;
   };
 
   // Initializes the codec + enable pin. Returns false when the active board
@@ -59,8 +65,12 @@ class AudioManager {
   // Convenience: play from a memory buffer (e.g. an embedded default sound).
   bool playBuffer(const uint8_t* data, size_t len, bool loop);
 
+  // Request a rewind at the next PCM buffer boundary. Returns false when no
+  // active seekable source can accept it, so callers may start new playback.
+  bool requestRestart();
+
   void stop();
-  bool isPlaying() const { return playing_; }
+  bool isPlaying() const { return playbackState_.load(std::memory_order_acquire) != PlaybackState::Idle; }
 
   // Codec power-down (CHIPPOWER off). begin() restores it.
   void powerDown();
@@ -85,10 +95,10 @@ class AudioManager {
   bool codecWrite(uint8_t reg, uint8_t value);
   void codecMute(bool mute);
   void setAmp(bool on);
+  void rollbackBegin();
 
   bool begun_ = false;
-  volatile bool playing_ = false;
-  volatile bool stopRequested_ = false;
+  std::atomic<PlaybackState> playbackState_{PlaybackState::Idle};
   TaskHandle_t task_ = nullptr;
 
   WavSource source_;
