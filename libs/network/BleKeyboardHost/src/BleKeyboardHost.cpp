@@ -379,6 +379,11 @@ bool BleKeyboardHost::begin(const char* hostName) {
   // device shows up nameless or not at all. This (plus the windowed interval
   // below and the no-filter onResult) keeps scan response and extended adv data.
   scan->setScanCallbacks(&g_scanCb, true);
+#if CONFIG_IDF_TARGET_ESP32C3
+  // onResult copies the address/name into devices_; connect() uses that copy.
+  // Release completed advertisements instead of also retaining NimBLE's list.
+  scan->setMaxResults(0);
+#endif
   scan->setActiveScan(true);  // send scan requests -> receive scan responses (names)
   // CONTINUOUS listening (window == interval, 100% duty; values are ms).
   // Extended advertising splits data into an AUX packet on a secondary
@@ -418,7 +423,14 @@ bool BleKeyboardHost::begin(const char* hostName) {
   g_client->setConnectionParams(/*minInterval=*/12, /*maxInterval=*/24, /*latency=*/0, /*timeout=*/800);
   g_client->setClientCallbacks(&g_clientCb, false);
 
-  xTaskCreate(connTaskFn, "ble-conn", 4096, nullptr, 3, &g_connTask);
+  if (xTaskCreate(connTaskFn, "ble-conn", 4096, nullptr, 3, &g_connTask) != pdPASS) {
+    Serial.println("[BleHid] begin: connection task allocation failed (4096-byte stack)");
+    g_connTask = nullptr;
+    NimBLEDevice::deleteClient(g_client);
+    g_client = nullptr;
+    NimBLEDevice::deinit(true);
+    return false;
+  }
   begun_ = true;
 #if FREEINK_BLE_HID_SCAN_DEBUG
   Serial.println("[BleHid] begin: ok");
