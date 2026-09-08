@@ -609,7 +609,9 @@ tied to any application's screen structure:
 - `statusBar`
 - `tabBar` (pill or underline-style tabs with optional divider; per-tab
   icons via `BitmapRef`/`AssetRef` or an `iconPainter` callback, optional
-  labels, and disabled tabs)
+  labels, trailing `TabIndicator::Up`/`Down` arrows, and disabled tabs).
+  `selectedText` controls the selected label's font/style for both measurement
+  and drawing, including the space reserved beside an arrow.
 - `popup`
 - `toast`
 - `contextMenu`
@@ -897,6 +899,10 @@ fills and borders, `tabBar` renders filled pill tabs, and
 `ListProps.hugContents` shrinks selection pills to the label width — no
 custom drawing code needed.
 
+`textStyleWithForeground()` sets a solid ink color and clears `inverted`, so
+white foregrounds remain white in both bundled drawing targets. Explicit
+`inverted` retains the GfxRenderer adapter's legacy paper-colored-text behavior.
+
 ### Drawing primitives
 
 The `DrawTarget` interface is small but covers everything hand-rolled
@@ -976,6 +982,28 @@ freeink::ui::list(ui, rect, props);
 `listTopIndexFor` scrolls the window the minimal amount to keep the selection
 visible and clamps to the valid range, so GPIO up/down navigation gets correct
 scrolling for free.
+
+Rows are not all the same height: a wrapped label or subtitle grows one, so a
+layout routinely fits fewer indexes than `listVisibleRows()` estimates. Screens
+that scroll (swipe or button navigation) should therefore own a `ListNav` and
+call `nav.syncToProps(body, rowHeight, rowGap, count, props)` right before
+`list()`. `list()` reports the viewport it actually laid out back through
+`props.nav`, which gives the nav the real page size (`pageRows()`, the delta to
+page by) and lets it keep a clipped tail reachable. Because that feedback
+arrives only after a layout, a nav-managed screen must render in a small loop:
+
+```cpp
+for (int pass = 0; pass < 8; ++pass) {
+  app.render();
+  if (!nav.consumeRebuildNeeded()) break;
+}
+```
+
+Without the loop a clipped list can paint one frame with the selection or the
+scroll indicator missing. Callers repaint each pass over the previous one, so
+`list()` keeps the row geometry stable across the passes of a single render.
+The fork's `selectionCoversScrollReservation` option remains compatible: its
+full-width selection paints before the scroll track and measured-size thumb.
 
 ### Dialogs
 

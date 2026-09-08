@@ -175,10 +175,8 @@ class GfxRendererTarget final : public DrawTarget {
     // A solid foreground maps to the legacy 1-bit `black` flag; a dithered
     // foreground (a disabled row's dither(LightGray)) is passed through to the
     // renderer's dithered text path so it renders gray instead of solid black.
-    // `inverted` marks paper-colored text (textStyleWithForeground sets it
-    // alongside a White color for labels on filled elements); honor it as
-    // "draw paper", NOT as a color flip -- flipping the White-and-inverted
-    // pair lands back on black and paints filled tiles' labels invisible.
+    // Explicit `inverted` keeps the legacy "draw paper" behavior. Solid
+    // foreground styles carry their ink in `color` without setting this flag.
     const Color inkColor = style.inverted ? Color::White : style.color;
     const bool black = inkColor == Color::Black;
     const bool dithered = inkColor != Color::Black && inkColor != Color::White;
