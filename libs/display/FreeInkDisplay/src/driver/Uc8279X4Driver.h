@@ -154,6 +154,10 @@ class Uc8279X4Driver : public PanelDriver {
   // ~newframe), scrubbing the residue with a cheap DU (no GC flash) — the same
   // mechanism used for dark-background refreshes.
   bool _redriveAfterGray = false;
+  // Set by copyGrayscaleMsb when the grey-mask coverage crosses the image
+  // threshold; displayGray then runs the scaled four-tone quality bank instead
+  // of the stock AA set. Consumed (cleared) by displayGray.
+  bool _grayImagePass = false;
 
   // Async split state (see Uc8179Driver for the contract).
   bool _pendingRefresh = false;
