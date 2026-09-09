@@ -2,9 +2,10 @@
 
 #include <BoardConfig.h>
 #include <SPI.h>
-#include <new>
 #include <driver/gpio.h>
 #include <esp_task_wdt.h>
+
+#include <new>
 
 #include "SdmmcBlockDevice.h"  // no-op unless FREEINK_SD_SDMMC
 
@@ -13,6 +14,15 @@
 #endif
 
 SDCardManager SDCardManager::instance;
+
+namespace {
+uint64_t volumeTotalBytes(FsVolume& volume) {
+  const uint64_t sectorsPerCluster = volume.sectorsPerCluster();
+  if (sectorsPerCluster == 0 || (sectorsPerCluster & (sectorsPerCluster - 1)) != 0) return 0;
+  // SdFat 2.3.1's FAT bytesPerCluster() narrows 64 KiB to zero. Both backends use 512-byte sectors.
+  return static_cast<uint64_t>(volume.clusterCount()) * sectorsPerCluster * 512;
+}
+}  // namespace
 
 #if FREEINK_SD_SDMMC
 SDCardManager::SDCardManager() {}
@@ -61,7 +71,7 @@ bool SDCardManager::begin() {
   }
   if (Serial) Serial.printf("[%lu] [SD] SDMMC card mounted\n", millis());
   initialized = true;
-  cachedTotalBytes = static_cast<uint64_t>(vol().clusterCount()) * vol().bytesPerCluster();
+  cachedTotalBytes = volumeTotalBytes(vol());
   cachedUsedBytesValid = false;
   return initialized;
 }
@@ -192,7 +202,7 @@ bool SDCardManager::begin() {
   } else {
     if (Serial) Serial.printf("[%lu] [SD] SD card detected\n", millis());
     initialized = true;
-    cachedTotalBytes = static_cast<uint64_t>(vol().clusterCount()) * vol().bytesPerCluster();
+    cachedTotalBytes = volumeTotalBytes(vol());
     cachedUsedBytesValid = false;
   }
 
@@ -425,23 +435,32 @@ bool SDCardManager::openFileForWrite(const char* moduleName, const String& path,
 
 uint64_t SDCardManager::sdTotalBytes() const { return cachedTotalBytes; }
 
-uint64_t SDCardManager::sdUsedBytes() {
-  if (!initialized) return 0;
+bool SDCardManager::getSpace(uint64_t& totalBytes, uint64_t& freeBytes) {
+  totalBytes = 0;
+  freeBytes = 0;
+  if (!initialized || cachedTotalBytes == 0) {
+    cachedUsedBytesValid = false;
+    return false;
+  }
   const uint32_t now = millis();
   if (!cachedUsedBytesValid || (now - cachedUsedBytesAt) >= USED_BYTES_CACHE_TTL_MS) {
+    cachedUsedBytesValid = false;
     const int32_t freeClusters = vol().freeClusterCount();
     const uint64_t clusterCount = vol().clusterCount();
-    if (freeClusters < 0) {
-      cachedUsedBytes = 0;
-    } else {
-      const uint64_t cappedFree =
-          (static_cast<uint64_t>(freeClusters) > clusterCount) ? clusterCount : static_cast<uint64_t>(freeClusters);
-      cachedUsedBytes = (clusterCount - cappedFree) * vol().bytesPerCluster();
-    }
+    if (freeClusters < 0 || static_cast<uint64_t>(freeClusters) > clusterCount) return false;
+    cachedUsedBytes = (clusterCount - static_cast<uint64_t>(freeClusters)) * vol().sectorsPerCluster() * 512ULL;
     cachedUsedBytesValid = true;
-    cachedUsedBytesAt = now;
+    cachedUsedBytesAt = millis();
   }
-  return cachedUsedBytes;
+  totalBytes = cachedTotalBytes;
+  freeBytes = totalBytes - cachedUsedBytes;
+  return true;
+}
+
+uint64_t SDCardManager::sdUsedBytes() {
+  uint64_t totalBytes;
+  uint64_t freeBytes;
+  return getSpace(totalBytes, freeBytes) ? totalBytes - freeBytes : 0;
 }
 
 bool SDCardManager::removeDir(const char* path) {
