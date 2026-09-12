@@ -598,7 +598,7 @@ void FreeInkDisplay::displayBuffer(RefreshMode mode, bool turnOffScreen, Refresh
   }
 #ifdef EINK_DISPLAY_SINGLE_BUFFER_MODE
   if (_inverted) invertBytes(frameBuffer, bufferSize);
-  _driver->display(_bus, frameBuffer, nullptr, toInternal(mode), turnOffScreen, context);
+  _driver->displayWithContext(_bus, frameBuffer, nullptr, toInternal(mode), turnOffScreen, context);
   if (_inverted) invertBytes(frameBuffer, bufferSize);
   // The blocking path resynced the controller's baseline from the live
   // framebuffer; the async shadow no longer matches what is displayed.
@@ -611,7 +611,7 @@ void FreeInkDisplay::displayBuffer(RefreshMode mode, bool turnOffScreen, Refresh
     invertBytes(next, bufferSize);
     invertBytes(const_cast<uint8_t*>(prev), bufferSize);
   }
-  _driver->display(_bus, next, prev, toInternal(effMode), turnOffScreen, context);
+  _driver->displayWithContext(_bus, next, prev, toInternal(effMode), turnOffScreen, context);
   if (_inverted) {
     invertBytes(next, bufferSize);
     invertBytes(const_cast<uint8_t*>(prev), bufferSize);
@@ -649,7 +649,8 @@ void FreeInkDisplay::displayAsyncImpl(RefreshMode mode, bool turnOffScreen, bool
     // the refresh completes and rebuilds the differential baseline itself
     // (e.g. the tiled-grayscale cleanup), so controller RAM stays the
     // baseline (prev = nullptr) and no 48 KB shadow is allocated.
-    _refreshPending = _driver->displayStart(_bus, frameBuffer, nullptr, toInternal(mode), turnOffScreen, context);
+    _refreshPending =
+        _driver->displayStartWithContext(_bus, frameBuffer, nullptr, toInternal(mode), turnOffScreen, context);
     _shadowValid = false;
     return;
   }
@@ -672,8 +673,8 @@ void FreeInkDisplay::displayAsyncImpl(RefreshMode mode, bool turnOffScreen, bool
   // First async update after boot or a blocking display: the controller's RED
   // plane still holds the displayed frame (single-buffer prev = nullptr path);
   // from then on the shadow supplies the baseline on every update.
-  _refreshPending = _driver->displayStart(_bus, frameBuffer, _shadowValid ? _asyncShadow : nullptr, toInternal(mode),
-                                          turnOffScreen, context);
+  _refreshPending = _driver->displayStartWithContext(_bus, frameBuffer, _shadowValid ? _asyncShadow : nullptr,
+                                                     toInternal(mode), turnOffScreen, context);
   memcpy(_asyncShadow, frameBuffer, bufferSize);
   _shadowValid = true;
 #else
@@ -682,8 +683,8 @@ void FreeInkDisplay::displayAsyncImpl(RefreshMode mode, bool turnOffScreen, bool
   // consumePrevFrameFor may return nullptr post-realloc: the driver then diffs
   // against retained RED and, being async, skips the post-refresh resync — RED
   // simply keeps that baseline until the next update rewrites it.
-  _refreshPending = _driver->displayStart(_bus, frameBuffer, consumePrevFrameFor(effMode), toInternal(effMode),
-                                          turnOffScreen, context);
+  _refreshPending = _driver->displayStartWithContext(_bus, frameBuffer, consumePrevFrameFor(effMode),
+                                                     toInternal(effMode), turnOffScreen, context);
   swapBuffers();
 #endif
 }
@@ -827,12 +828,12 @@ void FreeInkDisplay::copyGrayscaleBuffers(const uint8_t* lsbBuffer, const uint8_
 
 void FreeInkDisplay::displayGrayscaleBase(RefreshMode fallback, bool turnOffScreen, RefreshContext context) {
   if (_inverted || _inversionDirty) {
-    displayBuffer(fallback, turnOffScreen);
+    displayBuffer(fallback, turnOffScreen, context);
     return;
   }
   syncPendingAsync();
   _shadowValid = false;
-  _driver->displayGrayscaleBase(_bus, frameBuffer, toInternal(fallback), turnOffScreen, context);
+  _driver->displayGrayscaleBaseWithContext(_bus, frameBuffer, toInternal(fallback), turnOffScreen, context);
 }
 
 void FreeInkDisplay::preconditionGrayscale() {

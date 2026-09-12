@@ -472,8 +472,12 @@ void Ssd1677Driver::powerOffController(EpdBus& bus) {
   _isScreenOn = false;
 }
 
-void Ssd1677Driver::display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff,
-                            RefreshContext context) {
+void Ssd1677Driver::display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) {
+  displayWithContext(bus, fb, prev, mode, turnOff, RefreshContext::Normal);
+}
+
+void Ssd1677Driver::displayWithContext(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode,
+                                       bool turnOff, RefreshContext context) {
   displayImpl(bus, fb, prev, mode, turnOff, /*async=*/false, context);
 }
 
@@ -481,9 +485,18 @@ void Ssd1677Driver::display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev,
 // Skips the single-buffer post-refresh baseline resync — the facade supplies
 // `prev` (its shadow) on shadowed updates, and the no-shadow/grayscale flow
 // re-seeds the baseline itself (cleanupGrayscaleBuffers).
-bool Ssd1677Driver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff,
-                                 RefreshContext context) {
+bool Ssd1677Driver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) {
+  return displayStartWithContext(bus, fb, prev, mode, turnOff, RefreshContext::Normal);
+}
+
+bool Ssd1677Driver::displayStartWithContext(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode,
+                                            bool turnOff, RefreshContext context) {
   return displayImpl(bus, fb, prev, mode, turnOff, /*async=*/true, context);
+}
+
+void Ssd1677Driver::displayGrayscaleBaseWithContext(EpdBus& bus, const uint8_t* fb, RefreshMode fallback, bool turnOff,
+                                                    RefreshContext context) {
+  displayWithContext(bus, fb, nullptr, fallback, turnOff, context);
 }
 
 void Ssd1677Driver::displayFinish(EpdBus& bus, const uint8_t* fb) {

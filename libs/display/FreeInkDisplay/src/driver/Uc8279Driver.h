@@ -39,10 +39,8 @@ class Uc8279Driver : public PanelDriver {
   void begin(EpdBus& bus) override;
   void deepSleep(EpdBus& bus) override;
 
-  void display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff,
-               RefreshContext /*context*/ = RefreshContext::Normal) override;
-  bool displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff,
-                    RefreshContext /*context*/ = RefreshContext::Normal) override;
+  void display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) override;
+  bool displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) override;
   void displayFinish(EpdBus& bus, const uint8_t* fb) override;
   bool supportsAsyncDisplay() const override { return true; }
 
@@ -55,8 +53,7 @@ class Uc8279Driver : public PanelDriver {
   // external XTF_AA LUT bank resolves them. displayGrayscaleBase / precondition
   // run the OEM XTF_PRE_BW_MID "AA-pre-BW(mid)" settle before the gray planes.
   bool supportsStripGrayscale() const override { return true; }
-  void displayGrayscaleBase(EpdBus& bus, const uint8_t* fb, RefreshMode fallback, bool turnOff,
-                            RefreshContext /*context*/ = RefreshContext::Normal) override;
+  void displayGrayscaleBase(EpdBus& bus, const uint8_t* fb, RefreshMode fallback, bool turnOff) override;
   void preconditionGrayscale(EpdBus& bus, uint16_t x, uint16_t y, uint16_t w, uint16_t h) override;
   void copyGrayscaleLsb(EpdBus& bus, const uint8_t* lsb) override;
   void copyGrayscaleMsb(EpdBus& bus, const uint8_t* msb) override;

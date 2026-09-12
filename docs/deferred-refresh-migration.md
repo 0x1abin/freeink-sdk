@@ -109,9 +109,12 @@ without physically cleaning prior grayscale. It never overrides initial or
 periodic cleaning, or an explicit FULL. Image/menu/sleep transitions use Normal.
 The context belongs only to that invocation, including blocking fallbacks.
 
-Custom `PanelDriver` implementations must add the optional context parameter to
-`display`, `displayStart`, and `displayGrayscaleBase` overrides. Drivers without
-this policy may ignore it; all bundled drivers preserve their prior behavior.
+Existing and custom `PanelDriver` implementations keep their original
+`display`, `displayStart`, and `displayGrayscaleBase` signatures. The new
+`displayWithContext`, `displayStartWithContext`, and
+`displayGrayscaleBaseWithContext` hooks delegate to those original virtual
+methods by default. Only SSD1677 overrides the hooks; its reading-specific
+policy is enabled only by the Metalio board configuration.
 No framebuffer, persistent request permission, or deferred caller pointer is
 introduced. Metalio resolves its clean strategy once before choosing whether
 to defer; black-pulse and FULL cleaning complete inline.

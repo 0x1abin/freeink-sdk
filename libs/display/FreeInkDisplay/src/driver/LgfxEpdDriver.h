@@ -36,8 +36,7 @@ class LgfxEpdDriver : public PanelDriver {
 
   void begin(EpdBus& bus) override;
   void deepSleep(EpdBus& bus) override;
-  void display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff,
-               RefreshContext /*context*/ = RefreshContext::Normal) override;
+  void display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) override;
 
   // 16-gray path: the facade streams LSB/MSB 1-bpp planes (whole or in strips);
   // displayGray combines them with the B/W base into the panel's 8-bit gray canvas.

@@ -82,14 +82,18 @@ class Ssd1677Driver : public PanelDriver {
   void begin(EpdBus& bus) override;
   void deepSleep(EpdBus& bus) override;
 
-  void display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff,
-               RefreshContext context = RefreshContext::Normal) override;
+  void display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) override;
+  void displayWithContext(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff,
+                          RefreshContext context) override;
   // Deferred refresh: displayStart() runs the full update (RAM writes,
   // MASTER_ACTIVATION) and returns while the waveform runs; displayFinish()
   // sleeps out the remainder on the BUSY completion edge. No post-waveform
   // host-frame work on X4 (RED handling is inside displayImpl's async path).
-  bool displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff,
-                    RefreshContext context = RefreshContext::Normal) override;
+  bool displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) override;
+  bool displayStartWithContext(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff,
+                               RefreshContext context) override;
+  void displayGrayscaleBaseWithContext(EpdBus& bus, const uint8_t* fb, RefreshMode fallback, bool turnOff,
+                                       RefreshContext context) override;
   void displayFinish(EpdBus& bus, const uint8_t* fb) override;
   bool supportsAsyncDisplay() const override { return true; }
   void displayWindow(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, uint16_t x, uint16_t y, uint16_t w,

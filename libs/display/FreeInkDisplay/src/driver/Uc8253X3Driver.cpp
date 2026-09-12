@@ -156,14 +156,12 @@ void Uc8253X3Driver::begin(EpdBus& bus) {
   initController(bus);
 }
 
-void Uc8253X3Driver::display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff,
-                             RefreshContext /*context*/) {
+void Uc8253X3Driver::display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) {
   displayStart(bus, fb, prev, mode, turnOff);
   displayFinish(bus, fb);
 }
 
-bool Uc8253X3Driver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff,
-                                  RefreshContext /*context*/) {
+bool Uc8253X3Driver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) {
   (void)prev;
   if (!_isScreenOn && !turnOff) {
     mode = RefreshMode::Half;  // wake transition gets a stronger waveform
@@ -292,8 +290,7 @@ void Uc8253X3Driver::displayFinish(EpdBus& bus, const uint8_t* fb) {
   _forcedConditionPassesNext = 0;
 }
 
-void Uc8253X3Driver::displayGrayscaleBase(EpdBus& bus, const uint8_t* fb, RefreshMode fallback, bool turnOff,
-                                          RefreshContext /*context*/) {
+void Uc8253X3Driver::displayGrayscaleBase(EpdBus& bus, const uint8_t* fb, RefreshMode fallback, bool turnOff) {
   // OEM V5.6.33 grayscale base update: write the new frame to DTM2 and fire
   // the "AA-pre-BW(mid)" bank as a differential refresh against the old frame
   // still held in DTM1. Changed pixels get the strong 0xAA/0x55 transition

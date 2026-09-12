@@ -43,8 +43,7 @@ class PaperMonoDriver final : public PanelDriver {
 
   void begin(EpdBus& bus) override;
   void deepSleep(EpdBus& bus) override;
-  void display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff,
-               RefreshContext /*context*/ = RefreshContext::Normal) override;
+  void display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) override;
   void displayWindow(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, uint16_t x, uint16_t y, uint16_t w,
                      uint16_t h, bool turnOff) override;
   // The complete 3-gray target is intentionally batched in host RAM before a
@@ -52,15 +51,13 @@ class PaperMonoDriver final : public PanelDriver {
   // synchronous; advertising an in-flight refresh here would make BUSY polling
   // lie while no controller activation exists yet.
   bool supportsAsyncDisplay() const override { return false; }
-  bool displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff,
-                    RefreshContext /*context*/ = RefreshContext::Normal) override;
+  bool displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) override;
   void displayFinish(EpdBus& bus, const uint8_t* fb) override;
   void seedPreviousFrame(EpdBus& bus, const uint8_t* buf) override;
 
   bool supportsStripGrayscale() const override { return true; }
   bool combinesGrayscaleBase() const override { return true; }
-  void displayGrayscaleBase(EpdBus& bus, const uint8_t* fb, RefreshMode fallback, bool turnOff,
-                            RefreshContext /*context*/ = RefreshContext::Normal) override;
+  void displayGrayscaleBase(EpdBus& bus, const uint8_t* fb, RefreshMode fallback, bool turnOff) override;
   void copyGrayscaleLsb(EpdBus& bus, const uint8_t* lsb) override;
   void copyGrayscaleMsb(EpdBus& bus, const uint8_t* msb) override;
   // Selector staging is host-RAM only, so the renderer may hand over strips at

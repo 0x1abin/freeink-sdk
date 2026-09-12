@@ -52,20 +52,17 @@ class Uc8253X3Driver : public PanelDriver {
   void begin(EpdBus& bus) override;
   void deepSleep(EpdBus& bus) override;
 
-  void display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff,
-               RefreshContext /*context*/ = RefreshContext::Normal) override;
+  void display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) override;
   // Refresh split: displayStart fires the waveform and returns while the ~130-770 ms
   // X3 waveform runs (so the render task can overlap non-SPI work); displayFinish
   // waits BUSY out and runs the post-waveform DTM1 sync + conditioning passes.
   // display() above is exactly displayStart()+displayFinish().
-  bool displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff,
-                    RefreshContext /*context*/ = RefreshContext::Normal) override;
+  bool displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) override;
   void displayFinish(EpdBus& bus, const uint8_t* fb) override;
   bool supportsAsyncDisplay() const override { return true; }
 
   bool supportsStripGrayscale() const override { return true; }
-  void displayGrayscaleBase(EpdBus& bus, const uint8_t* fb, RefreshMode fallback, bool turnOff,
-                            RefreshContext /*context*/ = RefreshContext::Normal) override;
+  void displayGrayscaleBase(EpdBus& bus, const uint8_t* fb, RefreshMode fallback, bool turnOff) override;
   void preconditionGrayscale(EpdBus& bus, uint16_t x, uint16_t y, uint16_t w, uint16_t h) override;
   void copyGrayscaleLsb(EpdBus& bus, const uint8_t* lsb) override;
   void copyGrayscaleMsb(EpdBus& bus, const uint8_t* msb) override;

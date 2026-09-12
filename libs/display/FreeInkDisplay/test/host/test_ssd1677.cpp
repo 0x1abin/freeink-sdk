@@ -11,13 +11,45 @@ void parameters(EpdBus& b) {
     if (e.cmd == 0x21) assert(e.bytes.size() == 2);
   assert(b.last(0x18) == std::vector<uint8_t>{0x80});
 }
+// External drivers implementing only the original interface remain compatible.
+struct LegacyDriver : PanelDriver {
+  int calls = 0;
+  uint32_t spiHz() const override { return 10000000; }
+  BusyPolarity busyPolarity() const override { return BusyPolarity::ActiveHigh; }
+  PanelGeometry geometry() const override { return {32, 8, 4, 32}; }
+  void begin(EpdBus&) override {}
+  void deepSleep(EpdBus&) override {}
+  void display(EpdBus&, const uint8_t*, const uint8_t*, RefreshMode mode, bool off) override {
+    assert(mode == Mode::Fast && off);
+    calls |= 1;
+  }
+  bool displayStart(EpdBus&, const uint8_t*, const uint8_t*, RefreshMode mode, bool off) override {
+    assert(mode == Mode::Half && !off);
+    calls |= 2;
+    return true;
+  }
+  void displayGrayscaleBase(EpdBus&, const uint8_t*, RefreshMode mode, bool off) override {
+    assert(mode == Mode::Full && off);
+    calls |= 4;
+  }
+};
+
 void testDriverSequences() {
+  LegacyDriver legacy;
+  PanelDriver& compat = legacy;
+  EpdBus compatBus;
+  compat.displayWithContext(compatBus, nullptr, nullptr, Mode::Fast, true, RefreshContext::ContinuousReading);
+  assert(compat.displayStartWithContext(compatBus, nullptr, nullptr, Mode::Half, false,
+                                        RefreshContext::ContinuousReading));
+  compat.displayGrayscaleBaseWithContext(compatBus, nullptr, Mode::Full, true, RefreshContext::ContinuousReading);
+  assert(legacy.calls == 7);
+
   std::array<uint8_t, 32> fb;
   fb.fill(0xA5);
   const auto original = fb;
-  for (auto policy : {Policy::BlackPulse}) {
+  {
     auto cfg = ssd1677MetalioConfig();
-    cfg.cleanPolicy = policy;
+    assert(cfg.cleanPolicy == Policy::BlackPulse);
     Ssd1677Driver d(cfg);
     EpdBus b;
     d.begin(b);
@@ -78,12 +110,12 @@ void testDriverSequences() {
     d.displayGray(b, fb.data(), false, nullptr, false);
     b.clear();
     // Reading context cannot reuse an unsynchronized grayscale baseline.
-    d.display(b, fb.data(), nullptr, Mode::Fast, false, RefreshContext::ContinuousReading);
+    d.displayWithContext(b, fb.data(), nullptr, Mode::Fast, false, RefreshContext::ContinuousReading);
     expect(b, {0xFC, 0xFC});
     assert(fb == original);
   }
   auto cfg = ssd1677MetalioConfig();
-  cfg.cleanPolicy = Policy::BlackPulse;
+  assert(cfg.cleanPolicy == Policy::BlackPulse);
   Ssd1677Driver d(cfg);
   EpdBus b;
   d.begin(b);
@@ -125,7 +157,7 @@ void testDriverSequences() {
   d.displayGray(b, fb.data(), false, nullptr, false);
   d.cleanupGrayscaleBuffers(b, fb.data());
   b.clear();
-  d.display(b, fb.data(), nullptr, Mode::Fast, false, RefreshContext::ContinuousReading);
+  d.displayWithContext(b, fb.data(), nullptr, Mode::Fast, false, RefreshContext::ContinuousReading);
   expect(b, {0xFC});
   b.clear();
   d.display(b, fb.data(), nullptr, Mode::Fast, false);
@@ -160,7 +192,7 @@ void testDriverSequences() {
   d.displayGray(b, fb.data(), false, nullptr, false);
   d.cleanupGrayscaleBuffers(b, fb.data());
   b.clear();
-  d.display(b, fb.data(), nullptr, Mode::Full, false, RefreshContext::ContinuousReading);
+  d.displayWithContext(b, fb.data(), nullptr, Mode::Full, false, RefreshContext::ContinuousReading);
   expect(b, {0xF7});  // Explicit FULL cannot be weakened by reading context.
   b.clear();
   assert(d.displayStart(b, fb.data(), nullptr, Mode::Fast, true));

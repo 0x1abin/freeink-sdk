@@ -160,7 +160,7 @@ void Uc8279cA4Driver::begin(EpdBus& bus) {
 }
 
 void Uc8279cA4Driver::display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, const RefreshMode mode,
-                              const bool turnOff, RefreshContext /*context*/) {
+                              const bool turnOff) {
   (void)prev;
   if (_grayControllerMode) {
     hardwareReset(bus);

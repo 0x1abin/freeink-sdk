@@ -776,8 +776,7 @@ bool PaperMonoDriver::commitPending(EpdBus& bus, bool useGray) {
   return ran;
 }
 
-void PaperMonoDriver::display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff,
-                              RefreshContext /*context*/) {
+void PaperMonoDriver::display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) {
   (void)prev;
   (void)turnOff;
   if (!fb) return;
@@ -870,8 +869,7 @@ void PaperMonoDriver::displayWindow(EpdBus& bus, const uint8_t* fb, const uint8_
   if (turnOff) powerOffController(bus);
 }
 
-bool PaperMonoDriver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff,
-                                   RefreshContext /*context*/) {
+bool PaperMonoDriver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) {
   display(bus, fb, prev, mode, turnOff);
   return false;
 }
@@ -893,8 +891,7 @@ void PaperMonoDriver::seedPreviousFrame(EpdBus& bus, const uint8_t* buf) {
   _lastBwValid = true;
 }
 
-void PaperMonoDriver::displayGrayscaleBase(EpdBus& bus, const uint8_t* fb, RefreshMode fallback, bool turnOff,
-                                           RefreshContext /*context*/) {
+void PaperMonoDriver::displayGrayscaleBase(EpdBus& bus, const uint8_t* fb, RefreshMode fallback, bool turnOff) {
   _preparingGray = true;
   display(bus, fb, nullptr, fallback, turnOff);
   _preparingGray = false;

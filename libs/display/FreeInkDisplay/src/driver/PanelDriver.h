@@ -50,10 +50,7 @@ class PanelDriver {
   virtual void deepSleep(EpdBus& bus) = 0;
 
   // --- core paint path (load RAM + refresh) ---
-  // Context belongs to this request, not a subsequent call. Drivers may reuse
-  // a synchronized gray baseline for ContinuousReading FAST updates only.
-  virtual void display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff,
-                       RefreshContext context = RefreshContext::Normal) = 0;
+  virtual void display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) = 0;
   virtual void displayWindow(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, uint16_t x, uint16_t y, uint16_t w,
                              uint16_t h, bool turnOff) {
     display(bus, fb, prev, RefreshMode::Fast, turnOff);
@@ -83,9 +80,8 @@ class PanelDriver {
   // gains the split only by overriding both. SSD1677 (X4) keeps the default:
   // its refresh is short and its post-waveform RED re-seed already lives inside
   // display(), matching CrossPoint's "X4 completes inline" behavior.
-  virtual bool displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff,
-                            RefreshContext context = RefreshContext::Normal) {
-    display(bus, fb, prev, mode, turnOff, context);
+  virtual bool displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) {
+    display(bus, fb, prev, mode, turnOff);
     return false;
   }
   // `fb` is the just-displayed frame, re-supplied fresh by the facade at finish
@@ -117,9 +113,8 @@ class PanelDriver {
   // base update with calibrated drives); panels without a dedicated base
   // waveform fall back to a plain display() with `fallback` mode, preserving
   // their previous behavior.
-  virtual void displayGrayscaleBase(EpdBus& bus, const uint8_t* fb, RefreshMode fallback, bool turnOff,
-                                    RefreshContext context = RefreshContext::Normal) {
-    display(bus, fb, nullptr, fallback, turnOff, context);
+  virtual void displayGrayscaleBase(EpdBus& bus, const uint8_t* fb, RefreshMode fallback, bool turnOff) {
+    display(bus, fb, nullptr, fallback, turnOff);
   }
 
   // Grayscale preconditioning settle pass (OEM X3 "AA-pre-BW(mid)"), windowed
@@ -157,6 +152,24 @@ class PanelDriver {
     displayGray(bus, fb, false, nullptr, true);
   }
   virtual void cleanupGrayscaleBuffers(EpdBus& bus, const uint8_t* bw) { (void)bus; (void)bw; }
+
+  // Request-scoped extension. Existing drivers keep their original virtual
+  // interface; only panels with a reading-specific policy override these.
+  virtual void displayWithContext(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff,
+                                  RefreshContext context) {
+    (void)context;
+    display(bus, fb, prev, mode, turnOff);
+  }
+  virtual bool displayStartWithContext(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode,
+                                       bool turnOff, RefreshContext context) {
+    (void)context;
+    return displayStart(bus, fb, prev, mode, turnOff);
+  }
+  virtual void displayGrayscaleBaseWithContext(EpdBus& bus, const uint8_t* fb, RefreshMode fallback, bool turnOff,
+                                               RefreshContext context) {
+    (void)context;
+    displayGrayscaleBase(bus, fb, fallback, turnOff);
+  }
 
   // --- optional, controller-specific hooks (no-op by default) ---
   virtual void requestResync(uint8_t settlePasses) { (void)settlePasses; }

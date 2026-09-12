@@ -352,8 +352,7 @@ void Ed2208M5Driver::refresh(EpdBus& bus, uint16_t dirtyX, uint16_t dirtyY, uint
   }
 }
 
-void Ed2208M5Driver::display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff,
-                             RefreshContext /*context*/) {
+void Ed2208M5Driver::display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) {
   if (!fb) return;
 
   // Standing-image policy: promote Full to the complete OTP waveform. Set

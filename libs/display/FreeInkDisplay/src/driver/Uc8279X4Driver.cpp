@@ -300,8 +300,7 @@ void Uc8279X4Driver::begin(EpdBus& bus) {
   _absoluteGrayPlanes = false;
 }
 
-void Uc8279X4Driver::display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff,
-                             RefreshContext /*context*/) {
+void Uc8279X4Driver::display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) {
   // CrossPoint's AA path draws its B/W base with an ordinary Fast paint. Right
   // after an AA page, route that base through stock's non-flashing prev->current
   // transition instead of a plain DU — this keeps the gray edge charge in check
@@ -384,8 +383,7 @@ void Uc8279X4Driver::powerOnIfNeeded(EpdBus& bus, const char* tag) {
   _isScreenOn = true;
 }
 
-bool Uc8279X4Driver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff,
-                                  RefreshContext /*context*/) {
+bool Uc8279X4Driver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) {
   (void)prev;
   // Snapshot the B/W base for a grayscale overlay that may follow (the reader
   // draws this base, then folds it into the absolute AA planes). Harmless for
@@ -651,8 +649,7 @@ void Uc8279X4Driver::displayGray(EpdBus& bus, const uint8_t* fb, bool turnOff, c
   _redriveAfterGray = true;
 }
 
-void Uc8279X4Driver::displayGrayscaleBase(EpdBus& bus, const uint8_t* fb, RefreshMode fallback, bool turnOff,
-                                          RefreshContext /*context*/) {
+void Uc8279X4Driver::displayGrayscaleBase(EpdBus& bus, const uint8_t* fb, RefreshMode fallback, bool turnOff) {
   if (!fb) return;
   // Match the UC8179 sibling: an explicit Half (the periodic ghost purge), or a
   // state that can't run the non-flashing transition (first AA page / no valid

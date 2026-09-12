@@ -112,14 +112,12 @@ void Uc8279Driver::begin(EpdBus& bus) {
   initController(bus);
 }
 
-void Uc8279Driver::display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff,
-                           RefreshContext /*context*/) {
+void Uc8279Driver::display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) {
   displayStart(bus, fb, prev, mode, turnOff);
   displayFinish(bus, fb);
 }
 
-bool Uc8279Driver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff,
-                                RefreshContext /*context*/) {
+bool Uc8279Driver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) {
   (void)prev;  // single-buffer: DTM1 holds the previous frame from displayFinish()'s sync
   // GC vs DU is ONLY a waveform-bank choice — BOTH diff the new frame against the
   // REAL previous frame in DTM1 (the live stock full path FUN_42015786 loads
@@ -311,8 +309,7 @@ void Uc8279Driver::displayGray(EpdBus& bus, const uint8_t* fb, bool turnOff, con
   _lsbValid = false;
 }
 
-void Uc8279Driver::displayGrayscaleBase(EpdBus& bus, const uint8_t* fb, RefreshMode fallback, bool turnOff,
-                                        RefreshContext /*context*/) {
+void Uc8279Driver::displayGrayscaleBase(EpdBus& bus, const uint8_t* fb, RefreshMode fallback, bool turnOff) {
   // OEM "AA-pre-BW(mid)" base: settle the frame with XTF_PRE_BW_MID before the
   // gray planes so particles are receptive to the weak AA nudge. When the
   // controller state can't support a clean differential (post-AA, boot fulls
