@@ -1630,9 +1630,9 @@ uint8_t InputManager::pollCst816s(const unsigned long now) {
   if (touchSuppressed) return 0;
   switch (cstContact.region) {
     case Region::Previous:
-      return 1u << BTN_UP;
+      return 1u << BTN_LEFT;
     case Region::Next:
-      return 1u << BTN_DOWN;
+      return 1u << BTN_RIGHT;
     case Region::None:
     case Region::Screen:
     case Region::Home:
