@@ -13,6 +13,7 @@
 // controller's own RAM holds the previous frame).
 
 #include <Arduino.h>
+#include <RefreshContext.h>
 
 #include "../bus/EpdBus.h"
 
@@ -151,6 +152,24 @@ class PanelDriver {
     displayGray(bus, fb, false, nullptr, true);
   }
   virtual void cleanupGrayscaleBuffers(EpdBus& bus, const uint8_t* bw) { (void)bus; (void)bw; }
+
+  // Request-scoped extension. Existing drivers keep their original virtual
+  // interface; only panels with a reading-specific policy override these.
+  virtual void displayWithContext(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff,
+                                  RefreshContext context) {
+    (void)context;
+    display(bus, fb, prev, mode, turnOff);
+  }
+  virtual bool displayStartWithContext(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode,
+                                       bool turnOff, RefreshContext context) {
+    (void)context;
+    return displayStart(bus, fb, prev, mode, turnOff);
+  }
+  virtual void displayGrayscaleBaseWithContext(EpdBus& bus, const uint8_t* fb, RefreshMode fallback, bool turnOff,
+                                               RefreshContext context) {
+    (void)context;
+    displayGrayscaleBase(bus, fb, fallback, turnOff);
+  }
 
   // --- optional, controller-specific hooks (no-op by default) ---
   virtual void requestResync(uint8_t settlePasses) { (void)settlePasses; }

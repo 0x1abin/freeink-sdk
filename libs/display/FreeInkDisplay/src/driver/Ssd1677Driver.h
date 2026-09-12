@@ -19,6 +19,10 @@
 
 namespace freeink {
 
+// Metalio opts into physical gray cleanup separately from the legacy RED-only
+// baseline contract. BlackPulse uses the BSP's two partial-update clean.
+enum class Ssd1677CleanPolicy : uint8_t { Legacy, BlackPulse };
+
 // Device-tunable SSD1677 waveform/config. A board overrides only what differs.
 struct Ssd1677Config {
   uint8_t booster[5];               // booster soft-start (CMD 0x0C)
@@ -57,6 +61,9 @@ struct Ssd1677Config {
   // collapsing toward B/W). The X4 keeps the panel powered between fast
   // refreshes, so it never needs this and keeps stock behavior.
   bool grayPowerUpFirst = false;
+  uint8_t powerOffSequence = 0x03;     // CTRL2, board-specific oscillator/analog shutdown
+  uint8_t borderWaveformPowerOff = 0;  // 0 keeps borderWaveformInit
+  Ssd1677CleanPolicy cleanPolicy = Ssd1677CleanPolicy::Legacy;
 };
 
 // Standard config (Xteink X4 / GDEQ0426T82). Panel mounting (mirror/180°) is NOT
@@ -76,11 +83,17 @@ class Ssd1677Driver : public PanelDriver {
   void deepSleep(EpdBus& bus) override;
 
   void display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) override;
+  void displayWithContext(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff,
+                          RefreshContext context) override;
   // Deferred refresh: displayStart() runs the full update (RAM writes,
   // MASTER_ACTIVATION) and returns while the waveform runs; displayFinish()
   // sleeps out the remainder on the BUSY completion edge. No post-waveform
   // host-frame work on X4 (RED handling is inside displayImpl's async path).
   bool displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) override;
+  bool displayStartWithContext(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff,
+                               RefreshContext context) override;
+  void displayGrayscaleBaseWithContext(EpdBus& bus, const uint8_t* fb, RefreshMode fallback, bool turnOff,
+                                       RefreshContext context) override;
   void displayFinish(EpdBus& bus, const uint8_t* fb) override;
   bool supportsAsyncDisplay() const override { return true; }
   void displayWindow(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, uint16_t x, uint16_t y, uint16_t w,
@@ -118,7 +131,13 @@ class Ssd1677Driver : public PanelDriver {
   // Documented SSD1677 analog/oscillator shutdown. Used after a 0xFC update
   // when turnOff was requested and by deepSleep().
   void powerOffController(EpdBus& bus);
-  void displayImpl(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff, bool async);
+  bool displayImpl(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff, bool async,
+                   RefreshContext context);
+  enum class RefreshAction : uint8_t { Fast, Half, Full, BlackPulse };
+  RefreshAction resolveRefresh(RefreshMode mode, bool turnOff, RefreshContext context);
+  bool completeRefresh(EpdBus& bus);
+  bool needsGrayClean() const;
+  void displayBlackPulse(EpdBus& bus, const uint8_t* fb, bool turnOff);
 
   const Ssd1677Config& _cfg;
 
@@ -133,12 +152,14 @@ class Ssd1677Driver : public PanelDriver {
   bool _mirrorY = false;
 
   bool _isScreenOn = false;
-  bool _inGrayscaleMode = false;
+  enum class GrayState : uint8_t { None, NeedsClean, BaselineSynced };
+  GrayState _grayState = GrayState::None;
   bool _customLutActive = false;
   bool _darkBackground = false;
   // Async 0xFC updates cannot issue the separate power-off activation until the
   // display waveform completes; displayFinish() consumes this flag.
   bool _pendingPowerOff = false;
+  uint8_t _pendingPowerSequence = 0;
   // First paint after begin() (boot or deep-sleep wake) must be a full refresh to
   // clear whatever is physically on the panel (e.g. the black boot screen) and set
   // a clean differential baseline. Only armed for boards whose self-powering fast

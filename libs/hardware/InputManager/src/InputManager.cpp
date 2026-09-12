@@ -3,6 +3,9 @@
 #include <algorithm>
 
 #include "MultiTouchGestureMath.h"
+#if FREEINK_DEVICE_METALIO_EINK4
+#include <MetalioEink4Board.h>
+#endif
 
 #if FREEINK_CAP_TOUCH
 #include <Wire.h>
@@ -48,7 +51,7 @@ const char* InputManager::BUTTON_NAMES[] = {"Back", "Confirm", "Left", "Right", 
 namespace {
 int absInt(const int value) { return value < 0 ? -value : value; }
 
-#if FREEINK_DEVICE_EEGO_A4 || FREEINK_DEVICE_MURPHY_M4
+#if FREEINK_DEVICE_EEGO_A4 || FREEINK_DEVICE_MURPHY_M4 || FREEINK_DEVICE_METALIO_EINK4
 bool movedBeyondSlop(const int dx, const int dy, const int slop) {
   return absInt(dx) > slop || absInt(dy) > slop;
 }
@@ -352,6 +355,10 @@ uint8_t InputManager::getDigitalState() const {
     state |= (1 << BTN_POWER);
   }
 
+#if FREEINK_DEVICE_METALIO_EINK4
+  state |= freeink::metalio::buttons();
+  if (!freeink::metalio::powerButtonPressed(state & (1u << BTN_POWER))) state &= ~(1u << BTN_POWER);
+#endif
   return state;
 }
 
@@ -799,6 +806,12 @@ unsigned long InputManager::lastTouchHeldMs() const {
 }
 
 bool InputManager::wasTouchActivity() const {
+#if FREEINK_DEVICE_METALIO_EINK4
+  if (touchHomeKeyEvent || touchHomeKeyTapEvent || touchHomeKeyLongEvent ||
+      cstContact.region == freeink::Cst816sRegion::Home || cstContact.region == freeink::Cst816sRegion::Previous ||
+      cstContact.region == freeink::Cst816sRegion::Next)
+    return true;
+#endif
 #if FREEINK_CAP_TOUCH
   const bool screenActivity = touchPressedEvent || touchReleasedEvent;
   const bool homeKeyActivity = touchHomeKeyEvent || touchHomeKeyTapEvent || touchHomeKeyLongEvent;
@@ -888,7 +901,12 @@ void InputManager::suppressTouchContact() {
 #if FREEINK_CAP_TOUCH
   // Only meaningful mid-contact (or on its release-edge frame); the latch
   // self-clears in serviceTouch() once the contact is fully over.
-  if (touchPressed || touchReleasedEvent) touchSuppressed = true;
+  if (touchPressed || touchReleasedEvent
+#if FREEINK_DEVICE_METALIO_EINK4
+      || cstContact.region != freeink::Cst816sRegion::None
+#endif
+  )
+    touchSuppressed = true;
   cancelMultiTouchGesture();
   if (_asyncMultiTouchSwipeQueue) xQueueReset(_asyncMultiTouchSwipeQueue);
   if (_asyncMultiTouchRotationQueue) xQueueReset(_asyncMultiTouchRotationQueue);
@@ -1245,6 +1263,9 @@ void InputManager::clearTouchTapEvent() {
   // cleared in update(), but a pushActivity runs mid-frame).
   touchPressedEvent = false;
   touchReleasedEvent = false;
+#if FREEINK_DEVICE_METALIO_EINK4
+  touchHomeKeyEvent = touchHomeKeyTapEvent = touchHomeKeyLongEvent = false;
+#endif
 }
 
 void InputManager::prepareForDeepSleep() {
@@ -1277,6 +1298,12 @@ void InputManager::prepareForDeepSleep() {
       }
 #endif
       return;
+    case BoardConfig::TouchController::Cst816s:
+#if FREEINK_DEVICE_METALIO_EINK4
+      if (t.irq >= 0) detachInterrupt(t.irq);
+      touchDataEnabled = false;
+#endif
+      return;
     case BoardConfig::TouchController::None:
     case BoardConfig::TouchController::Chsc6x:
     case BoardConfig::TouchController::Gt911:
@@ -1302,6 +1329,12 @@ bool InputManager::reinitializeTouchAfterSharedReset() {
 void InputManager::beginTouch() {
 #if FREEINK_CAP_TOUCH
   const auto& t = BoardConfig::ACTIVE.touch;
+#if FREEINK_DEVICE_METALIO_EINK4
+  if (t.controller == BoardConfig::TouchController::Cst816s) {
+    beginCst816s();
+    return;
+  }
+#endif
 #if FREEINK_DEVICE_EEGO_A4
   if (t.controller == BoardConfig::TouchController::Gslx680) {
       beginGslx680();
@@ -1348,12 +1381,20 @@ uint8_t InputManager::serviceTouch() {
   // suppression latch releases on the first fully-idle frame (contact over,
   // release edge consumed) and a new contact beginning in this same call is
   // delivered normally.
-  if (!touchPressed && !touchReleasedEvent) {
+  if (!touchPressed && !touchReleasedEvent
+#if FREEINK_DEVICE_METALIO_EINK4
+      && cstContact.region == freeink::Cst816sRegion::None
+#endif
+  ) {
     touchSuppressed = false;
     touchLongPressFired = false;
     resetMultiTouchGesture();
   }
 
+#if FREEINK_DEVICE_METALIO_EINK4
+  const uint8_t cstButtons = t.controller == BoardConfig::TouchController::Cst816s ? pollCst816s(now) : 0;
+  if (t.controller != BoardConfig::TouchController::Cst816s)
+#endif
 #if FREEINK_DEVICE_EEGO_A4
   if (t.controller == BoardConfig::TouchController::Gslx680) {
     pollGslx680(now);
@@ -1384,6 +1425,9 @@ uint8_t InputManager::serviceTouch() {
     touchLongPressEvent = true;
   }
 
+#if FREEINK_DEVICE_METALIO_EINK4
+  if (t.controller == BoardConfig::TouchController::Cst816s) return cstButtons;
+#endif
   return (t.synthesizeConfirm && now < touchIrqPulseUntil) ? (1 << BTN_CONFIRM) : 0;
 #else
   return 0;
@@ -1491,7 +1535,7 @@ uint16_t InputManager::mapTouchAxis(uint16_t raw, const uint16_t rawMin, const u
   return static_cast<uint32_t>(raw - rawMin) * outMax / (rawMax - rawMin);
 }
 
-#if FREEINK_DEVICE_EEGO_A4 || FREEINK_DEVICE_MURPHY_M4
+#if FREEINK_DEVICE_EEGO_A4 || FREEINK_DEVICE_MURPHY_M4 || FREEINK_DEVICE_METALIO_EINK4
 InputManager::TouchPoint InputManager::mapTouchPoint(const uint16_t rawX, const uint16_t rawY,
                                                      const unsigned long now) const {
   const auto& t = BoardConfig::ACTIVE.touch;
@@ -1534,6 +1578,68 @@ void InputManager::releaseTouch(const unsigned long now) {
   }
   touchPressed = false;
   touchPoint.valid = false;
+}
+#endif
+
+#if FREEINK_DEVICE_METALIO_EINK4
+void InputManager::beginCst816s() {
+  static_assert(BTN_UP == 4 && BTN_DOWN == 5, "Metalio expander mask follows the SDK button indices");
+  if (!freeink::metalio::begin()) {
+    esp_rom_printf("[touch] Metalio board initialization failed\r\n");
+    return;
+  }
+  const auto irq = BoardConfig::ACTIVE.touch.irq;
+  pinMode(irq, INPUT_PULLUP);
+  attachInterruptArg(
+      irq, [](void* arg) IRAM_ATTR { __atomic_store_n(static_cast<volatile bool*>(arg), true, __ATOMIC_RELAXED); },
+      const_cast<bool*>(&cstIrqPending), FALLING);
+  touchDataEnabled = true;
+}
+
+uint8_t InputManager::pollCst816s(const unsigned long now) {
+  using Region = freeink::Cst816sRegion;
+  const bool retryReady = cstFrame.region != Region::Invalid || static_cast<int32_t>(now - cstRetryAt) >= 0;
+  const bool active = cstContact.region != Region::None;
+  // Read on IRQ and while held (release IRQs may be lost). Do not poll an idle
+  // CST816S: it may auto-sleep. Cancelled contacts retry after two seconds.
+  if (retryReady &&
+      ((active && static_cast<int32_t>(now - cstReadAt) >= 0) || __atomic_load_n(&cstIrqPending, __ATOMIC_RELAXED))) {
+    __atomic_store_n(&cstIrqPending, false, __ATOMIC_RELAXED);
+    uint8_t data[5];
+    if (freeink::metalio::read(BoardConfig::ACTIVE.touch.i2cAddress, 0x02, data, sizeof(data))) {
+      cstRetryAt = now;
+      cstFrame = freeink::decodeCst816s(data, sizeof(data));
+      cstReadAt = now + TOUCH_SAMPLE_DELAY_MS;
+    } else {
+      cstFrame = {Region::Invalid};
+      cstRetryAt = now + 2000;
+      esp_rom_printf("[touch] CST816S read failed; contact cancelled\r\n");
+    }
+  }
+  const Region previous = cstContact.region;
+  cstContact.update(cstFrame.region, now, HOME_KEY_LONG_PRESS_MS);
+  if (cstContact.region == Region::Screen) {
+    updateTouchContact({true, cstFrame.x, cstFrame.y, now});
+  } else {
+    if (cstContact.region == Region::Invalid) touchSuppressed = true;
+    releaseTouch(now);
+  }
+  touchHomeKeyEvent = !touchSuppressed && previous != Region::Home && cstContact.region == Region::Home;
+  touchHomeKeyTapEvent = !touchSuppressed && cstContact.homeTap;
+  touchHomeKeyLongEvent = !touchSuppressed && cstContact.homeLong;
+  if (touchSuppressed) return 0;
+  switch (cstContact.region) {
+    case Region::Previous:
+      return 1u << BTN_UP;
+    case Region::Next:
+      return 1u << BTN_DOWN;
+    case Region::None:
+    case Region::Screen:
+    case Region::Home:
+    case Region::Invalid:
+      return 0;
+  }
+  return 0;
 }
 #endif
 

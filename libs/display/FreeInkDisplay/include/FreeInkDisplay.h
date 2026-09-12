@@ -1,4 +1,5 @@
 #pragma once
+#include "RefreshContext.h"
 
 // FreeInk SDK — display facade.
 //
@@ -28,6 +29,7 @@ class FreeInkDisplay {
   ~FreeInkDisplay() = default;
 
   // Refresh modes (public contract — full / balanced-half / fast).
+  using RefreshContext = freeink::RefreshContext;
   enum RefreshMode { FULL_REFRESH, HALF_REFRESH, FAST_REFRESH };
 
   // Select panel geometry/controller before begin().
@@ -122,7 +124,8 @@ class FreeInkDisplay {
   // Display the framebuffer as the base frame for a grayscale overlay that
   // follows. X3 uses the OEM differential base waveform; other panels display
   // normally with `fallback` mode. See PanelDriver::displayGrayscaleBase.
-  void displayGrayscaleBase(RefreshMode fallback = HALF_REFRESH, bool turnOffScreen = false);
+  void displayGrayscaleBase(RefreshMode fallback = HALF_REFRESH, bool turnOffScreen = false,
+                            RefreshContext context = RefreshContext::Normal);
   void copyGrayscaleBuffers(const uint8_t* lsbBuffer, const uint8_t* msbBuffer);
   void copyGrayscaleLsbBuffers(const uint8_t* lsbBuffer);
   void copyGrayscaleMsbBuffers(const uint8_t* msbBuffer);
@@ -146,7 +149,8 @@ class FreeInkDisplay {
   void cleanupGrayscaleWithPreviousBuffer();
 #endif
 
-  void displayBuffer(RefreshMode mode = FAST_REFRESH, bool turnOffScreen = false);
+  void displayBuffer(RefreshMode mode = FAST_REFRESH, bool turnOffScreen = false,
+                     RefreshContext context = RefreshContext::Normal);
 
   // Non-blocking refresh: pushes the frame, starts the panel waveform, and
   // returns (~25 ms) while the panel refreshes on its own (~0.3-2 s). Poll
@@ -156,7 +160,7 @@ class FreeInkDisplay {
   // one extra frame buffer (lazily heap-allocated) holding the last-displayed
   // frame as the differential baseline; if that allocation fails it falls
   // back to the blocking path.
-  void displayBufferAsync(RefreshMode mode = FAST_REFRESH);
+  void displayBufferAsync(RefreshMode mode = FAST_REFRESH, RefreshContext context = RefreshContext::Normal);
   // Async refresh without the single-buffer shadow (no extra RAM). The caller
   // promises (a) not to touch the framebuffer until the refresh completes
   // (waitRefreshComplete() / refreshBusy()==false / any blocking call), and
@@ -164,7 +168,7 @@ class FreeInkDisplay {
   // next differential update — e.g. the tiled-grayscale reader path, whose
   // cleanupGrayscaleBuffers() resyncs the baseline from the framebuffer.
   // In dual-buffer mode this is identical to displayBufferAsync().
-  void displayBufferAsyncNoShadow(RefreshMode mode = FAST_REFRESH);
+  void displayBufferAsyncNoShadow(RefreshMode mode = FAST_REFRESH, RefreshContext context = RefreshContext::Normal);
   // True while an async refresh is still running on the panel.
   bool refreshBusy();
   // Block until a pending refresh completes (no-op when none is): the async
@@ -388,7 +392,8 @@ class FreeInkDisplay {
   void syncPendingAsync();
   // Shared body of displayBufferAsync() / triggerDisplayAsync(): fire the
   // update and return while the waveform runs (_asyncPending set).
-  void displayAsyncImpl(RefreshMode mode, bool turnOffScreen, bool noShadow = false);
+  void displayAsyncImpl(RefreshMode mode, bool turnOffScreen, bool noShadow = false,
+                        RefreshContext context = RefreshContext::Normal);
   // One framebuffer-sized heap block (runtime panel's bufferSize, not
   // MAX_BUFFER_SIZE): PSRAM-first where available. Valid only after begin()
   // has seeded geometry / panel selection is final.
