@@ -138,7 +138,8 @@ void Uc8253MurphyDriver::begin(EpdBus& bus) {
   initController(bus);
 }
 
-void Uc8253MurphyDriver::display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) {
+void Uc8253MurphyDriver::display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff,
+                                 RefreshContext /*context*/) {
   // Manufacturer guidance: hardware-reset and re-initialise the controller before
   // every refresh. The UC8253 retains LUT/RAM state between refreshes, and reusing
   // it leaves pixels half-latched (the previous frame bleeds through / flashes

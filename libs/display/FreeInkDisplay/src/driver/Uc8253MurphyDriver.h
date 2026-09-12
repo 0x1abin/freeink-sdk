@@ -63,7 +63,8 @@ class Uc8253MurphyDriver : public PanelDriver {
 
   void begin(EpdBus& bus) override;
   void deepSleep(EpdBus& bus) override;
-  void display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) override;
+  void display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff,
+               RefreshContext /*context*/ = RefreshContext::Normal) override;
 
  private:
   void initController(EpdBus& bus);

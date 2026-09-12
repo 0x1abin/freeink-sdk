@@ -385,7 +385,8 @@ void It8951Driver::begin(EpdBus& bus) {
   _firstPaintPending = true;
 }
 
-void It8951Driver::display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) {
+void It8951Driver::display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff,
+                           RefreshContext /*context*/) {
   (void)bus;
   (void)prev;  // IT8951 holds the previous frame in its own SRAM
 

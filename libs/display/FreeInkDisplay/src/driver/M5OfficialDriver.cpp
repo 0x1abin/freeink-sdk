@@ -28,7 +28,8 @@ void M5OfficialDriver::begin(EpdBus& bus) {
 #endif
 }
 
-void M5OfficialDriver::display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) {
+void M5OfficialDriver::display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff,
+                               RefreshContext /*context*/) {
   (void)bus;
   (void)prev;
 #if FREEINK_DRIVER_M5_OFFICIAL

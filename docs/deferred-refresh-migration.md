@@ -98,3 +98,25 @@ Measured on X4 (800x480, AA on, 16 MHz SPI): page turn 1274 ms → 822 ms by
 overlapping the grayscale plane rendering with the BW waveform via the
 no-shadow split. With X3 now reporting deferral through the same interface,
 the identical host-side flow overlaps on X3 with no host changes.
+
+## Request-scoped reading context
+
+`FreeInkDisplay::displayBuffer`, `displayBufferAsync`,
+`displayBufferAsyncNoShadow`, and `displayGrayscaleBase` accept an optional
+`RefreshContext` argument, defaulting to `Normal`. `ContinuousReading` allows
+SSD1677 Metalio to reuse an already synchronized B/W baseline for a FAST page
+without physically cleaning prior grayscale. It never overrides initial or
+periodic cleaning, or an explicit FULL. Image/menu/sleep transitions use Normal.
+The context belongs only to that invocation, including blocking fallbacks.
+
+Custom `PanelDriver` implementations must add the optional context parameter to
+`display`, `displayStart`, and `displayGrayscaleBase` overrides. Drivers without
+this policy may ignore it; all bundled drivers preserve their prior behavior.
+No framebuffer, persistent request permission, or deferred caller pointer is
+introduced. Metalio resolves its clean strategy once before choosing whether
+to defer; black-pulse and FULL cleaning complete inline.
+
+Run `python3 libs/display/FreeInkDisplay/test/host/test_ssd1677.py` to check
+real-driver RAM/command traces, reading context, explicit FULL, async completion,
+and BUSY/power-off failures against a recording bus. This checks the software
+contract, not physical waveform quality.

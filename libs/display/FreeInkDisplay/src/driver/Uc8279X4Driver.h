@@ -72,8 +72,10 @@ class Uc8279X4Driver : public PanelDriver {
   void begin(EpdBus& bus) override;
   void deepSleep(EpdBus& bus) override;
 
-  void display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) override;
-  bool displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) override;
+  void display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff,
+               RefreshContext /*context*/ = RefreshContext::Normal) override;
+  bool displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff,
+                    RefreshContext /*context*/ = RefreshContext::Normal) override;
   void displayFinish(EpdBus& bus, const uint8_t* fb) override;
   bool supportsAsyncDisplay() const override { return true; }
 
@@ -103,7 +105,8 @@ class Uc8279X4Driver : public PanelDriver {
   // ghosting on an AA page. Promote Half->Full here; Fast stays Fast (the
   // absolute AA path self-cleans per page). The pure-B/W menu keeps its Half
   // scrub because it arrives through display()/displayStart, not this entry.
-  void displayGrayscaleBase(EpdBus& bus, const uint8_t* fb, RefreshMode fallback, bool turnOff) override;
+  void displayGrayscaleBase(EpdBus& bus, const uint8_t* fb, RefreshMode fallback, bool turnOff,
+                            RefreshContext /*context*/ = RefreshContext::Normal) override;
 
  private:
   void initController(EpdBus& bus);

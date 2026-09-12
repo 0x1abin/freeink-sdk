@@ -13,6 +13,7 @@
 // controller's own RAM holds the previous frame).
 
 #include <Arduino.h>
+#include <RefreshContext.h>
 
 #include "../bus/EpdBus.h"
 
@@ -49,7 +50,10 @@ class PanelDriver {
   virtual void deepSleep(EpdBus& bus) = 0;
 
   // --- core paint path (load RAM + refresh) ---
-  virtual void display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) = 0;
+  // Context belongs to this request, not a subsequent call. Drivers may reuse
+  // a synchronized gray baseline for ContinuousReading FAST updates only.
+  virtual void display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff,
+                       RefreshContext context = RefreshContext::Normal) = 0;
   virtual void displayWindow(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, uint16_t x, uint16_t y, uint16_t w,
                              uint16_t h, bool turnOff) {
     display(bus, fb, prev, RefreshMode::Fast, turnOff);
@@ -79,8 +83,9 @@ class PanelDriver {
   // gains the split only by overriding both. SSD1677 (X4) keeps the default:
   // its refresh is short and its post-waveform RED re-seed already lives inside
   // display(), matching CrossPoint's "X4 completes inline" behavior.
-  virtual bool displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) {
-    display(bus, fb, prev, mode, turnOff);
+  virtual bool displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff,
+                            RefreshContext context = RefreshContext::Normal) {
+    display(bus, fb, prev, mode, turnOff, context);
     return false;
   }
   // `fb` is the just-displayed frame, re-supplied fresh by the facade at finish
@@ -112,8 +117,9 @@ class PanelDriver {
   // base update with calibrated drives); panels without a dedicated base
   // waveform fall back to a plain display() with `fallback` mode, preserving
   // their previous behavior.
-  virtual void displayGrayscaleBase(EpdBus& bus, const uint8_t* fb, RefreshMode fallback, bool turnOff) {
-    display(bus, fb, nullptr, fallback, turnOff);
+  virtual void displayGrayscaleBase(EpdBus& bus, const uint8_t* fb, RefreshMode fallback, bool turnOff,
+                                    RefreshContext context = RefreshContext::Normal) {
+    display(bus, fb, nullptr, fallback, turnOff, context);
   }
 
   // Grayscale preconditioning settle pass (OEM X3 "AA-pre-BW(mid)"), windowed

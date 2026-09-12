@@ -166,7 +166,8 @@ void Uc8179Driver::begin(EpdBus& bus) {
   initController(bus);
 }
 
-void Uc8179Driver::display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) {
+void Uc8179Driver::display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff,
+                           RefreshContext /*context*/) {
   // CrossPoint's whole-plane text-AA path calls ordinary displayBuffer(FAST)
   // for its B/W base. After an AA page, route that base through stock's
   // non-flashing previous->current transition; promoting it to GC fixed the
@@ -211,7 +212,8 @@ void Uc8179Driver::transitionGrayscaleBase(EpdBus& bus, const uint8_t* fb, bool 
   }
 }
 
-void Uc8179Driver::displayGrayscaleBase(EpdBus& bus, const uint8_t* fb, RefreshMode fallback, bool turnOff) {
+void Uc8179Driver::displayGrayscaleBase(EpdBus& bus, const uint8_t* fb, RefreshMode fallback, bool turnOff,
+                                        RefreshContext /*context*/) {
   if (!fb) return;
 
   // Factory.bin's first gray_aa call paints its B/W base normally. Later calls
@@ -260,7 +262,8 @@ void Uc8179Driver::streamPlaneXor(EpdBus& bus, uint8_t ramCmd, const uint8_t* lh
   for (uint16_t y = _h; y < _tresH; y++) bus.data(row, wb);
 }
 
-bool Uc8179Driver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) {
+bool Uc8179Driver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff,
+                                RefreshContext /*context*/) {
   (void)prev;
   _bwPlanesSynced = false;
   _absoluteGrayPlanes = false;

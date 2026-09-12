@@ -229,7 +229,8 @@ void LgfxEpdDriver::begin(EpdBus& bus) {
 #endif
 }
 
-void LgfxEpdDriver::display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) {
+void LgfxEpdDriver::display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff,
+                            RefreshContext /*context*/) {
   (void)bus;
   (void)prev;
 #if FREEINK_DRIVER_LGFX_EPD
