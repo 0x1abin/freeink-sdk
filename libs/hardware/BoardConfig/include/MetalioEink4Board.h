@@ -82,7 +82,7 @@ inline uint8_t buttons() {
     return state;
   }
   nextRead = now + 20;
-  state = ((data[0] & 0x80) ? 0 : (1u << 4)) | ((data[1] & 0x01) ? 0 : (1u << 5));
+  state = ((data[0] & 0x80) ? 0 : (1u << 5)) | ((data[1] & 0x01) ? 0 : (1u << 4));
   return state;
 }
 
