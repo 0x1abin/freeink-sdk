@@ -23,6 +23,10 @@
 #include "MurphyM4TouchPolling.h"
 #endif
 
+#if FREEINK_DEVICE_METALIO_EINK4
+#include "Cst816sInput.h"
+#endif
+
 class InputManager {
  public:
   InputManager();
@@ -345,10 +349,19 @@ class InputManager {
   bool readChsc6xPoint(TouchPoint& point);
   bool decodeChsc6xFrame(const uint8_t* data, size_t len, TouchPoint& point) const;
   uint16_t mapTouchAxis(uint16_t raw, uint16_t rawMin, uint16_t rawMax, uint16_t outMax) const;
-#if FREEINK_DEVICE_EEGO_A4 || FREEINK_DEVICE_MURPHY_M4
+#if FREEINK_DEVICE_EEGO_A4 || FREEINK_DEVICE_MURPHY_M4 || FREEINK_DEVICE_METALIO_EINK4
   TouchPoint mapTouchPoint(uint16_t rawX, uint16_t rawY, unsigned long now) const;
   void updateTouchContact(const TouchPoint& point);
   void releaseTouch(unsigned long now);
+#endif
+#if FREEINK_DEVICE_METALIO_EINK4
+  void beginCst816s();
+  uint8_t pollCst816s(unsigned long now);
+  freeink::Cst816sContact cstContact;
+  freeink::Cst816sFrame cstFrame;
+  uint32_t cstReadAt = 0;
+  uint32_t cstRetryAt = 0;
+  volatile bool cstIrqPending = true;
 #endif
   void beginGt911();
   bool gt911ReadReg(uint16_t reg, uint8_t* buf, uint8_t len);
