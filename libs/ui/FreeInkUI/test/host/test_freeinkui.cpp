@@ -1170,6 +1170,48 @@ void testScreenListContentSizing() {
   }
 }
 
+// Crosspoint supplies its non-touch theme row height through the shared
+// minimum. Small fonts must not shrink those rows back to content-only size.
+void testScreenListThemeMinimum() {
+  class FontDrawTarget : public FakeDrawTarget {
+   public:
+    int16_t lineHeight(FontId) const override { return 24; }
+  };
+  for (const int minimum : {40, 42}) {
+    FontDrawTarget draw;
+    DeviceContext device = makeDevice(200, 210);
+    device.hasTouch = false;
+    InputSnapshot input;
+    InteractionBuffer<16> hits;
+    Frame<16> frame(draw, device, input, hits);
+    ThemeTokens theme;
+    theme.listMinRowHeight = static_cast<int16_t>(minimum);
+    Screen<16> screen(frame, theme);
+    ListItem items[8]{};
+    for (int i = 0; i < 8; ++i) {
+      items[i].label = "Font family";
+      items[i].actionValue = static_cast<int16_t>(i);
+    }
+    ListProps props;
+    props.items = items;
+    props.count = 8;
+    props.action = 4;
+    props.partialTrailingRow = true;
+    props.labelText.maxLines = 2;
+    ListNav nav;
+    screen.syncListViewport(nav, props, props.count);
+    CHECK_EQ(props.rowHeight, minimum);
+    CHECK_EQ(nav.visibleRows, 5);
+    screen.list(props);
+    CHECK_EQ(nav.drawnRows, 5);
+    CHECK_EQ(hits.count(), 5u);
+    CHECK_EQ(hits.data()[0].rect.height, minimum);
+    ListItem wrapped;
+    wrapped.label = "A font family name that wraps onto two lines";
+    CHECK_EQ(measureListRow(draw, nullptr, 160, props, wrapped).height, 56);
+  }
+}
+
 void testListMixedFontTouchDensity() {
   class LibraryDrawTarget : public FakeDrawTarget {
    public:
@@ -4579,6 +4621,7 @@ int main() {
   testListConcurrentScrollRequests();
   testListSectionHeadingPreview();
   testScreenListContentSizing();
+  testScreenListThemeMinimum();
   testListMixedFontTouchDensity();
   testListExactFitAndPreviewGeometry();
   testListPreviewPixels();
