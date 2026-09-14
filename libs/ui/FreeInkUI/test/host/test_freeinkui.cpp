@@ -1035,6 +1035,110 @@ class ListPreviewDrawTarget : public FakeDrawTarget {
   }
 };
 
+// A new letter group must not suppress the preview. Its heading alone can
+// signal more content; decorative padding does not count as visible content.
+void testListSectionHeadingPreview() {
+  class LibraryDrawTarget : public ListPreviewDrawTarget {
+   public:
+    Rect headingRect{};
+    Rect headingClip{};
+    int16_t lineHeight(FontId font) const override { return font == 1 ? 29 : 24; }
+    void text(Rect rect, const char* value, TextStyle style) override {
+      ListPreviewDrawTarget::text(rect, value, style);
+      if (std::strcmp(value, "M") == 0) {
+        headingRect = rect;
+        headingClip = clip;
+      }
+    }
+  };
+  for (const int height : {99, 100, 133, 134, 177, 178}) {
+    LibraryDrawTarget draw;
+    DeviceContext device = makeDevice();
+    InputSnapshot input;
+    InteractionBuffer<16> hits;
+    Frame<16> frame(draw, device, input, hits);
+    ListItem items[2]{};
+    items[0].label = "Book";
+    items[0].subtitle = "Author";
+    items[1].label = "Next book";
+    items[1].subtitle = "Next author";
+    items[1].sectionHeading = "M";
+    items[1].actionValue = 1;
+    ListProps props;
+    props.items = items;
+    props.count = 2;
+    props.action = 4;
+    props.labelText.font = 1;
+    props.rowHeight = 44;
+    props.rowPaddingY = 4;
+    props.rowGap = 6;
+    props.sectionGap = 16;
+    props.headerUnderline = false;
+    props.scrollIndicator = false;
+    props.partialTrailingRow = true;
+    props.partialTrailingMinHeight = 17;
+    ListNav nav;
+    nav.reset();
+    const Rect body{0, 155, 480, static_cast<int16_t>(height)};
+    nav.syncToProps(body, props.rowHeight, props.rowGap, props.count, props);
+    list(frame, body, props);
+    // First book = 61px, gap = 6px, section = 16 + 28 + 6px.
+    // Second book starts at 117px and is complete at 178px.
+    CHECK_EQ(nav.drawnRows, height < 178 ? 1 : 2);
+    CHECK_EQ(hits.count(), height < 178 ? 1u : 2u);
+    CHECK_EQ(draw.countKind(FakeDrawTarget::Op::Text), height < 100 ? 2u : 5u);
+    if (height >= 100 && height < 178) {
+      CHECK_EQ(draw.headingRect.y, body.y + 83);
+      CHECK_EQ(draw.headingClip.bottom(), body.bottom());
+      CHECK(draw.headingClip.bottom() - draw.headingRect.y >= 17);
+    }
+    CHECK_EQ(draw.clip.height, 32767); // preview restores the caller's clip
+  }
+}
+
+void testListMixedFontTouchDensity() {
+  class LibraryDrawTarget : public FakeDrawTarget {
+   public:
+    int16_t lineHeight(FontId font) const override { return font == 1 ? 28 : 20; }
+  } draw;
+  const ThemeTokens theme = themeTokensForLineHeight(28);
+  CHECK_EQ(theme.rowHeight, 64);
+  CHECK_EQ(theme.minTouchSize, 44);
+  const Rect body{0, 0, 480, 472};
+  ListItem items[10]{};
+  for (int i = 0; i < 10; ++i) {
+    items[i].label = "Book title";
+    items[i].subtitle = "Author";
+    items[i].actionValue = static_cast<int16_t>(i);
+  }
+  items[0].sectionHeading = "B"; // Title-tab alphabetical group heading
+  ListProps props;
+  props.items = items;
+  props.itemsWindowCount = 10;
+  props.count = 100;
+  props.action = 4;
+  props.labelText = theme.bodyText;
+  props.subtitleText = theme.smallText;
+  props.rowPaddingY = 4;
+  props.rowHeight = theme.minTouchSize;
+  props.rowGap = 0;
+  props.scrollIndicator = false;
+  ListNav nav;
+  nav.reset(7);
+  nav.syncToProps(body, props.rowHeight, 0, props.count, props);
+  CHECK_EQ(nav.visibleRows, 10); // enough data for every potentially fitting row
+  DeviceContext device = makeDevice();
+  InputSnapshot input;
+  InteractionBuffer<16> hits;
+  Frame<16> frame(draw, device, input, hits);
+  list(frame, body, props);
+  CHECK_EQ(nav.drawnRows, 8); // 24px heading + 8 * 56px; generic 64px rows fit only 7
+  CHECK_EQ(hits.count(), 8u);
+  CHECK_EQ(hits.data()[7].value, 7);
+  CHECK_EQ(hits.data()[7].rect.bottom(), body.bottom());
+  CHECK(!nav.consumeRebuildNeeded());
+}
+
 void testListExactFitAndPreviewGeometry() {
   for (int height : {99, 100}) {
     ListPreviewDrawTarget draw;
@@ -1074,6 +1178,20 @@ void testListExactFitAndPreviewGeometry() {
     CHECK_EQ(draw.clip.height, 32767); // restored for the footer
     if (height == 99)
       CHECK_EQ(interactions.data()[1].rect.bottom(), 66); // no hit expansion into preview
+    if (height == 99) {
+      // The same deferred swipe API used by Library must start the next page
+      // with the previously previewed item, now fully visible and selectable.
+      CHECK_EQ(nav.inputPageRows(), 2);
+      nav.requestScroll(nav.inputPageRows());
+      nav.syncToProps(body, 20, 2, 5, props);
+      CHECK_EQ(props.topIndex, 2);
+      InteractionBuffer<16> nextHits;
+      Frame<16> nextFrame(draw, device, input, nextHits);
+      list(nextFrame, body, props);
+      CHECK_EQ(nextHits.data()[0].value, 2);
+      CHECK_EQ(nextHits.data()[0].rect.y, body.y);
+      CHECK_EQ(nextHits.data()[0].rect.height, 32);
+    }
   }
 
   ListPreviewDrawTarget draw;
@@ -4385,6 +4503,8 @@ int main() {
   testListMeasuredHeadersAndUnsupportedPreview();
   testListDeferredInput();
   testListConcurrentScrollRequests();
+  testListSectionHeadingPreview();
+  testListMixedFontTouchDensity();
   testListExactFitAndPreviewGeometry();
   testListPreviewPixels();
   testListNavLayoutFeedback();

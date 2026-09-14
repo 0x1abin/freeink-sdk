@@ -1057,8 +1057,11 @@ With `partialTrailingRow = true`, the next row uses exactly the same text,
 value, icon, and toggle layout as a full row. It is clipped at the viewport
 edge and contributes neither an interaction nor a navigation row. A row whose
 bottom exactly meets the viewport edge is a full, selectable row; no trailing
-gap is required. Section headings stay attached to their rows and are not
-shown as orphan previews.
+gap is required. A preview clips the entire next section block, including its
+inline heading. The heading itself can signal that more content follows even
+when the book beneath it is still outside the viewport. Decorative section
+padding does not count toward `partialTrailingMinHeight`. Section and row
+spacing remain unchanged, and previews remain non-interactive.
 
 Pixel clipping is optional for custom `DrawTarget` implementations: implement
 `clipRect()` and `setClipRect()` to enable previews. `DisplayTarget` supports

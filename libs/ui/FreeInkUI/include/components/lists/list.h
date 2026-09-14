@@ -592,8 +592,11 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
     const bool partial = cursorY + sectionH + itemH > rowArea.bottom();
     const Rect previousClip = frame.target().clipRect();
     if (partial) {
-      if (!props.partialTrailingRow || hasSectionHeading ||
-          rowArea.bottom() - cursorY < props.partialTrailingMinHeight)
+      // Clip the entire next section block, including its heading. Requiring
+      // book text below that heading can hide all of the available preview.
+      // Exclude decorative section padding from the minimum visible content.
+      if (!props.partialTrailingRow ||
+          rowArea.bottom() - cursorY - sectionPad < props.partialTrailingMinHeight)
         break;
       const int16_t left = rowArea.x > previousClip.x ? rowArea.x : previousClip.x;
       const int16_t upper = rowArea.y > previousClip.y ? rowArea.y : previousClip.y;
