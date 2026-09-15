@@ -437,6 +437,7 @@ bool applyXteinkDisplayController() {
   // clocks 3 bytes, then selects the driver from ver[2] against its panel
   // table: 0x01 = UC8179 (QY), 0x02/0x68/0x69 = UC8279 (QY/ZHX), no match =
   // GDEQ0426T82 (the SSD1677 part).
+#if FREEINK_DEVICE_X4CLASSIC
   if (BoardConfig::isX4Classic()) {
     if (haveScreenType) {
       if (screenTypeIsUltraChip(screenType)) {
@@ -464,6 +465,19 @@ bool applyXteinkDisplayController() {
     if (Serial)
       Serial.printf("[%lu] [XTDET] X4C: screenType unset, VER probe id=%02X -> %s\n", millis(), id,
                     is8179 ? "UC8179" : is8279 ? "UC8279" : "unrecognized -> UC8279 default");
+    if (!is8179 && !is8279 && Serial) {
+      // Unknown silicon: dump the MTP Command Default Setting block so a field
+      // log identifies the part outright — TRES in this block is the panel's
+      // own programmed resolution, which separates the 800x480 parts from any
+      // new glass (552x768 / 3.68" classes seen in newer stock enums).
+      uint8_t raw[sizeof(g_probeDiag.mtp) + 1] = {0};
+      epdCmdRead(p, UC81XX_CMD_RMTP, raw, sizeof(raw));
+      memcpy(g_probeDiag.mtp, raw + 1, sizeof(g_probeDiag.mtp));
+      g_probeDiag.mtpValid = true;
+      Serial.printf("[%lu] [XTDET] X4C: VER=%02X %02X %02X, MTP[0x000..0x02F]:", millis(), ver[0], ver[1], ver[2]);
+      for (size_t i = 0; i < sizeof(g_probeDiag.mtp); i++) Serial.printf(" %02X", g_probeDiag.mtp[i]);
+      Serial.printf("\n");
+    }
     // Unrecognized (0xFF float / 0x00) still defaults to UC8279: every field
     // X4C seen without hw_calib carries a UC part (an SSD1677 answers the SSD
     // init with real BUSY pulses; these units show 0 ms waits instead). A
@@ -475,6 +489,7 @@ bool applyXteinkDisplayController() {
     g_probeDiag.promoted = true;
     return true;
   }
+#endif  // FREEINK_DEVICE_X4CLASSIC
 
   uint8_t ver[5] = {0};
   const bool ultraChip = probeSaysUltraChip(ver);
