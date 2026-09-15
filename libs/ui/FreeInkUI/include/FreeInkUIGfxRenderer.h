@@ -37,9 +37,26 @@ class GfxRendererTarget final : public DrawTarget {
   static constexpr FontId FONT_TITLE = 2;
   static constexpr size_t FONT_SLOTS = 3;
 
-  explicit GfxRendererTarget(const GfxRenderer& renderer) : renderer(renderer) {
+  explicit GfxRendererTarget(const GfxRenderer& renderer, const bool hasTouch = false)
+      : renderer(renderer), hasTouch_(hasTouch) {
     for (size_t i = 0; i < FONT_SLOTS; ++i) fonts[i] = 0;
   }
+
+  Rect clipRect() const override { return clip_; }
+  bool setClipRect(Rect rect) override {
+    if (!trySetClip(renderer, rect, 0)) return false;
+    clip_ = rect;
+    return true;
+  }
+
+  template <typename R>
+  static auto trySetClip(const R& r, Rect rect, int)
+      -> decltype(r.setClipRect(rect.x, rect.y, rect.width, rect.height), true) {
+    r.setClipRect(rect.x, rect.y, rect.width, rect.height);
+    return true;
+  }
+  template <typename R>
+  static bool trySetClip(const R&, Rect, long) { return false; }
 
   void setFont(const FontId slot, const int gfxFontId) {
     if (slot < FONT_SLOTS) fonts[slot] = gfxFontId;
@@ -55,6 +72,7 @@ class GfxRendererTarget final : public DrawTarget {
     // FreeInkUI components and the firmware's own tap path map taps identically.
     device.touchOrientation = touchOrientationFor(device.orientation);
     device.hasButtons = true;
+    device.hasTouch = hasTouch_;
     // Board viewable insets (bezel / rounded-corner clearance), oriented to the
     // current rotation, become the fui safe area — so every fui screen's body,
     // list, and popups lay out inside the bezel automatically. Zero on
@@ -209,15 +227,30 @@ class GfxRendererTarget final : public DrawTarget {
 
     const auto drawAligned = [&](const char* textLine, const int y) {
       int x = rect.x;
+      int drawY = y;
       if (style.align != TextAlign::Left) {
         const int textW = renderer.getTextWidth(fontId, textLine, epdStyle);
         x = style.align == TextAlign::Center ? rect.x + (rect.width - textW) / 2 : rect.x + rect.width - textW;
         if (x < rect.x) x = rect.x;
       }
-      if (dithered && tryDrawTextDither(renderer, fontId, x, y, textLine, gfxColor(inkColor), epdStyle, 0)) {
+      // Single digits need ink centering: getTextWidth includes the left
+      // bearing, while drawText adds it again to the pen origin. Line-box
+      // centering also leaves the numeral low when the font has tall ascenders.
+      if (style.align == TextAlign::Center && textLine[0] >= '0' && textLine[0] <= '9' && textLine[1] == '\0' &&
+          (epdStyle & (EpdFontFamily::SUP | EpdFontFamily::SUB)) == 0) {
+        const auto& fonts = renderer.getFontMap();
+        const auto font = fonts.find(fontId);
+        const auto* glyph = font != fonts.end() ? font->second.getGlyph(static_cast<uint32_t>(textLine[0]), epdStyle)
+                                               : nullptr;
+        if (glyph && glyph->width > 0 && glyph->height > 0 && glyph->width <= rect.width && glyph->height <= rect.height) {
+          x = rect.x + (rect.width - glyph->width) / 2 - glyph->left;
+          drawY = rect.y + (rect.height - glyph->height) / 2 + glyph->top - renderer.getFontAscenderSize(fontId);
+        }
+      }
+      if (dithered && tryDrawTextDither(renderer, fontId, x, drawY, textLine, gfxColor(inkColor), epdStyle, 0)) {
         return;
       }
-      renderer.drawText(fontId, x, y, textLine, black || dithered, epdStyle);
+      renderer.drawText(fontId, x, drawY, textLine, black || dithered, epdStyle);
     };
 
     // Fast path for the common case: text that already fits on one line draws
@@ -267,7 +300,9 @@ class GfxRendererTarget final : public DrawTarget {
   }
 
  private:
+  Rect clip_{0, 0, 32767, 32767};
   const GfxRenderer& renderer;
+  bool hasTouch_ = false;
   int fonts[FONT_SLOTS];
 
   int gfxFont(const FontId slot) const { return slot < FONT_SLOTS ? fonts[slot] : fonts[FONT_BODY]; }

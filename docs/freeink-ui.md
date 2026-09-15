@@ -235,7 +235,7 @@ screen.header("Search");
 
 freeink::ui::QwertyKeyboardProps keys;
 keys.keyAction = ActionKeyboardKey;
-screen.qwertyKeyboard(keys, 144, freeink::ui::LayoutAnchor::Bottom);
+screen.qwertyKeyboard(keys, 0, freeink::ui::LayoutAnchor::Bottom);
 
 screen.list(results, resultCount, selected, ActionOpen);
 ```
@@ -328,8 +328,7 @@ The `Screen` API is also the target for design-time tooling. The bundled
       "action": "keyboardKey",
       "shiftAction": "keyboardShift",
       "deleteAction": "keyboardDelete",
-      "okAction": "keyboardOk",
-      "height": 144
+      "okAction": "keyboardOk"
     },
     {
       "type": "list",
@@ -730,6 +729,29 @@ keyboard.symbols = state.symbols;
 qwertyKeyboard(ui, keyboardRect, keyboard);
 ```
 
+`Screen::keyboard` and `Screen::qwertyKeyboard` use the full safe-area width,
+including the space outside text-content side margins. Their automatic height
+allocates at least 64px per row, scaling to 80px on a 480px-wide screen: 348px
+for four rows, or 434px with a dedicated number row. On short screens the total
+is capped at 50% of the safe height plus the extra row spacing, and the remaining
+content space. An explicit
+height still overrides automatic sizing. Low-level calls with a `Rect` use that
+rectangle exactly; reserve `keyboardPreferredHeight(width, layout.rowCount)`
+pixels to get the same taller rows there.
+
+Keys are borderless by default, with a filled highlight when selected or pressed. Primary labels
+use the body font slot, with smaller alternate hints. Set `labelText.font` to a
+larger registered font and `controlText.font` to a smaller font for word labels
+such as Shift or localized OK text. The gallery uses 36px letters, 24px control
+labels, and 13px alternate hints on a 480×800 display, with the five-row keyboard
+occupying the lower 416px. Rows are separated by 6px (`rowGap`), while the
+horizontal key spacing remains 2px (`gap`). Selected and pressed highlights are
+about 20% shorter and centered on the labels, without reducing hit targets; alternate
+hints keep the same position and 10px right padding in every state, inside the
+highlight area. Selecting or pressing a key changes only the hint color. Keys with alternate
+hints reserve 4px of extra headroom above the primary glyph, with matching
+clearance below so the highlight stays centered.
+
 The keyboard is stateless like every component: Shift and mode ("?123"/"ABC")
 keys only report their actions. With `symbols` set, `shifted` selects the
 second symbols page — the shift slot reads "#+=" on page one and "123" on page
@@ -976,6 +998,91 @@ freeink::ui::list(ui, rect, props);
 `listTopIndexFor` scrolls the window the minimal amount to keep the selection
 visible and clamps to the valid range, so GPIO up/down navigation gets correct
 scrolling for free.
+
+Rows are not all the same height: a wrapped label or subtitle grows one, so a
+layout routinely fits fewer indexes than `listVisibleRows()` estimates. Screens
+that scroll (swipe or button navigation) should therefore own a `ListNav` and
+call `screen.syncListViewport(nav, props, count)` right before
+`list()`. `list()` reports the viewport it actually laid out back through
+`props.nav`. Rendering, hit targets, preview rows, and the scroll indicator
+share that measurement. The indicator uses the current layout immediately.
+A selection that falls below variable-height rows may require another layout;
+clear and rebuild before displaying:
+
+```cpp
+for (int pass = 0; pass < 8; ++pass) {
+  // Clear the framebuffer and redraw chrome here.
+  app.render();
+  if (!nav.consumeRebuildNeeded()) break;
+}
+```
+
+For input and rendering on separate tasks, submit navigation without acquiring
+an e-ink refresh lock:
+
+```cpp
+// Input task: logical selection changes immediately, including for Confirm.
+nav.requestSelection(nextIndex);
+// Or scroll without changing selection; multiple pending deltas accumulate.
+nav.requestScroll(nav.inputPageRows());
+// Notify/schedule a render after either request.
+```
+
+`requestSelection()` supersedes pending scroll deltas. A subsequent
+`requestScroll()` applies after following that selection. `syncToProps()`
+consumes requests on the render task and captures the selection used by that
+frame, so input arriving during drawing cannot change its layout feedback.
+When data shrinks, an atomic compare-and-exchange clamps a stale selection
+without overwriting a newer input request.
+`inputPageRows()` is an atomic snapshot of the most recently measured page
+(initially 1). Pending scroll deltas saturate at ±65,535 rows.
+
+Use one input producer and one render consumer. `selected` and `followOnBuild`
+are atomic; use `nav.selected.load()` when passing the value to a template such
+as `std::min`, or when capturing it with `auto`. Other fields, `follow()`,
+`scrollBy()`, and `pageRows()`/`pageRowsFor()` remain render-owned. Resetting or
+copying a nav requires quiescent access. List items and their strings must
+remain valid and stable during the build; atomics do not synchronize app data.
+For a tab ring with index 0 reserved for the tab bar, pass `selectionOffset = 1`
+to `syncToProps()`; layout and follow feedback then use row indexes consistently.
+
+`Screen::list()` sizes default rows from their actual label, subtitle, value,
+icon and wrapping. Button devices use `theme.listRowPaddingY` (4 pixels per
+side). Touch devices use `listTouchRowPaddingY` (8 pixels per side), a
+`listTouchMinRowHeight` of 56 pixels, and at least `listTouchRowGap` (6 pixels)
+between rows unless the caller explicitly sets the gap. Device and theme hit
+target minimums are still enforced. These touch defaults provide comfortable
+spacing rather than using the smallest valid hit target as the row design.
+`theme.rowHeight` sizes generic controls; it no longer reserves two text lines
+for every list item. Use `theme.listMinRowHeight` for a deliberate list minimum,
+or a positive `props.rowHeight` for a particular list.
+
+Use `screen.syncListViewport(nav, props, count, selectionOffset)` before loading
+a virtualized window or calling `screen.list(props)`. It resolves the same fonts,
+padding and minimum as drawing, then computes the allocation bound and applies
+navigation. `nav.visibleRows` is an upper bound; load one extra item for a
+trailing preview. The rendered full-row count remains the swipe page size.
+
+For raw `list(frame, rect, props)`, an unset height still falls back to 36 pixels.
+An explicit height with `rowPaddingY = -1` retains legacy padding. Set a
+nonnegative `rowPaddingY` to request content plus padding with that minimum.
+
+With `partialTrailingRow = true`, the next row uses exactly the same text,
+value, icon, and toggle layout as a full row. It is clipped at the viewport
+edge and contributes neither an interaction nor a navigation row. A row whose
+bottom exactly meets the viewport edge is a full, selectable row; no trailing
+gap is required. A preview clips the entire next section block, including its
+inline heading. The heading itself can signal that more content follows even
+when the book beneath it is still outside the viewport. Decorative section
+padding does not count toward `partialTrailingMinHeight`. Section and row
+spacing remain unchanged, and previews remain non-interactive.
+
+Pixel clipping is optional for custom `DrawTarget` implementations: implement
+`clipRect()` and `setClipRect()` to enable previews. `DisplayTarget` supports
+it, `InvertedDrawTarget` forwards it, and `GfxRendererTarget` supports it when
+the application's renderer provides `setClipRect(x, y, width, height)`.
+Targets without clipping omit partial rows. A preview restores the previous
+clip after drawing, so it cannot spill into a footer or alter later painting.
 
 ### Dialogs
 
