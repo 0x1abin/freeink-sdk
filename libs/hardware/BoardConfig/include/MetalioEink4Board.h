@@ -2,6 +2,7 @@
 
 #include <Arduino.h>
 #include <Wire.h>
+#include <driver/gpio.h>
 #include <esp_rom_sys.h>
 
 // Shared Wire owns transaction serialization (endTransmission(false) + requestFrom).
@@ -11,10 +12,12 @@ constexpr uint8_t EXPANDER = 0x20;
 constexpr uint8_t CHARGER = 0x6B;
 constexpr uint16_t MAIN_POWER = 1u << 6;
 constexpr uint16_t SCREEN_POWER = 1u << 5;
+constexpr uint16_t PA_POWER = 1u << 4;
 constexpr uint16_t TOUCH_RESET = 1u << 9;
 constexpr uint16_t POWER_PULSE = 1u << 11;
-constexpr uint16_t OUTPUTS = MAIN_POWER | SCREEN_POWER | TOUCH_RESET | POWER_PULSE | (1u << 4) | (1u << 1);
-constexpr uint16_t BOOT_OUTPUT = MAIN_POWER | POWER_PULSE;
+constexpr uint16_t USB_MUX_SEL = 1u << 0;  // High selects USB flash/debug, low selects the camera.
+constexpr uint16_t OUTPUTS = USB_MUX_SEL | MAIN_POWER | SCREEN_POWER | TOUCH_RESET | POWER_PULSE | PA_POWER | (1u << 1);
+constexpr uint16_t BOOT_OUTPUT = MAIN_POWER | POWER_PULSE | USB_MUX_SEL;
 inline uint16_t output = BOOT_OUTPUT;
 inline bool ready = false;
 inline bool bootPowerPending = true;
@@ -37,6 +40,13 @@ inline bool read(uint8_t addr, uint8_t reg, uint8_t* bytes, uint8_t count) {
   return true;
 }
 
+inline bool sleepTouch() {
+  Wire.beginTransmission(0x15);
+  Wire.write(0xA5);
+  Wire.write(0x03);
+  return Wire.endTransmission() == 0;
+}
+
 inline bool write16(uint8_t reg, uint16_t value) {
   Wire.beginTransmission(EXPANDER);
   Wire.write(reg);
@@ -54,8 +64,9 @@ inline bool setOutput(uint16_t value) {
 inline bool begin() {
   if (ready) return true;
   pinMode(44, OUTPUT);
-  digitalWrite(44, LOW);      // Haptic feedback is not enabled on this target.
-  pinMode(46, INPUT_PULLUP);  // SD DAT3/CD: input-only, never part of the 1-bit data bus.
+  digitalWrite(44, LOW);       // Keep the motor off until the HAL initializes feedback.
+  gpio_hold_dis(GPIO_NUM_44);  // Release the previous deep sleep's LOW hold, including capability-off builds.
+  pinMode(46, INPUT_PULLUP);   // SD DAT3/CD: input-only, never part of the 1-bit data bus.
   pinMode(2, INPUT_PULLUP);
   if (!Wire.begin(41, 42, 400000)) return false;
   Wire.setTimeOut(10);
@@ -108,16 +119,25 @@ inline bool externalPowerConnected(bool& connected) {
 }
 
 // Caller has saved state, parked the display and waited for its BUSY completion.
-inline bool shutdown() {
-  if (!ready) return false;
-  delay(280);
-  for (uint8_t attempt = 0; attempt < 3; ++attempt) {
-    if (!setOutput(output | POWER_PULSE)) return false;
-    delay(100);
-    if (!setOutput(output & ~POWER_PULSE)) return false;
-    delay(100);
+[[noreturn]] inline void shutdown() {
+  while (!begin()) {
+    esp_rom_printf("[metalio] Power-off initialization failed; retrying\r\n");
+    delay(1000);
   }
-  // USB may keep the MCU alive. Restore the idle level before fallback deep sleep.
-  return setOutput(output | POWER_PULSE);
+  esp_rom_printf("[metalio] Power-off pulses until hardware cuts power\r\n");
+  constexpr uint32_t PULSE_HALF_MS = 100;
+  uint32_t lastError = millis() - 1000;
+  for (;;) {
+    // Match the reference board: keep MAIN/SCREEN powered, PA off, and pulse forever.
+    const uint16_t rails = (output | MAIN_POWER | SCREEN_POWER) & ~PA_POWER;
+    const bool highOk = setOutput(rails | POWER_PULSE);
+    delay(PULSE_HALF_MS);
+    const bool lowOk = setOutput(rails & ~POWER_PULSE);
+    delay(PULSE_HALF_MS);
+    if ((!highOk || !lowOk) && static_cast<uint32_t>(millis() - lastError) >= 1000) {
+      lastError = millis();
+      esp_rom_printf("[metalio] Power-off pulse I2C failed; retrying\r\n");
+    }
+  }
 }
 }  // namespace freeink::metalio

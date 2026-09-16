@@ -578,6 +578,9 @@ void InputManager::update() {
   pressedEvents = 0;
   releasedEvents = 0;
   physicalPressedEvents = 0;
+#if FREEINK_DEVICE_METALIO_EINK4
+  touchContactPressedEvent = false;
+#endif
   touchPressedEvent = false;  // one-shot touch coord events, cleared each update()
   touchReleasedEvent = false;
   touchLongPressEvent = false;
@@ -898,6 +901,9 @@ bool InputManager::wasTouchLongPress(float& nx, float& ny) const {
 }
 
 void InputManager::suppressTouchContact() {
+#if FREEINK_DEVICE_METALIO_EINK4
+  touchContactPressedEvent = false;
+#endif
 #if FREEINK_CAP_TOUCH
   // Only meaningful mid-contact (or on its release-edge frame); the latch
   // self-clears in serviceTouch() once the contact is fully over.
@@ -1265,6 +1271,7 @@ void InputManager::clearTouchTapEvent() {
   touchReleasedEvent = false;
 #if FREEINK_DEVICE_METALIO_EINK4
   touchHomeKeyEvent = touchHomeKeyTapEvent = touchHomeKeyLongEvent = false;
+  touchContactPressedEvent = false;
 #endif
 }
 
@@ -1301,6 +1308,9 @@ void InputManager::prepareForDeepSleep() {
     case BoardConfig::TouchController::Cst816s:
 #if FREEINK_DEVICE_METALIO_EINK4
       if (t.irq >= 0) detachInterrupt(t.irq);
+      if (touchDataEnabled && !freeink::metalio::sleepTouch())
+        esp_rom_printf("[touch] CST816S sleep command failed\r\n");
+      touchContactPressedEvent = false;
       touchDataEnabled = false;
 #endif
       return;
@@ -1628,6 +1638,9 @@ uint8_t InputManager::pollCst816s(const unsigned long now) {
   touchHomeKeyTapEvent = !touchSuppressed && cstContact.homeTap;
   touchHomeKeyLongEvent = !touchSuppressed && cstContact.homeLong;
   if (touchSuppressed) return 0;
+  touchContactPressedEvent =
+      previous == Region::None && (cstContact.region == Region::Screen || cstContact.region == Region::Home ||
+                                   cstContact.region == Region::Previous || cstContact.region == Region::Next);
   switch (cstContact.region) {
     case Region::Previous:
       return 1u << BTN_LEFT;

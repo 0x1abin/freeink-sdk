@@ -199,6 +199,10 @@
 #endif
 
 // --- 4) Derive default capabilities (override with -DFREEINK_CAP_*=0/1) -------
+#ifndef FREEINK_CAP_HAPTIC
+#define FREEINK_CAP_HAPTIC FREEINK_DEVICE_METALIO_EINK4
+#endif
+
 #ifndef FREEINK_CAP_TOUCH
 #define FREEINK_CAP_TOUCH                                                                                    \
   (FREEINK_DEVICE_MURPHY || FREEINK_DEVICE_LILYGO || FREEINK_DEVICE_M5PAPER || FREEINK_DEVICE_STICKY ||      \
