@@ -50,6 +50,15 @@ class InputManager {
   // synthesized actions are excluded.
   uint8_t physicalPressedMask() const { return physicalPressedEvents; }
 
+  // One valid touch-surface contact began this frame (screen or Home/Previous/Next).
+  bool wasTouchContactPressed() const {
+#if FREEINK_DEVICE_METALIO_EINK4
+    return touchContactPressedEvent;
+#else
+    return false;
+#endif
+  }
+
   // Any button press edge since the previous update().
   bool wasAnyPressed() const;
 
@@ -357,6 +366,7 @@ class InputManager {
 #if FREEINK_DEVICE_METALIO_EINK4
   void beginCst816s();
   uint8_t pollCst816s(unsigned long now);
+  bool touchContactPressedEvent = false;
   freeink::Cst816sContact cstContact;
   freeink::Cst816sFrame cstFrame;
   uint32_t cstReadAt = 0;
