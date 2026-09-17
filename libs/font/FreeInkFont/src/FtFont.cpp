@@ -35,10 +35,20 @@ unsigned long ftStreamIo(FT_Stream stream, unsigned long offset, unsigned char* 
 void ftStreamClose(FT_Stream) {}
 }  // namespace
 
-FtFont::~FtFont() {
-  if (face_) FT_Done_Face(static_cast<FT_Face>(face_));
+FtFont::~FtFont() { deinit(); }
+
+void FtFont::deinit() {
+  if (face_) {
+    FT_Done_Face(static_cast<FT_Face>(face_));
+    face_ = nullptr;
+  }
   delete static_cast<FT_StreamRec*>(stream_);
+  stream_ = nullptr;
   delete static_cast<StreamCtx*>(streamCtx_);
+  streamCtx_ = nullptr;
+  ready_ = false;
+  sizePx_ = 0;
+  obliqueShear_ = false;
 }
 
 bool FtFont::init(const uint8_t* data, const uint32_t len, const uint16_t sizePx, const int weight, const bool italic) {

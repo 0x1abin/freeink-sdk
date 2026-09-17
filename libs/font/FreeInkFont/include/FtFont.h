@@ -56,6 +56,12 @@ class FtFont : public RasterFont {
 
   bool ready() const { return ready_; }
 
+  // Release the FreeType face (and any streamed source wrappers), returning the
+  // object to the pre-init state. The borrowed file bytes / stream source are
+  // NOT freed (the caller owns them). Safe to init()/initStream() again after —
+  // lets a caller shed an idle face's FreeType memory and rebuild it on demand.
+  void deinit();
+
   bool hasGlyph(uint32_t codepoint) const override;
 
   int16_t advance(uint32_t codepoint, uint16_t sizePx, uint8_t styleFlags) override;
