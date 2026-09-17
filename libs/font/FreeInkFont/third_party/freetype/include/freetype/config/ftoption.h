@@ -647,7 +647,11 @@ FT_BEGIN_HEADER
    * Do not `#undef` this macro here, since the build system might define it
    * for certain configurations only.
    */
-#define TT_CONFIG_OPTION_BYTECODE_INTERPRETER
+/* FreeInkFont: DISABLED. The TrueType bytecode interpreter (TT_RunIns) has very
+ * deep stack frames that overflow small MCU task stacks, and hinting is
+ * unnecessary for antialiased e-ink at reading sizes. Leaving it off renders
+ * unhinted (smoother) glyphs and removes the largest single stack consumer. */
+/* #define TT_CONFIG_OPTION_BYTECODE_INTERPRETER */
 
 
   /**************************************************************************
@@ -681,7 +685,9 @@ FT_BEGIN_HEADER
    * [1]
    * https://www.microsoft.com/typography/cleartype/truetypecleartype.aspx
    */
-#define TT_CONFIG_OPTION_SUBPIXEL_HINTING
+/* FreeInkFont: DISABLED (requires the bytecode interpreter, which we turned off;
+ * subpixel hinting is meaningless on a grayscale e-ink panel). */
+/* #define TT_CONFIG_OPTION_SUBPIXEL_HINTING */
 
 
   /**************************************************************************
