@@ -18,10 +18,27 @@ bool ensureLib() {
 constexpr uint32_t kTagWght = FT_MAKE_TAG('w', 'g', 'h', 't');
 constexpr uint32_t kTagItal = FT_MAKE_TAG('i', 't', 'a', 'l');
 constexpr uint32_t kTagSlnt = FT_MAKE_TAG('s', 'l', 'n', 't');
+
+struct StreamCtx {
+  FtFont::ReadFn read;
+  void* ctx;
+};
+
+// FT_Stream io hook: FreeType asks for `count` bytes at absolute `offset`.
+// count == 0 is a seek FreeType tracks itself, so nothing to do.
+unsigned long ftStreamIo(FT_Stream stream, unsigned long offset, unsigned char* buffer, unsigned long count) {
+  if (count == 0) return 0;
+  auto* c = static_cast<StreamCtx*>(stream->descriptor.pointer);
+  return c->read(c->ctx, offset, buffer, count);
+}
+// The source (e.g. an SD file) is owned by the caller, not FreeType.
+void ftStreamClose(FT_Stream) {}
 }  // namespace
 
 FtFont::~FtFont() {
   if (face_) FT_Done_Face(static_cast<FT_Face>(face_));
+  delete static_cast<FT_StreamRec*>(stream_);
+  delete static_cast<StreamCtx*>(streamCtx_);
 }
 
 bool FtFont::init(const uint8_t* data, const uint32_t len, const uint16_t sizePx, const int weight, const bool italic) {
@@ -30,6 +47,35 @@ bool FtFont::init(const uint8_t* data, const uint32_t len, const uint16_t sizePx
   FT_Face face = nullptr;
   if (FT_New_Memory_Face(g_lib, data, static_cast<FT_Long>(len), 0, &face) != 0) return false;
   face_ = face;
+  return finishInit(sizePx, weight, italic);
+}
+
+bool FtFont::initStream(const ReadFn read, void* ctx, const unsigned long fileSize, const uint16_t sizePx,
+                        const int weight, const bool italic) {
+  ready_ = false;
+  if (!ensureLib() || read == nullptr || fileSize == 0) return false;
+
+  auto* sc = new StreamCtx{read, ctx};
+  auto* stream = new FT_StreamRec{};  // zero-initialized
+  stream->size = fileSize;
+  stream->pos = 0;
+  stream->descriptor.pointer = sc;
+  stream->read = &ftStreamIo;
+  stream->close = &ftStreamClose;
+  streamCtx_ = sc;
+  stream_ = stream;
+
+  FT_Open_Args args{};
+  args.flags = FT_OPEN_STREAM;
+  args.stream = stream;
+  FT_Face face = nullptr;
+  if (FT_Open_Face(g_lib, &args, 0, &face) != 0) return false;
+  face_ = face;
+  return finishInit(sizePx, weight, italic);
+}
+
+bool FtFont::finishInit(const uint16_t sizePx, const int weight, const bool italic) {
+  auto face = static_cast<FT_Face>(face_);
   applyVariation(weight, italic);
   sizePx_ = sizePx;
   if (FT_Set_Pixel_Sizes(face, 0, sizePx) != 0) {

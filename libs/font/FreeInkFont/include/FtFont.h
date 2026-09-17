@@ -43,6 +43,17 @@ class FtFont : public RasterFont {
   // on a static face. `italic`: use a real ital/slnt axis if present, else apply
   // an oblique shear. Returns false if FreeType can't parse the face.
   bool init(const uint8_t* data, uint32_t len, uint16_t sizePx, int weight = 400, bool italic = false);
+
+  // Streamed variant: instead of holding the whole file in RAM, FreeType pulls
+  // bytes on demand through `read` (absolute offset). `fileSize` is the total
+  // length; `ctx` is passed back to `read` and, along with whatever it wraps
+  // (e.g. an open SD file), must outlive this face. This keeps only the tables
+  // and glyphs actually used resident — essential for multi-MB variable/CJK
+  // fonts. The source is NOT closed on destruction (the caller owns it).
+  using ReadFn = unsigned long (*)(void* ctx, unsigned long offset, unsigned char* buffer, unsigned long count);
+  bool initStream(ReadFn read, void* ctx, unsigned long fileSize, uint16_t sizePx, int weight = 400,
+                  bool italic = false);
+
   bool ready() const { return ready_; }
 
   bool hasGlyph(uint32_t codepoint) const override;
@@ -60,7 +71,11 @@ class FtFont : public RasterFont {
   void applyVariation(int weight, bool italic);
   void ensureSize(uint16_t sizePx);
 
+  bool finishInit(uint16_t sizePx, int weight, bool italic);  // shared tail of init/initStream
+
   FtFaceHandle face_ = nullptr;
+  void* stream_ = nullptr;     // FT_StreamRec* for the streamed path (owned)
+  void* streamCtx_ = nullptr;  // {ReadFn, ctx} for the streamed path (owned)
   bool ready_ = false;
   bool obliqueShear_ = false;  // faux italic (no ital/slnt axis)
   uint16_t sizePx_ = 0;
