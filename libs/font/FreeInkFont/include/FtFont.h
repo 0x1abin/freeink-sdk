@@ -17,8 +17,9 @@
 // Memory: the font file bytes are BORROWED (PSRAM / resident buffer) and must
 // outlive the FtFont. FreeType owns the glyph slot, so rasterize() returns a
 // bitmap valid until the next rasterize() on this face (the RasterFont contract);
-// no external glyph arena is needed. On ESP32, point FreeType's allocator at
-// PSRAM (see the vendored ftsystem in third_party/freetype).
+// no external glyph arena is needed. FreeType's own allocations are routed to
+// PSRAM (when present) via a custom FT_Memory — see ensureLib() in FtFont.cpp
+// and FontAlloc.h.
 
 #include <stdint.h>
 
@@ -84,6 +85,7 @@ class FtFont : public RasterFont {
   void* streamCtx_ = nullptr;  // {ReadFn, ctx} for the streamed path (owned)
   bool ready_ = false;
   bool obliqueShear_ = false;  // faux italic (no ital/slnt axis)
+  bool emboldenBold_ = false;  // faux bold (static or no wght axis); per-glyph outline embolden
   uint16_t sizePx_ = 0;
   GlyphBitmap glyph_{};  // last rasterized glyph (points into the FT slot buffer)
 };

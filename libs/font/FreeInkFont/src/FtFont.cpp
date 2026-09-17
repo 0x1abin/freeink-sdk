@@ -2,18 +2,39 @@
 
 #include <ft2build.h>
 #include FT_FREETYPE_H
+#include FT_MODULE_H
 #include FT_MULTIPLE_MASTERS_H
+#include FT_OUTLINE_H
+
+#include "FontAlloc.h"
 
 namespace freeink {
 namespace font {
 
 namespace {
-// One shared FreeType library for all faces. FreeType's allocator is set by the
-// vendored ftsystem (PSRAM on ESP32); the library itself is tiny.
+// FreeType memory hooks → the PSRAM-preferring font allocator. Routing the
+// library's allocations (face tables, glyph rasterization, the streaming frame
+// cache, MM_Var, ...) to PSRAM keeps internal SRAM free on boards that have it,
+// and falls back to internal RAM where they don't. This replaces FreeType's
+// default malloc-backed ftsystem, so ALL of FreeType's memory follows suit.
+void* ftAlloc(FT_Memory, long size) { return fiFontMalloc(static_cast<size_t>(size)); }
+void ftFree(FT_Memory, void* block) { fiFontFree(block); }
+void* ftRealloc(FT_Memory, long, long new_size, void* block) {
+  return fiFontRealloc(block, static_cast<size_t>(new_size));
+}
+
+// One shared FreeType library for all faces; the library object itself is tiny.
 FT_Library g_lib = nullptr;
+FT_MemoryRec_ g_ftMemory{};
 bool ensureLib() {
   if (g_lib) return true;
-  return FT_Init_FreeType(&g_lib) == 0;
+  g_ftMemory.user = nullptr;
+  g_ftMemory.alloc = &ftAlloc;
+  g_ftMemory.free = &ftFree;
+  g_ftMemory.realloc = &ftRealloc;
+  if (FT_New_Library(&g_ftMemory, &g_lib) != 0) return false;
+  FT_Add_Default_Modules(g_lib);  // register the sfnt/truetype/smooth/... modules
+  return true;
 }
 constexpr uint32_t kTagWght = FT_MAKE_TAG('w', 'g', 'h', 't');
 constexpr uint32_t kTagItal = FT_MAKE_TAG('i', 't', 'a', 'l');
@@ -100,15 +121,20 @@ bool FtFont::finishInit(const uint16_t sizePx, const int weight, const bool ital
 void FtFont::applyVariation(const int weight, const bool italic) {
   auto face = static_cast<FT_Face>(face_);
   obliqueShear_ = false;
+  emboldenBold_ = false;
+  const bool wantBold = weight >= 600;
   FT_MM_Var* mm = nullptr;
   if (FT_Get_MM_Var(face, &mm) != 0 || mm == nullptr) {
-    // Static face: no axes. Italic → oblique shear (there is no bold synthesis
-    // here; a caller wanting faux bold should register the stb embolden path).
+    // Static face: no axes. Italic → oblique shear; bold → per-glyph outline
+    // embolden (see rasterize). A separate Bold/Italic file, when the caller
+    // supplies one, is loaded at weight 400 upright so neither synthesis fires.
     obliqueShear_ = italic;
+    emboldenBold_ = wantBold;
   } else {
     FT_Fixed coords[16];
     const FT_UInt n = mm->num_axis < 16 ? mm->num_axis : 16;
     bool haveItalAxis = false;
+    bool haveWghtAxis = false;
     for (FT_UInt i = 0; i < n; ++i) {
       coords[i] = mm->axis[i].def;
       const FT_ULong tag = mm->axis[i].tag;
@@ -117,6 +143,7 @@ void FtFont::applyVariation(const int weight, const bool italic) {
         if (w < mm->axis[i].minimum) w = mm->axis[i].minimum;
         if (w > mm->axis[i].maximum) w = mm->axis[i].maximum;
         coords[i] = w;
+        haveWghtAxis = true;
       } else if (italic && tag == kTagItal) {
         coords[i] = mm->axis[i].maximum;  // ital 0..1 → 1
         haveItalAxis = true;
@@ -128,6 +155,7 @@ void FtFont::applyVariation(const int weight, const bool italic) {
     FT_Set_Var_Design_Coordinates(face, n, coords);
     FT_Done_MM_Var(g_lib, mm);
     obliqueShear_ = italic && !haveItalAxis;
+    emboldenBold_ = wantBold && !haveWghtAxis;  // variable but no wght axis
   }
   if (obliqueShear_) {
     // ~12° oblique: x' = x + 0.21*y.
@@ -187,8 +215,18 @@ const GlyphBitmap* FtFont::rasterize(const uint32_t codepoint, const uint16_t si
   if (!ready_) return nullptr;
   ensureSize(sizePx);
   auto face = static_cast<FT_Face>(face_);
-  if (FT_Load_Char(face, codepoint, FT_LOAD_RENDER) != 0) return nullptr;
+  // Faux bold defers rendering: load the outline, thicken it, then render.
+  const FT_Int32 loadFlags = emboldenBold_ ? FT_LOAD_DEFAULT : FT_LOAD_RENDER;
+  if (FT_Load_Char(face, codepoint, loadFlags) != 0) return nullptr;
   FT_GlyphSlot s = face->glyph;
+  if (emboldenBold_) {
+    if (s->format == FT_GLYPH_FORMAT_OUTLINE) {
+      // ~1/26 em of extra stroke: close to a real bold's stem gain without the
+      // glyphs merging at reader sizes.
+      FT_Outline_Embolden(&s->outline, static_cast<FT_Pos>(sizePx) * 64 / 26);
+    }
+    if (s->format != FT_GLYPH_FORMAT_BITMAP) FT_Render_Glyph(s, FT_RENDER_MODE_NORMAL);
+  }
   glyph_.pixels = s->bitmap.buffer;                          // 8-bit alpha; valid until next load
   glyph_.width = static_cast<uint16_t>(s->bitmap.width);
   glyph_.height = static_cast<uint16_t>(s->bitmap.rows);
