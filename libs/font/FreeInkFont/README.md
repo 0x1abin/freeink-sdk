@@ -57,6 +57,26 @@ Your pagination, line-breaking, and page cache stay exactly as they are — you
 swap only the font backend (e.g. from a pre-rasterized bitmap format to live
 outlines).
 
+## Backends: stb_truetype and FreeType
+
+- **`TtfFont`** — stb_truetype. Small, no extra deps; renders a font's default
+  master only (no variable-font axes).
+- **`FtFont`** — FreeType (vendored under `third_party/freetype`). Reads OpenType
+  **variable-font axes** (real bold from the `wght` axis, real/oblique italic),
+  streams large CJK faces, and does GPOS/kerning. Use this for variable fonts,
+  multi-weight families, or CJK on constrained RAM. Both implement the same
+  `RasterFont` interface, so consumers pick a backend without other changes.
+
+### FreeType attribution (FTL)
+
+`third_party/freetype` is a curated build of **FreeType** (https://freetype.org),
+used under the **FreeType License (FTL)** — see `third_party/freetype/FTL.TXT`.
+Per the FTL, products that include this library must credit FreeType in their
+documentation:
+
+> Portions of this software are copyright © The FreeType Project
+> (www.freetype.org). All rights reserved.
+
 ## CJK / large fonts
 
 stb_truetype needs the whole font file in RAM, which a no-PSRAM device can't do
