@@ -1371,9 +1371,11 @@
    *   are limited to the BMP (said UCS-2 encoding.)
    *
    *   This function is called from open_face() (just below), and also
-   *   from FT_Select_Charmap( ..., FT_ENCODING_UNICODE ).
+   *   from FT_Select_Charmap( ..., FT_ENCODING_UNICODE ), and (FreeInkFont:
+   *   backported from upstream FreeType 2.14, hence the exported linkage
+   *   below instead of `static`) from afadjust.c in the 'autofit' module.
    */
-  static FT_Error
+  FT_BASE_DEF( FT_Error )
   find_unicode_charmap( FT_Face  face )
   {
     FT_CharMap*  first;

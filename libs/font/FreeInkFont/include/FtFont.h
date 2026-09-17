@@ -21,6 +21,7 @@
 // PSRAM (when present) via a custom FT_Memory — see ensureLib() in FtFont.cpp
 // and FontAlloc.h.
 
+#include <stddef.h>
 #include <stdint.h>
 
 #include "Font.h"
@@ -57,6 +58,28 @@ class FtFont : public RasterFont {
 
   bool ready() const { return ready_; }
 
+  // Hinting/rasterization tuning, independent of the style axes chosen at
+  // init() time. Default blocks auto-hint fallback while retaining FreeType's
+  // normal native-hinting behavior (when that module is compiled); None is the
+  // explicit no-hinting mode. Native only selects native hints when built with
+  // FREEINK_FONT_ENABLE_NATIVE_HINTING; otherwise it reports unsupported and
+  // degrades according to the requested load flags. interpreterVersion and
+  // stemDarkening are properties of the shared FreeType library, not one face
+  // (FT_Property_Set has no per-face scope), so they are applied immediately
+  // before each glyph load from this face's options. setRenderOptions() only
+  // stores the options and reports whether the requested modules are present.
+  enum class HintingMode : uint8_t { Default = 0, None, Auto, Light, Native };
+  struct RenderOptions {
+    HintingMode hinting = HintingMode::Default;
+    uint8_t interpreterVersion = 40;  // 35 or 40; only meaningful with HintingMode::Native
+    bool monochrome = false;          // 1-bit coverage instead of 8-bit grayscale
+    bool stemDarkening = false;       // auto-hinter stem darkening; matches FreeType's own default
+  };
+  // Returns false (without refusing the call — options_ is still stored) when
+  // the request needs a module this build didn't compile in, so a caller
+  // with real logging can warn instead of silently getting degraded output.
+  bool setRenderOptions(const RenderOptions& options);
+
   // Release the FreeType face (and any streamed source wrappers), returning the
   // object to the pre-init state. The borrowed file bytes / stream source are
   // NOT freed (the caller owns them). Safe to init()/initStream() again after —
@@ -77,8 +100,18 @@ class FtFont : public RasterFont {
  private:
   void applyVariation(int weight, bool italic);
   void ensureSize(uint16_t sizePx);
+  void applyGlobalProperties() const;  // FT_Property_Set, called right before each FT_Load_Char
 
   bool finishInit(uint16_t sizePx, int weight, bool italic);  // shared tail of init/initStream
+
+  // A monochrome FT_Bitmap is 1-bpp packed (pitch = (width+7)/8), but
+  // GlyphBitmap's contract is 8-bit coverage at stride `width` (see Font.h).
+  // Expands into monoBuf_ (grown on demand, freed in deinit()) rather than
+  // exposing the packed buffer directly. Returns nullptr on allocation
+  // failure — the caller (rasterize()) treats that like any other raster
+  // failure and returns nullptr for the glyph instead of publishing it.
+  const uint8_t* expandMonoCoverage(const void* ftBitmap);
+  void freeMonoBuffer();
 
   FtFaceHandle face_ = nullptr;
   void* stream_ = nullptr;     // FT_StreamRec* for the streamed path (owned)
@@ -87,7 +120,10 @@ class FtFont : public RasterFont {
   bool obliqueShear_ = false;  // faux italic (no ital/slnt axis)
   bool emboldenBold_ = false;  // faux bold (static or no wght axis); per-glyph outline embolden
   uint16_t sizePx_ = 0;
-  GlyphBitmap glyph_{};  // last rasterized glyph (points into the FT slot buffer)
+  RenderOptions options_{};
+  GlyphBitmap glyph_{};  // last rasterized glyph (points into the FT slot buffer, or monoBuf_)
+  uint8_t* monoBuf_ = nullptr;
+  size_t monoBufCap_ = 0;
 };
 
 }  // namespace font

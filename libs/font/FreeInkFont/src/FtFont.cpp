@@ -40,6 +40,99 @@ constexpr uint32_t kTagWght = FT_MAKE_TAG('w', 'g', 'h', 't');
 constexpr uint32_t kTagItal = FT_MAKE_TAG('i', 't', 'a', 'l');
 constexpr uint32_t kTagSlnt = FT_MAKE_TAG('s', 'l', 'n', 't');
 
+// #if, not #ifdef: ftmodule.h/ftoption.h gate the actual modules on the
+// VALUE of these macros (so `-DFREEINK_FONT_ENABLE_MONOCHROME=0`, a common
+// PlatformIO idiom for "explicitly off", compiles nothing in), and these
+// capability flags have to agree exactly or setRenderOptions() reports a
+// mode as supported when the module that would actually serve it isn't
+// there — confirmed: with #ifdef, that exact build config still returned
+// true for monochrome while every glyph rasterized to nullptr.
+#if FREEINK_FONT_ENABLE_AUTOHINT
+constexpr bool kAutohintCompiled = true;
+#else
+constexpr bool kAutohintCompiled = false;
+#endif
+#if FREEINK_FONT_ENABLE_NATIVE_HINTING
+constexpr bool kNativeHintingCompiled = true;
+#else
+constexpr bool kNativeHintingCompiled = false;
+#endif
+#if FREEINK_FONT_ENABLE_MONOCHROME
+constexpr bool kMonochromeCompiled = true;
+#else
+constexpr bool kMonochromeCompiled = false;
+#endif
+
+// Two independent axes: the antialiasing TARGET (Normal/Light/Mono — these
+// three occupy the same FT_LOAD_TARGET_ bitfield and are mutually exclusive
+// with EACH OTHER, so only one is picked), and hint SUPPRESSION/forcing
+// (NO_HINTING, NO_AUTOHINT, FORCE_AUTOHINT — independent bits, composed on
+// top).
+//
+// FT_LOAD_NO_HINTING disables ALL hinting, including a harmless, unconditional
+// part of it that has nothing to do with any optional module: FreeType's
+// TrueType loader always pixel-ROUNDS phantom-point advances when hinting is
+// on (ttgload.c's IS_HINTED, gated purely by this one bit), even with the
+// bytecode interpreter uncompiled — that's the sub-pixel-accurate advance
+// rounding every existing build has always shipped with. Adding NO_HINTING to
+// "Default" (an earlier version of this fix did exactly that) silently
+// truncates every advance instead of rounding it, changing pagination for
+// every caller, in every build — worse than the bug it was meant to close.
+//
+// FT_LOAD_NO_AUTOHINT is the actually-correct "opt-in has no side effect"
+// bit: it blocks FreeType's documented fallback (use the auto-hinter when the
+// driver has no native hinter of its own) without touching phantom-point
+// rounding. Default sets ONLY this — confirmed byte-identical (0/1615 advance
+// and bitmap diffs on a real font) to this library's original, pre-RenderOptions
+// FT_LOAD_DEFAULT behavior, in both a build with the autofit/native modules
+// compiled and one without. None is a distinct, EXPLICIT opt-in for "truly no
+// hinting, not even phantom-point rounding" — safe to be more aggressive than
+// Default because a caller has to ask for it by name.
+FT_Int32 loadFlagsFor(const FtFont::RenderOptions& options) {
+  FT_Int32 flags = 0;
+  if (options.monochrome) {
+    flags |= FT_LOAD_TARGET_MONO;
+  } else if (options.hinting == FtFont::HintingMode::Light) {
+    flags |= FT_LOAD_TARGET_LIGHT;  // FreeType always auto-hints under LIGHT
+  } else {
+    flags |= FT_LOAD_TARGET_NORMAL;
+  }
+  switch (options.hinting) {
+    case FtFont::HintingMode::Auto:
+      flags |= FT_LOAD_FORCE_AUTOHINT;
+      break;
+    case FtFont::HintingMode::None:
+      flags |= FT_LOAD_NO_HINTING | FT_LOAD_NO_AUTOHINT;
+      break;
+    case FtFont::HintingMode::Light:
+      // TARGET_LIGHT forces auto-hint on its own — except monochrome output
+      // above already claimed the target slot LIGHT would have used (in
+      // which case this reduces to Auto+mono; there is no separate "light"
+      // render mode to preserve), so ask for it explicitly under mono too.
+      if (options.monochrome) flags |= FT_LOAD_FORCE_AUTOHINT;
+      break;
+    case FtFont::HintingMode::Native:
+    case FtFont::HintingMode::Default:
+    default:
+      // Identical flags by necessity, not by accident: once a native hinter
+      // is compiled in and registered, FreeType uses it automatically for
+      // any hinted (non-NO_HINTING) load unless autohint is force-requested
+      // — there is no third way to say "use native but only if I explicitly
+      // asked", so Native and Default only diverge through which interpreter
+      // version gets applied (see applyGlobalProperties()), not through
+      // these flags. Both explicitly block the autohint fallback so that
+      // compiling FREEINK_FONT_ENABLE_AUTOHINT in never changes a Default
+      // caller's output.
+      flags |= FT_LOAD_NO_AUTOHINT;
+      break;
+  }
+  return flags;
+}
+
+FT_Render_Mode renderModeFor(const FtFont::RenderOptions& options) {
+  return options.monochrome ? FT_RENDER_MODE_MONO : FT_RENDER_MODE_NORMAL;
+}
+
 struct StreamCtx {
   FtFont::ReadFn read;
   void* ctx;
@@ -70,6 +163,8 @@ void FtFont::deinit() {
   ready_ = false;
   sizePx_ = 0;
   obliqueShear_ = false;
+  options_ = RenderOptions{};
+  freeMonoBuffer();
 }
 
 bool FtFont::init(const uint8_t* data, const uint32_t len, const uint16_t sizePx, const int weight, const bool italic) {
@@ -164,6 +259,77 @@ void FtFont::applyVariation(const int weight, const bool italic) {
   }
 }
 
+bool FtFont::setRenderOptions(const RenderOptions& options) {
+  options_ = options;
+  // Report (without refusing) a request this build can't honor, so a caller
+  // with real logging can warn instead of silently getting degraded output —
+  // e.g. monochrome with FREEINK_FONT_ENABLE_MONOCHROME off fails every
+  // FT_Render_Glyph call and rasterize() returns nullptr for every glyph.
+  // Also validated here rather than left to FreeType: an out-of-range
+  // interpreterVersion would otherwise fail FT_Property_Set silently deep
+  // inside a hot per-glyph path with no way for the caller to find out.
+  bool supported = true;
+  if (options.monochrome && !kMonochromeCompiled) supported = false;
+  if ((options.hinting == HintingMode::Auto || options.hinting == HintingMode::Light) && !kAutohintCompiled)
+    supported = false;
+  if (options.hinting == HintingMode::Native) {
+    if (!kNativeHintingCompiled) supported = false;
+    if (options.interpreterVersion != 35 && options.interpreterVersion != 40) supported = false;
+  }
+  return supported;
+}
+
+// Both FT_Property_Set targets live on the shared library, not this face —
+// FT_Property_Set has no per-face scope. Applying them here, immediately
+// before THIS face's own FT_Load_Char (not once back in setRenderOptions()),
+// is what actually prevents cross-face leakage: setting them eagerly at
+// setRenderOptions() time meant "whichever face configured itself most
+// recently" won for every OTHER face's subsequent renders too, since
+// FT_Load_Char merely consumes whatever the properties currently say rather
+// than re-deriving them from this instance's own options_. Re-pinning them
+// right before the one call that consumes them means only the face actually
+// rendering right now can be the one that matters, for that one load.
+void FtFont::applyGlobalProperties() const {
+  if (!ensureLib()) return;
+  FT_Bool noStemDarkening = options_.stemDarkening ? 0 : 1;
+  FT_Property_Set(g_lib, "autofitter", "no-stem-darkening", &noStemDarkening);
+#if FREEINK_FONT_ENABLE_NATIVE_HINTING
+  // The TrueType interpreter version is library-global. Restore it before
+  // every load so a face rendered with Native v35 cannot affect a later
+  // Default/Auto/None face (Default uses FreeType's normal v40 behavior).
+  const FT_UInt version = options_.hinting == HintingMode::Native ? options_.interpreterVersion : 40;
+  FT_Property_Set(g_lib, "truetype", "interpreter-version", &version);
+#endif
+}
+
+void FtFont::freeMonoBuffer() {
+  fiFontFree(monoBuf_);
+  monoBuf_ = nullptr;
+  monoBufCap_ = 0;
+}
+
+const uint8_t* FtFont::expandMonoCoverage(const void* ftBitmapPtr) {
+  const auto& bitmap = *static_cast<const FT_Bitmap*>(ftBitmapPtr);
+  const size_t pixels = size_t(bitmap.width) * bitmap.rows;
+  if (pixels == 0) return monoBuf_;  // empty glyph (e.g. space): nothing to expand
+  if (pixels > monoBufCap_) {
+    fiFontFree(monoBuf_);
+    monoBuf_ = static_cast<uint8_t*>(fiFontMalloc(pixels));
+    monoBufCap_ = monoBuf_ ? pixels : 0;
+    if (!monoBuf_) return nullptr;
+  }
+  const int pitch = bitmap.pitch;
+  for (unsigned y = 0; y < bitmap.rows; ++y) {
+    const uint8_t* row =
+        pitch >= 0 ? bitmap.buffer + size_t(y) * pitch : bitmap.buffer + size_t(bitmap.rows - 1 - y) * size_t(-pitch);
+    uint8_t* dst = monoBuf_ + size_t(y) * bitmap.width;
+    for (unsigned x = 0; x < bitmap.width; ++x) {
+      dst[x] = (row[x / 8] & (0x80u >> (x % 8))) ? 0xFF : 0x00;
+    }
+  }
+  return monoBuf_;
+}
+
 void FtFont::ensureSize(const uint16_t sizePx) {
   if (sizePx != sizePx_ && face_) {
     FT_Set_Pixel_Sizes(static_cast<FT_Face>(face_), 0, sizePx);
@@ -179,8 +345,9 @@ bool FtFont::hasGlyph(const uint32_t codepoint) const {
 int16_t FtFont::advance(const uint32_t codepoint, const uint16_t sizePx, uint8_t) {
   if (!ready_) return 0;
   ensureSize(sizePx);
+  applyGlobalProperties();
   auto face = static_cast<FT_Face>(face_);
-  if (FT_Load_Char(face, codepoint, FT_LOAD_DEFAULT) != 0) return 0;
+  if (FT_Load_Char(face, codepoint, loadFlagsFor(options_)) != 0) return 0;
   return static_cast<int16_t>(face->glyph->advance.x >> 6);
 }
 
@@ -214,9 +381,11 @@ int16_t FtFont::kerning(const uint32_t left, const uint32_t right, const uint16_
 const GlyphBitmap* FtFont::rasterize(const uint32_t codepoint, const uint16_t sizePx) {
   if (!ready_) return nullptr;
   ensureSize(sizePx);
+  applyGlobalProperties();
   auto face = static_cast<FT_Face>(face_);
   // Faux bold defers rendering: load the outline, thicken it, then render.
-  const FT_Int32 loadFlags = emboldenBold_ ? FT_LOAD_DEFAULT : FT_LOAD_RENDER;
+  const FT_Int32 baseFlags = loadFlagsFor(options_);
+  const FT_Int32 loadFlags = emboldenBold_ ? baseFlags : (baseFlags | FT_LOAD_RENDER);
   if (FT_Load_Char(face, codepoint, loadFlags) != 0) return nullptr;
   FT_GlyphSlot s = face->glyph;
   if (emboldenBold_) {
@@ -225,9 +394,23 @@ const GlyphBitmap* FtFont::rasterize(const uint32_t codepoint, const uint16_t si
       // glyphs merging at reader sizes.
       FT_Outline_Embolden(&s->outline, static_cast<FT_Pos>(sizePx) * 64 / 26);
     }
-    if (s->format != FT_GLYPH_FORMAT_BITMAP) FT_Render_Glyph(s, FT_RENDER_MODE_NORMAL);
+    if (s->format != FT_GLYPH_FORMAT_BITMAP && FT_Render_Glyph(s, renderModeFor(options_)) != 0) {
+      // e.g. monochrome requested without FREEINK_FONT_ENABLE_MONOCHROME
+      // compiled in: fail the same way the non-embolden path already does
+      // (FT_LOAD_RENDER failing inside FT_Load_Char) instead of publishing
+      // a stale or zero-size bitmap left over from a previous glyph.
+      return nullptr;
+    }
   }
-  glyph_.pixels = s->bitmap.buffer;                          // 8-bit alpha; valid until next load
+  // GlyphBitmap's contract is 8-bit coverage (see Font.h); FT_PIXEL_MODE_MONO
+  // is 1-bpp packed and must be expanded, not published as-is.
+  if (s->bitmap.pixel_mode == FT_PIXEL_MODE_MONO) {
+    const uint8_t* expanded = expandMonoCoverage(&s->bitmap);
+    if (!expanded && s->bitmap.width && s->bitmap.rows) return nullptr;  // allocation failure
+    glyph_.pixels = expanded;
+  } else {
+    glyph_.pixels = s->bitmap.buffer;  // 8-bit alpha; valid until next load
+  }
   glyph_.width = static_cast<uint16_t>(s->bitmap.width);
   glyph_.height = static_cast<uint16_t>(s->bitmap.rows);
   glyph_.xoff = static_cast<int16_t>(s->bitmap_left);
