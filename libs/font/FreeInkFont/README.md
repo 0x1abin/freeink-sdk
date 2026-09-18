@@ -5,9 +5,10 @@ ligatures, per-codepoint fallback, and on-demand glyph rasterization to 8-bit
 alpha bitmaps — **decoupled from any layout or book engine**. Depend on this
 library alone to render fonts; you do not need the EPUB engine.
 
-It is freestanding C++17 with no Arduino/ESP-IDF dependency and a strict no-heap
-rule: the font file bytes are *borrowed* and all cache memory comes from a
-caller-sized arena.
+It is freestanding C++17 with no Arduino/ESP-IDF dependency. Font file bytes can
+be borrowed from memory or read through a caller-owned stream. Consumers that
+need a fixed memory budget can install process-wide allocation callbacks before
+the first FreeType-backed operation.
 
 ## API
 
@@ -25,6 +26,10 @@ caller-sized arena.
 - **`freeink::font::Arena`** — the bump allocator backing glyph/advance caches.
 - **`freeink::font::GlyphBitmap`** — `{pixels(w*h, 8-bit), width, height, xoff,
   yoff, advance}`.
+- **`freeink::font::FtFont`** — the FreeType backend plus generic low-level APIs
+  for 26.6 pixel sizing and metrics, glyph-ID rendering, face inspection, and
+  caller-provided allocation. The SDK deliberately does not convert points or
+  assume a display DPI/PPI; that policy belongs to the application or board.
 
 Cache sizes are tunable via `-DFREEINK_FONT_ADVANCE_SLOTS` /
 `-DFREEINK_FONT_GLYPH_SLOTS` (defaults 512 / 128).
@@ -132,6 +137,116 @@ this required. Validated with a host-side ASan/UBSan build across every
 been bumped to 2.14 wholesale, so other 2.13/2.14 internal drift is possible
 in code paths this didn't exercise. Bumping the whole vendored tree to one
 matching version is worth doing as a follow-up.
+
+### FtFont ligatures: GSUB vs. TtfFont's compatibility-codepoint check
+
+Neither FreeType nor stb_truetype does OpenType Layout shaping (that's
+normally HarfBuzz's job — too heavy to vendor here for one feature).
+`TtfFont::ligature()` works around this by checking whether the font happens
+to expose the ff/fi/fl/ffi/ffl glyphs at their legacy Unicode compatibility
+codepoints (U+FB00–FB04), independent of what the font's actual layout tables
+say. `FtFont::ligature()` instead reads the face's real `GSUB` table
+(`Gsub.h` — a minimal, bounds-checked parser for just the `liga`/`rlig`
+feature, lookup types 4 and 7-wrapping-4) and resolves the same five pairs
+through it.
+
+The parser treats the FeatureList as a pool: only features referenced by the
+`latn` script's DefaultLangSys are active for this API, with `DFLT`'s
+DefaultLangSys as the fallback. Required and listed feature indices are honored
+in deterministic order; unrelated scripts and named language systems are not
+silently applied. Malformed offsets and counts return no substitution, and a
+bounded total-work guard protects the parser without rejecting ordinary fonts
+whose active feature appears late in a large FeatureList.
+
+This is strictly more faithful to what the font actually specifies, but it
+exposes a real boundary in the `Font::ligature()` contract: it must return a
+Unicode **codepoint** (the layout pass bakes it into cached page text), while
+GSUB substitutes to a **glyph ID** that commonly has no codepoint at all. For
+example, CrossInk's bundled Bitter font defines a real 3-glyph GSUB ligature
+for "ffi" (glyph 427), but nothing in Bitter's cmap maps any codepoint to
+glyph 427 — calling `ligature(0xFB00, 'i')` directly on Bitter correctly
+returns 0 even though GSUB did match, because there is no codepoint this
+contract could hand back for it. (Bitter also has no 2-glyph "ff" rule at
+all, so a real layout consumer following `Font.h`'s documented chaining — call
+`ligature('f','f')`, only chain into `ligature(0xFB00, right)` if that
+returned nonzero — would never reach this specific case for Bitter; it's real
+for fonts whose "ff" pair *does* have a codepoint but "ffi" doesn't.)
+`ligatureGlyphId()` is the unrestricted escape hatch: it returns 427 directly,
+for a consumer with its own glyph-indexed cache (not bound by "must become
+cacheable page text") to use as-is.
+
+Both are validated in `test/host/FtFontLigatureTest.cpp` against
+DejaVuSans.ttf — hard-asserted against its real, committed-fixture values
+(`ligature('f','i') == 0xFB01`, chained `ligature(0xFB00,'i') == 0xFB03`,
+etc.), a null-pointer safety check on `Gsub::LigatureGlyphId`, and a
+cache-invalidation check against a byte-identical copy of the same font with
+its GSUB table's length zeroed in the sfnt directory (`stripGsubTable()`) —
+same glyph IDs, zero ligatures, built at test time instead of needing a
+second binary font fixture. Run via `test/host/run_ligature.sh`.
+
+Two things worth knowing if you extend this:
+
+- Memory-backed `init()` faces retain a borrowed pointer to the whole sfnt and
+  point `gsubTable_` at its bounds-checked GSUB table, so regular/bold/italic
+  faces over one resident font do not duplicate a large GSUB allocation. A
+  borrowed table is still rejected when its in-bounds declared size exceeds
+  the 1 MiB parse-sanity ceiling. The font bytes must outlive every face.
+  `initStream()` has no whole-font view, so it copies the GSUB table lazily;
+  call `setGsubByteBudget()` before the first
+  ligature query to constrain that fallible allocation (the default is 1 MiB),
+  and call `releaseLigatureTable()` once the needed glyph IDs are resolved.
+  Release drops a borrowed view or frees an owned table, and later queries
+  return zero until reinitialization.
+- The GSUB view/cache is reset at the top of `init()`/`initStream()` (not just
+  `deinit()`), because this same `FtFont` instance can be rebuilt with
+  completely different bytes without an intervening `deinit()` call, and
+  glyph IDs are face-local — a cached table from the PREVIOUS face would
+  resolve the NEW face's glyph IDs against the wrong font, either losing a
+  real ligature or (rarer, worse) matching a coincidentally-reused glyph ID
+  to a wrong-but-real one. This is exactly what `stripGsubTable()`'s test
+  reproduces without a second fixture.
+- The per-table counts in `Gsub.cpp` (feature/lookup/subtable/ligature) are
+  NOT artificially capped below their natural 16-bit range — `.has()` already
+  bounds every read regardless of how large they are. Script records are
+  required to be sorted by tag, so selecting `latn`/`DFLT` uses bounded binary
+  lookup; the remaining nested walk is bounded separately by a 4096-iteration
+  work budget. An earlier version capped these at 128/1024/512, which
+  correctly stopped a hostile huge count from causing pathological scan time,
+  but also silently dropped ligatures on ordinary large fonts whose
+  `liga`/`rlig` feature simply sits past those indices (confirmed on real,
+  non-adversarial fonts). `kMaxGsubBytes` (1 MiB) is a parse-sanity ceiling for
+  both borrowed views and owned stream copies, not a memory-budget decision —
+  real GSUB tables have been measured
+  up to ~700 KiB. The stream allocation is now explicitly constrained by the
+  caller's `setGsubByteBudget()` policy rather than silently retaining up to
+1 MiB per face.
+
+### FtFont integration APIs
+
+Renderers that already own layout and caching can use `FtFont` without adopting
+an SDK-specific page model:
+
+- `inspectMemory()` and `inspectStream()` return reusable family/style metadata
+  without retaining an open face.
+- `glyphId()` and `ligatureGlyphId()` expose raw glyph IDs for glyph-indexed
+  caches, including GSUB targets that have no Unicode codepoint.
+- `metrics26_6()`, `metricsGlyph26_6()`, `kerning26_6()`,
+  `kerningGlyphs26_6()`, and `lineMetrics26_6()` preserve fractional pixel
+  measurements instead of forcing integer sizes or advances.
+- `rasterize26_6()` and `rasterizeGlyph26_6()` render tightly packed 8-bit
+  coverage at a caller-selected 26.6 pixel size. Consumers remain free to pack
+  that coverage for their own framebuffer format.
+- `RenderOptions::embolden26_6` and `RenderOptions::slant16_16` provide generic
+  outline transforms in FreeType-native units alongside the hinting controls.
+- `configureMemory()` installs complete allocate/free/reallocate callbacks before
+  the shared FreeType library starts. This lets embedded consumers route SDK
+  work through a bounded arena without the SDK depending on a particular RTOS,
+  PSRAM implementation, or firmware allocator.
+
+For example, converting a user-facing point size to pixels remains consumer
+policy: `pixelSize26_6 = points * panelPpi * 64 / 72`. A 10-point request is
+therefore different on 219-, 235-, and 259-PPI displays, while the SDK API stays
+portable to unrelated devices and density policies.
 
 ### FreeType attribution (FTL)
 

@@ -5,22 +5,43 @@
 #include FT_MODULE_H
 #include FT_MULTIPLE_MASTERS_H
 #include FT_OUTLINE_H
+#include FT_TRUETYPE_TABLES_H
+
+#include <algorithm>
+#include <climits>
+#include <cstring>
 
 #include "FontAlloc.h"
+#include "Gsub.h"
 
 namespace freeink {
 namespace font {
 
 namespace {
-// FreeType memory hooks → the PSRAM-preferring font allocator. Routing the
-// library's allocations (face tables, glyph rasterization, the streaming frame
-// cache, MM_Var, ...) to PSRAM keeps internal SRAM free on boards that have it,
-// and falls back to internal RAM where they don't. This replaces FreeType's
-// default malloc-backed ftsystem, so ALL of FreeType's memory follows suit.
-void* ftAlloc(FT_Memory, long size) { return fiFontMalloc(static_cast<size_t>(size)); }
-void ftFree(FT_Memory, void* block) { fiFontFree(block); }
-void* ftRealloc(FT_Memory, long, long new_size, void* block) {
-  return fiFontRealloc(block, static_cast<size_t>(new_size));
+FtFont::MemoryCallbacks g_memoryCallbacks{};
+
+void* fontAlloc(const size_t size) {
+  return g_memoryCallbacks.allocate ? g_memoryCallbacks.allocate(g_memoryCallbacks.context, size) : fiFontMalloc(size);
+}
+void fontFree(void* block) {
+  if (g_memoryCallbacks.deallocate)
+    g_memoryCallbacks.deallocate(g_memoryCallbacks.context, block);
+  else
+    fiFontFree(block);
+}
+void* fontRealloc(void* block, const size_t oldSize, const size_t newSize) {
+  return g_memoryCallbacks.reallocate ? g_memoryCallbacks.reallocate(g_memoryCallbacks.context, block, oldSize, newSize)
+                                      : fiFontRealloc(block, newSize);
+}
+
+// FreeType memory hooks use either the caller's bounded allocator or the
+// platform's PSRAM-preferring default. The shared library is initialized only
+// once, so configureMemory() deliberately freezes this choice before first use.
+void* ftAlloc(FT_Memory, long size) { return size > 0 ? fontAlloc(static_cast<size_t>(size)) : nullptr; }
+void ftFree(FT_Memory, void* block) { fontFree(block); }
+void* ftRealloc(FT_Memory, long currentSize, long newSize, void* block) {
+  if (currentSize < 0 || newSize < 0) return nullptr;
+  return fontRealloc(block, static_cast<size_t>(currentSize), static_cast<size_t>(newSize));
 }
 
 // One shared FreeType library for all faces; the library object itself is tiny.
@@ -39,6 +60,37 @@ bool ensureLib() {
 constexpr uint32_t kTagWght = FT_MAKE_TAG('w', 'g', 'h', 't');
 constexpr uint32_t kTagItal = FT_MAKE_TAG('i', 't', 'a', 'l');
 constexpr uint32_t kTagSlnt = FT_MAKE_TAG('s', 'l', 'n', 't');
+constexpr uint32_t kTagGsub = FT_MAKE_TAG('G', 'S', 'U', 'B');
+constexpr uint32_t kTagTtcf = FT_MAKE_TAG('t', 't', 'c', 'f');
+
+uint16_t readBe16(const uint8_t* data) { return uint16_t(data[0]) * 256u + data[1]; }
+uint32_t readBe32(const uint8_t* data) {
+  return (uint32_t(data[0]) << 24) | (uint32_t(data[1]) << 16) | (uint32_t(data[2]) << 8) | data[3];
+}
+
+bool findSfntTable(const uint8_t* data, size_t size, uint32_t tag, const uint8_t** table, size_t* tableSize) {
+  if (data == nullptr || table == nullptr || tableSize == nullptr || size < 12) return false;
+  size_t directory = 0;
+  if (readBe32(data) == kTagTtcf) {
+    if (size < 16 || readBe32(data + 8) == 0 || readBe32(data + 8) > (size - 12) / 4) return false;
+    directory = readBe32(data + 12);
+  }
+  if (directory > size || size - directory < 12) return false;
+  const size_t records = directory + 12;
+  const unsigned count = readBe16(data + directory + 4);
+  if (count > (size - records) / 16) return false;
+  for (unsigned i = 0; i < count; ++i) {
+    const uint8_t* record = data + records + size_t(i) * 16;
+    if (readBe32(record) != tag) continue;
+    const size_t offset = readBe32(record + 8);
+    const size_t length = readBe32(record + 12);
+    if (length == 0 || offset > size || length > size - offset) return false;
+    *table = data + offset;
+    *tableSize = length;
+    return true;
+  }
+  return false;
+}
 
 // #if, not #ifdef: ftmodule.h/ftoption.h gate the actual modules on the
 // VALUE of these macros (so `-DFREEINK_FONT_ENABLE_MONOCHROME=0`, a common
@@ -89,7 +141,7 @@ constexpr bool kMonochromeCompiled = false;
 // hinting, not even phantom-point rounding" — safe to be more aggressive than
 // Default because a caller has to ask for it by name.
 FT_Int32 loadFlagsFor(const FtFont::RenderOptions& options) {
-  FT_Int32 flags = 0;
+  FT_Int32 flags = FT_LOAD_NO_BITMAP;
   if (options.monochrome) {
     flags |= FT_LOAD_TARGET_MONO;
   } else if (options.hinting == FtFont::HintingMode::Light) {
@@ -136,6 +188,7 @@ FT_Render_Mode renderModeFor(const FtFont::RenderOptions& options) {
 struct StreamCtx {
   FtFont::ReadFn read;
   void* ctx;
+  bool failed;
 };
 
 // FT_Stream io hook: FreeType asks for `count` bytes at absolute `offset`.
@@ -143,11 +196,93 @@ struct StreamCtx {
 unsigned long ftStreamIo(FT_Stream stream, unsigned long offset, unsigned char* buffer, unsigned long count) {
   if (count == 0) return 0;
   auto* c = static_cast<StreamCtx*>(stream->descriptor.pointer);
-  return c->read(c->ctx, offset, buffer, count);
+  const unsigned long actual = c->read(c->ctx, offset, buffer, count);
+  if (actual != count) c->failed = true;
+  return actual;
 }
 // The source (e.g. an SD file) is owned by the caller, not FreeType.
 void ftStreamClose(FT_Stream) {}
+
+bool supportedFace(FT_Face face) {
+  return face && FT_IS_SCALABLE(face) && FT_Select_Charmap(face, FT_ENCODING_UNICODE) == 0;
+}
+
+void describeFace(FT_Face face, FtFont::FaceInfo& info, char* family, const size_t familyCapacity) {
+  info = FtFont::FaceInfo{};
+  const char* name = face->family_name ? face->family_name : "";
+  info.familyLength = std::strlen(name);
+  if (familyCapacity) {
+    const size_t copied = std::min(info.familyLength, familyCapacity - 1);
+    if (copied) std::memcpy(family, name, copied);
+    family[copied] = '\0';
+  }
+  const auto* os2 = static_cast<const TT_OS2*>(FT_Get_Sfnt_Table(face, FT_SFNT_OS2));
+  info.weight = os2 ? os2->usWeightClass : ((face->style_flags & FT_STYLE_FLAG_BOLD) ? 700 : 400);
+  info.italic = (face->style_flags & FT_STYLE_FLAG_ITALIC) != 0;
+}
+
+int32_t fixed16_16To26_6(const long value) {
+  const int64_t wide = value;
+  const int64_t rounded = wide >= 0 ? (wide + 512) >> 10 : -((-wide + 512) >> 10);
+  return int32_t(std::clamp<int64_t>(rounded, INT32_MIN, INT32_MAX));
+}
 }  // namespace
+
+bool FtFont::configureMemory(const MemoryCallbacks* callbacks) {
+  if (g_lib) return false;
+  if (!callbacks) {
+    g_memoryCallbacks = MemoryCallbacks{};
+    return true;
+  }
+  if (!callbacks->allocate || !callbacks->deallocate || !callbacks->reallocate) return false;
+  g_memoryCallbacks = *callbacks;
+  return true;
+}
+
+FtFont::InspectResult FtFont::inspectMemory(const uint8_t* data, const uint32_t length, FaceInfo& info, char* family,
+                                            const size_t familyCapacity) {
+  info = FaceInfo{};
+  if (familyCapacity && !family) return InspectResult::Unsupported;
+  if (familyCapacity) family[0] = '\0';
+  if (!data || !length) return InspectResult::Unsupported;
+  if (!ensureLib()) return InspectResult::Unavailable;
+
+  FT_Face face = nullptr;
+  const FT_Error error = FT_New_Memory_Face(g_lib, data, static_cast<FT_Long>(length), 0, &face);
+  if (error) return error == FT_Err_Out_Of_Memory ? InspectResult::Unavailable : InspectResult::Unsupported;
+  const bool valid = supportedFace(face);
+  if (valid) describeFace(face, info, family, familyCapacity);
+  FT_Done_Face(face);
+  return valid ? InspectResult::Ok : InspectResult::Unsupported;
+}
+
+FtFont::InspectResult FtFont::inspectStream(const ReadFn read, void* ctx, const unsigned long fileSize, FaceInfo& info,
+                                            char* family, const size_t familyCapacity) {
+  info = FaceInfo{};
+  if (familyCapacity && !family) return InspectResult::Unsupported;
+  if (familyCapacity) family[0] = '\0';
+  if (!read || !fileSize) return InspectResult::Unsupported;
+  if (!ensureLib()) return InspectResult::Unavailable;
+
+  StreamCtx source{read, ctx, false};
+  FT_StreamRec stream{};
+  stream.size = fileSize;
+  stream.descriptor.pointer = &source;
+  stream.read = &ftStreamIo;
+  stream.close = &ftStreamClose;
+  FT_Open_Args args{};
+  args.flags = FT_OPEN_STREAM;
+  args.stream = &stream;
+  FT_Face face = nullptr;
+  const FT_Error error = FT_Open_Face(g_lib, &args, 0, &face);
+  if (error) {
+    return source.failed || error == FT_Err_Out_Of_Memory ? InspectResult::Unavailable : InspectResult::Unsupported;
+  }
+  const bool valid = supportedFace(face);
+  if (valid) describeFace(face, info, family, familyCapacity);
+  FT_Done_Face(face);
+  return source.failed ? InspectResult::Unavailable : valid ? InspectResult::Ok : InspectResult::Unsupported;
+}
 
 FtFont::~FtFont() { deinit(); }
 
@@ -156,33 +291,83 @@ void FtFont::deinit() {
     FT_Done_Face(static_cast<FT_Face>(face_));
     face_ = nullptr;
   }
-  delete static_cast<FT_StreamRec*>(stream_);
+  fontFree(stream_);
   stream_ = nullptr;
-  delete static_cast<StreamCtx*>(streamCtx_);
+  fontFree(streamCtx_);
   streamCtx_ = nullptr;
   ready_ = false;
-  sizePx_ = 0;
+  size26_6_ = 0;
   obliqueShear_ = false;
   options_ = RenderOptions{};
   freeMonoBuffer();
+  // Glyph IDs are face-local: a stale GSUB table cached from the PREVIOUS
+  // face would resolve the new face's glyph IDs against the wrong font,
+  // silently either finding nothing or (worse) matching a coincidentally
+  // reused ID for a wrong-but-real ligature. Must be cleared on every
+  // deinit(), since init()/initStream() can rebuild this same instance with
+  // completely different bytes.
+  freeGsubTable();
+  gsubLoadAttempted_ = false;
+  fontData_ = nullptr;
+  fontDataSize_ = 0;
+}
+
+void FtFont::freeGsubTable() {
+  if (gsubTableOwned_) fontFree(const_cast<uint8_t*>(gsubTable_));
+  gsubTable_ = nullptr;
+  gsubTableSize_ = 0;
+  gsubTableOwned_ = false;
+}
+
+void FtFont::setGsubByteBudget(const size_t maxBytes) {
+  gsubByteBudget_ = maxBytes;
+  if (gsubTableOwned_ && gsubTableSize_ > gsubByteBudget_) releaseLigatureTable();
+}
+
+void FtFont::releaseLigatureTable() {
+  freeGsubTable();
+  gsubLoadAttempted_ = true;
 }
 
 bool FtFont::init(const uint8_t* data, const uint32_t len, const uint16_t sizePx, const int weight, const bool italic) {
-  ready_ = false;
+  // Rebuild from a clean slate every time: this same instance can be
+  // init()'d again with completely different bytes without an intervening
+  // deinit() call, and glyph IDs (so the cached GSUB table) are face-local —
+  // a stale table from the PREVIOUS face would resolve the new face's glyph
+  // IDs against the wrong font. This also closes a pre-existing leak: a
+  // second init() without deinit() previously dropped the old FT_Face
+  // without ever calling FT_Done_Face on it.
+  deinit();
   if (!ensureLib() || data == nullptr || len == 0) return false;
+  fontData_ = data;
+  fontDataSize_ = len;
   FT_Face face = nullptr;
-  if (FT_New_Memory_Face(g_lib, data, static_cast<FT_Long>(len), 0, &face) != 0) return false;
+  if (FT_New_Memory_Face(g_lib, data, static_cast<FT_Long>(len), 0, &face) != 0) {
+    fontData_ = nullptr;
+    fontDataSize_ = 0;
+    return false;
+  }
   face_ = face;
   return finishInit(sizePx, weight, italic);
 }
 
 bool FtFont::initStream(const ReadFn read, void* ctx, const unsigned long fileSize, const uint16_t sizePx,
                         const int weight, const bool italic) {
-  ready_ = false;
+  deinit();  // see the comment in init() — same reasoning applies here
   if (!ensureLib() || read == nullptr || fileSize == 0) return false;
 
-  auto* sc = new StreamCtx{read, ctx};
-  auto* stream = new FT_StreamRec{};  // zero-initialized
+  // These wrappers must outlive the face, so they use the configured font
+  // allocator rather than a small task stack frame. Both allocations are
+  // bounded and failure is reported to the caller.
+  auto* sc = static_cast<StreamCtx*>(fontAlloc(sizeof(StreamCtx)));
+  auto* stream = static_cast<FT_StreamRec*>(fontAlloc(sizeof(FT_StreamRec)));
+  if (!sc || !stream) {
+    fontFree(stream);
+    fontFree(sc);
+    return false;
+  }
+  *sc = StreamCtx{read, ctx, false};
+  std::memset(stream, 0, sizeof(*stream));
   stream->size = fileSize;
   stream->pos = 0;
   stream->descriptor.pointer = sc;
@@ -195,7 +380,13 @@ bool FtFont::initStream(const ReadFn read, void* ctx, const unsigned long fileSi
   args.flags = FT_OPEN_STREAM;
   args.stream = stream;
   FT_Face face = nullptr;
-  if (FT_Open_Face(g_lib, &args, 0, &face) != 0) return false;
+  if (FT_Open_Face(g_lib, &args, 0, &face) != 0) {
+    fontFree(stream);
+    fontFree(sc);
+    stream_ = nullptr;
+    streamCtx_ = nullptr;
+    return false;
+  }
   face_ = face;
   return finishInit(sizePx, weight, italic);
 }
@@ -203,8 +394,8 @@ bool FtFont::initStream(const ReadFn read, void* ctx, const unsigned long fileSi
 bool FtFont::finishInit(const uint16_t sizePx, const int weight, const bool italic) {
   auto face = static_cast<FT_Face>(face_);
   applyVariation(weight, italic);
-  sizePx_ = sizePx;
-  if (FT_Set_Pixel_Sizes(face, 0, sizePx) != 0) {
+  size26_6_ = 0;
+  if (!ensureSize26_6(uint32_t(sizePx) * 64u)) {
     FT_Done_Face(face);
     face_ = nullptr;
     return false;
@@ -252,11 +443,6 @@ void FtFont::applyVariation(const int weight, const bool italic) {
     obliqueShear_ = italic && !haveItalAxis;
     emboldenBold_ = wantBold && !haveWghtAxis;  // variable but no wght axis
   }
-  if (obliqueShear_) {
-    // ~12° oblique: x' = x + 0.21*y.
-    FT_Matrix m{0x10000, static_cast<FT_Fixed>(0x10000 * 0.21), 0, 0x10000};
-    FT_Set_Transform(face, &m, nullptr);
-  }
 }
 
 bool FtFont::setRenderOptions(const RenderOptions& options) {
@@ -303,7 +489,7 @@ void FtFont::applyGlobalProperties() const {
 }
 
 void FtFont::freeMonoBuffer() {
-  fiFontFree(monoBuf_);
+  fontFree(monoBuf_);
   monoBuf_ = nullptr;
   monoBufCap_ = 0;
 }
@@ -313,8 +499,8 @@ const uint8_t* FtFont::expandMonoCoverage(const void* ftBitmapPtr) {
   const size_t pixels = size_t(bitmap.width) * bitmap.rows;
   if (pixels == 0) return monoBuf_;  // empty glyph (e.g. space): nothing to expand
   if (pixels > monoBufCap_) {
-    fiFontFree(monoBuf_);
-    monoBuf_ = static_cast<uint8_t*>(fiFontMalloc(pixels));
+    fontFree(monoBuf_);
+    monoBuf_ = static_cast<uint8_t*>(fontAlloc(pixels));
     monoBufCap_ = monoBuf_ ? pixels : 0;
     if (!monoBuf_) return nullptr;
   }
@@ -330,78 +516,254 @@ const uint8_t* FtFont::expandMonoCoverage(const void* ftBitmapPtr) {
   return monoBuf_;
 }
 
-void FtFont::ensureSize(const uint16_t sizePx) {
-  if (sizePx != sizePx_ && face_) {
-    FT_Set_Pixel_Sizes(static_cast<FT_Face>(face_), 0, sizePx);
-    sizePx_ = sizePx;
-  }
+bool FtFont::ensureSize26_6(const uint32_t pixelSize26_6) {
+  if (!face_ || pixelSize26_6 < 64 || pixelSize26_6 > 0xFFFFFFu) return false;
+  if (pixelSize26_6 == size26_6_) return true;
+  if (FT_Set_Char_Size(static_cast<FT_Face>(face_), pixelSize26_6, pixelSize26_6, 72, 72) != 0) return false;
+  size26_6_ = pixelSize26_6;
+  return true;
 }
 
-bool FtFont::hasGlyph(const uint32_t codepoint) const {
+bool FtFont::prepareLoad() {
   if (!ready_) return false;
-  return FT_Get_Char_Index(static_cast<FT_Face>(face_), codepoint) != 0;
+  applyGlobalProperties();
+  const int64_t syntheticItalic = obliqueShear_ ? 13763 : 0;  // tan(about 12 degrees) in 16.16
+  const FT_Fixed shear =
+      static_cast<FT_Fixed>(std::clamp<int64_t>(syntheticItalic + options_.slant16_16, INT32_MIN, INT32_MAX));
+  FT_Matrix matrix{0x10000L, shear, 0, 0x10000L};
+  FT_Set_Transform(static_cast<FT_Face>(face_), shear ? &matrix : nullptr, nullptr);
+  return true;
+}
+
+bool FtFont::loadGlyph(const GlyphId glyph, const uint32_t pixelSize26_6) {
+  if (!glyph || !ensureSize26_6(pixelSize26_6) || !prepareLoad()) return false;
+  auto face = static_cast<FT_Face>(face_);
+  if (FT_Load_Glyph(face, glyph, loadFlagsFor(options_)) != 0) return false;
+  FT_GlyphSlot slot = face->glyph;
+  const int64_t syntheticBold = emboldenBold_ ? int64_t(pixelSize26_6) / 26 : 0;
+  const FT_Pos strength =
+      static_cast<FT_Pos>(std::clamp<int64_t>(syntheticBold + options_.embolden26_6, INT32_MIN, INT32_MAX));
+  return !strength || slot->format != FT_GLYPH_FORMAT_OUTLINE || FT_Outline_Embolden(&slot->outline, strength) == 0;
+}
+
+bool FtFont::hasGlyph(const uint32_t codepoint) const { return glyphId(codepoint) != 0; }
+
+FtFont::GlyphId FtFont::glyphId(const uint32_t codepoint) const {
+  return ready_ ? FT_Get_Char_Index(static_cast<FT_Face>(face_), codepoint) : 0;
+}
+
+bool FtFont::metrics26_6(const uint32_t codepoint, const uint32_t pixelSize26_6, GlyphMetrics& out) {
+  return metricsGlyph26_6(glyphId(codepoint), pixelSize26_6, out);
+}
+
+bool FtFont::metricsGlyph26_6(const GlyphId glyph, const uint32_t pixelSize26_6, GlyphMetrics& out) {
+  out = GlyphMetrics{};
+  if (!loadGlyph(glyph, pixelSize26_6)) return false;
+  auto slot = static_cast<FT_Face>(face_)->glyph;
+  long left = 0;
+  long right = 0;
+  long bottom = 0;
+  long top = 0;
+  if (options_.monochrome || slot->format != FT_GLYPH_FORMAT_OUTLINE) {
+    if (slot->format != FT_GLYPH_FORMAT_BITMAP && FT_Render_Glyph(slot, renderModeFor(options_)) != 0) return false;
+    left = slot->bitmap_left;
+    right = left + slot->bitmap.width;
+    top = slot->bitmap_top;
+    bottom = top - slot->bitmap.rows;
+  } else {
+    FT_BBox box;
+    FT_Outline_Get_CBox(&slot->outline, &box);
+    left = box.xMin >> 6;
+    right = (box.xMax + 63) >> 6;
+    bottom = box.yMin >> 6;
+    top = (box.yMax + 63) >> 6;
+  }
+  if (right < left || top < bottom || right - left > UINT16_MAX || top - bottom > UINT16_MAX || left < INT16_MIN ||
+      left > INT16_MAX || top < INT16_MIN || top > INT16_MAX)
+    return false;
+  out = {fixed16_16To26_6(slot->linearHoriAdvance), int16_t(left), int16_t(top), uint16_t(right - left),
+         uint16_t(top - bottom)};
+  return true;
+}
+
+int32_t FtFont::kerning26_6(const uint32_t left, const uint32_t right, const uint32_t pixelSize26_6) {
+  return kerningGlyphs26_6(glyphId(left), glyphId(right), pixelSize26_6);
+}
+
+int32_t FtFont::kerningGlyphs26_6(const GlyphId left, const GlyphId right, const uint32_t pixelSize26_6) {
+  if (!left || !right || !ensureSize26_6(pixelSize26_6)) return 0;
+  auto face = static_cast<FT_Face>(face_);
+  if (!FT_HAS_KERNING(face)) return 0;
+  FT_Vector value{};
+  if (FT_Get_Kerning(face, left, right, FT_KERNING_UNFITTED, &value) != 0) return 0;
+  return int32_t(std::clamp<int64_t>(value.x, INT32_MIN, INT32_MAX));
+}
+
+bool FtFont::lineMetrics26_6(const uint32_t pixelSize26_6, LineMetrics& out) {
+  out = LineMetrics{};
+  if (!ensureSize26_6(pixelSize26_6)) return false;
+  const auto& metrics = static_cast<FT_Face>(face_)->size->metrics;
+  out = {int32_t(std::clamp<int64_t>(metrics.ascender, INT32_MIN, INT32_MAX)),
+         int32_t(std::clamp<int64_t>(metrics.descender, INT32_MIN, INT32_MAX)),
+         int32_t(std::clamp<int64_t>(metrics.height, INT32_MIN, INT32_MAX))};
+  return true;
 }
 
 int16_t FtFont::advance(const uint32_t codepoint, const uint16_t sizePx, uint8_t) {
-  if (!ready_) return 0;
-  ensureSize(sizePx);
-  applyGlobalProperties();
-  auto face = static_cast<FT_Face>(face_);
-  if (FT_Load_Char(face, codepoint, loadFlagsFor(options_)) != 0) return 0;
-  return static_cast<int16_t>(face->glyph->advance.x >> 6);
+  GlyphMetrics metrics;
+  if (!metrics26_6(codepoint, uint32_t(sizePx) * 64u, metrics)) return 0;
+  return int16_t(std::clamp<int32_t>(metrics.advance26_6 >> 6, INT16_MIN, INT16_MAX));
 }
 
 int16_t FtFont::lineHeight(const uint16_t sizePx) {
-  if (!ready_) return sizePx;
-  ensureSize(sizePx);
-  auto face = static_cast<FT_Face>(face_);
-  return static_cast<int16_t>(face->size->metrics.height >> 6);
+  LineMetrics metrics;
+  return lineMetrics26_6(uint32_t(sizePx) * 64u, metrics)
+             ? int16_t(std::clamp<int32_t>(metrics.height26_6 >> 6, INT16_MIN, INT16_MAX))
+             : int16_t(sizePx);
 }
 
 int16_t FtFont::ascent(const uint16_t sizePx) {
-  if (!ready_) return sizePx;
-  ensureSize(sizePx);
-  auto face = static_cast<FT_Face>(face_);
-  return static_cast<int16_t>(face->size->metrics.ascender >> 6);
+  LineMetrics metrics;
+  return lineMetrics26_6(uint32_t(sizePx) * 64u, metrics)
+             ? int16_t(std::clamp<int32_t>(metrics.ascender26_6 >> 6, INT16_MIN, INT16_MAX))
+             : int16_t(sizePx);
 }
 
 int16_t FtFont::kerning(const uint32_t left, const uint32_t right, const uint16_t sizePx, uint8_t) {
+  if (!ready_ || !ensureSize26_6(uint32_t(sizePx) * 64u)) return 0;
+  auto face = static_cast<FT_Face>(face_);
+  const GlyphId leftGlyph = glyphId(left);
+  const GlyphId rightGlyph = glyphId(right);
+  if (!leftGlyph || !rightGlyph || !FT_HAS_KERNING(face)) return 0;
+  FT_Vector value{};
+  if (FT_Get_Kerning(face, leftGlyph, rightGlyph, FT_KERNING_DEFAULT, &value) != 0) return 0;
+  return int16_t(std::clamp<int64_t>(value.x >> 6, INT16_MIN, INT16_MAX));
+}
+
+void FtFont::ensureGsubLoaded() {
+  // Only remember a real attempt: setting the flag before `ready_` is
+  // confirmed would permanently skip loading if this got called too early
+  // (e.g. a caller probing ligature() before init() succeeded), with no way
+  // to retry once the face actually becomes ready.
+  if (!ready_ || gsubLoadAttempted_) return;
+  gsubLoadAttempted_ = true;
+
+  // Memory-backed faces can inspect the caller-owned sfnt directory directly.
+  // This keeps the GSUB table shared across all styled faces over one resident
+  // font instead of allocating a duplicate copy.
+  if (fontData_ != nullptr) {
+    const uint8_t* table = nullptr;
+    size_t tableSize = 0;
+    if (findSfntTable(fontData_, fontDataSize_, kTagGsub, &table, &tableSize) && tableSize <= kMaxGsubBytes) {
+      gsubTable_ = table;
+      gsubTableSize_ = tableSize;
+    }
+    return;
+  }
+
+  auto face = static_cast<FT_Face>(face_);
+  FT_ULong length = 0;
+  // First call with a null buffer just reports the table's length.
+  if (FT_Load_Sfnt_Table(face, kTagGsub, 0, nullptr, &length) != 0 || length == 0 || length > kMaxGsubBytes ||
+      length > gsubByteBudget_) {
+    return;
+  }
+  // Fallible allocation, deliberately not PsramVector (see the header
+  // comment): a missing GSUB table just means no ligatures, not a crash.
+  auto* buffer = static_cast<uint8_t*>(fontAlloc(length));
+  if (!buffer) return;
+  if (FT_Load_Sfnt_Table(face, kTagGsub, 0, buffer, &length) != 0) {
+    fontFree(buffer);
+    return;
+  }
+  gsubTable_ = buffer;
+  gsubTableSize_ = length;
+  gsubTableOwned_ = true;
+}
+
+uint32_t FtFont::ligatureGlyphId(const uint32_t* codepoints, const unsigned length) {
+  if (!ready_ || codepoints == nullptr || length < 2 || length > 3) return 0;
+  ensureGsubLoaded();
+  if (!gsubTable_) return 0;
+  auto face = static_cast<FT_Face>(face_);
+  uint32_t glyphs[3];
+  for (unsigned i = 0; i < length; ++i) {
+    const FT_UInt g = FT_Get_Char_Index(face, codepoints[i]);
+    if (g == 0) return 0;
+    glyphs[i] = g;
+  }
+  return gsub::LigatureGlyphId(gsubTable_, gsubTableSize_, glyphs, length);
+}
+
+uint32_t FtFont::ligature(const uint32_t left, const uint32_t right, uint8_t) {
   if (!ready_) return 0;
   auto face = static_cast<FT_Face>(face_);
-  if (!FT_HAS_KERNING(face)) return 0;
-  ensureSize(sizePx);
-  const FT_UInt l = FT_Get_Char_Index(face, left);
-  const FT_UInt r = FT_Get_Char_Index(face, right);
-  if (l == 0 || r == 0) return 0;
-  FT_Vector k;
-  if (FT_Get_Kerning(face, l, r, FT_KERNING_DEFAULT, &k) != 0) return 0;
-  return static_cast<int16_t>(k.x >> 6);
+
+  // Font::ligature() only ever sees a pair, chaining through a previous
+  // result for a 3-glyph ligature ("ff"+"i" using the U+FB00 "ff" result as
+  // the new left) — see Font.h. A real GSUB table keys "ffi" on the original
+  // 3 letters (f, f, i), not on the already-substituted "ff" glyph, so a
+  // chained call is rewritten back to its 3 original codepoints before
+  // asking GSUB, instead of querying GSUB for a rule no font actually has.
+  uint32_t sequence[3];
+  unsigned length;
+  uint32_t candidates[2];
+  unsigned candidateCount;
+  if (left == 0xFB00 && (right == 'i' || right == 'l')) {  // previous step already found "ff"
+    sequence[0] = 'f';
+    sequence[1] = 'f';
+    sequence[2] = right;
+    length = 3;
+    candidates[0] = right == 'i' ? 0xFB03 : 0xFB04;  // ffi / ffl
+    candidateCount = 2;
+  } else if (left == 'f' && (right == 'f' || right == 'i' || right == 'l')) {
+    sequence[0] = left;
+    sequence[1] = right;
+    length = 2;
+    candidates[1] = 0;
+    candidateCount = 1;
+    candidates[0] = right == 'f' ? 0xFB00 : right == 'i' ? 0xFB01 : 0xFB02;  // ff / fi / fl
+  } else {
+    // Not one of the five pairs this bridges to a codepoint at all — return
+    // early instead of asking GSUB a question whose answer (if any) could
+    // never be expressed through this contract anyway, and instead of
+    // defaulting `candidates[0]` to 0xFB00, which would falsely credit an
+    // unrelated pair's real GSUB match to the "ff" ligature codepoint.
+    return 0;
+  }
+
+  const uint32_t ligatureGlyph = ligatureGlyphId(sequence, length);
+  if (ligatureGlyph == 0) return 0;
+
+  // Font::ligature() must return a real Unicode codepoint — the layout pass
+  // bakes it into cached page text — but GSUB substitution glyphs commonly
+  // have no cmap entry at all. Confirm one of the standard Latin ligature
+  // codepoints actually maps to the glyph GSUB just named; if none does,
+  // there is nothing this contract can hand back even though GSUB matched.
+  // A glyph-indexed consumer that doesn't need a codepoint can call
+  // ligatureGlyphId() directly instead and use `ligatureGlyph` as-is.
+  for (unsigned i = 0; i < candidateCount; ++i) {
+    if (FT_Get_Char_Index(face, candidates[i]) == ligatureGlyph) return candidates[i];
+  }
+  return 0;
 }
 
 const GlyphBitmap* FtFont::rasterize(const uint32_t codepoint, const uint16_t sizePx) {
-  if (!ready_) return nullptr;
-  ensureSize(sizePx);
-  applyGlobalProperties();
-  auto face = static_cast<FT_Face>(face_);
-  // Faux bold defers rendering: load the outline, thicken it, then render.
-  const FT_Int32 baseFlags = loadFlagsFor(options_);
-  const FT_Int32 loadFlags = emboldenBold_ ? baseFlags : (baseFlags | FT_LOAD_RENDER);
-  if (FT_Load_Char(face, codepoint, loadFlags) != 0) return nullptr;
-  FT_GlyphSlot s = face->glyph;
-  if (emboldenBold_) {
-    if (s->format == FT_GLYPH_FORMAT_OUTLINE) {
-      // ~1/26 em of extra stroke: close to a real bold's stem gain without the
-      // glyphs merging at reader sizes.
-      FT_Outline_Embolden(&s->outline, static_cast<FT_Pos>(sizePx) * 64 / 26);
-    }
-    if (s->format != FT_GLYPH_FORMAT_BITMAP && FT_Render_Glyph(s, renderModeFor(options_)) != 0) {
-      // e.g. monochrome requested without FREEINK_FONT_ENABLE_MONOCHROME
-      // compiled in: fail the same way the non-embolden path already does
-      // (FT_LOAD_RENDER failing inside FT_Load_Char) instead of publishing
-      // a stale or zero-size bitmap left over from a previous glyph.
-      return nullptr;
-    }
-  }
+  return rasterize26_6(codepoint, uint32_t(sizePx) * 64u);
+}
+
+const GlyphBitmap* FtFont::rasterize26_6(const uint32_t codepoint, const uint32_t pixelSize26_6) {
+  return rasterizeGlyph26_6(glyphId(codepoint), pixelSize26_6);
+}
+
+const GlyphBitmap* FtFont::rasterizeGlyph26_6(const GlyphId glyph, const uint32_t pixelSize26_6) {
+  if (!loadGlyph(glyph, pixelSize26_6)) return nullptr;
+  FT_GlyphSlot s = static_cast<FT_Face>(face_)->glyph;
+  if (s->format != FT_GLYPH_FORMAT_BITMAP && FT_Render_Glyph(s, renderModeFor(options_)) != 0) return nullptr;
+  if (s->bitmap.width > UINT16_MAX || s->bitmap.rows > UINT16_MAX || s->bitmap_left < INT16_MIN ||
+      s->bitmap_left > INT16_MAX || s->bitmap_top < INT16_MIN || s->bitmap_top > INT16_MAX ||
+      (s->advance.x >> 6) < INT16_MIN || (s->advance.x >> 6) > INT16_MAX)
+    return nullptr;
   // GlyphBitmap's contract is 8-bit coverage (see Font.h); FT_PIXEL_MODE_MONO
   // is 1-bpp packed and must be expanded, not published as-is.
   if (s->bitmap.pixel_mode == FT_PIXEL_MODE_MONO) {
@@ -414,7 +776,7 @@ const GlyphBitmap* FtFont::rasterize(const uint32_t codepoint, const uint16_t si
   glyph_.width = static_cast<uint16_t>(s->bitmap.width);
   glyph_.height = static_cast<uint16_t>(s->bitmap.rows);
   glyph_.xoff = static_cast<int16_t>(s->bitmap_left);
-  glyph_.yoff = static_cast<int16_t>(-s->bitmap_top);        // top offset from baseline, negative = above
+  glyph_.yoff = static_cast<int16_t>(-s->bitmap_top);  // top offset from baseline, negative = above
   glyph_.advance = static_cast<int16_t>(s->advance.x >> 6);
   return &glyph_;
 }

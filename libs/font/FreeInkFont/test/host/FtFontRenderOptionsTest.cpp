@@ -3,6 +3,7 @@
 // FREEINK_FONT_ENABLE_* modules on) under ASan/UBSan against a real font.
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <vector>
 
 #include "FtFont.h"
@@ -41,6 +42,31 @@ void expect(bool cond, const char* what) {
   }
 }
 
+struct AllocationStats {
+  size_t allocations = 0;
+};
+
+void* testAllocate(void* context, size_t size) {
+  ++static_cast<AllocationStats*>(context)->allocations;
+  return malloc(size);
+}
+void testDeallocate(void*, void* block) { free(block); }
+void* testReallocate(void* context, void* block, size_t, size_t newSize) {
+  ++static_cast<AllocationStats*>(context)->allocations;
+  return realloc(block, newSize);
+}
+
+struct MemorySource {
+  const std::vector<uint8_t>* bytes;
+};
+
+unsigned long readMemory(void* context, unsigned long offset, unsigned char* buffer, unsigned long count) {
+  const auto& bytes = *static_cast<MemorySource*>(context)->bytes;
+  if (offset > bytes.size() || count > bytes.size() - offset) return 0;
+  if (count) std::memcpy(buffer, bytes.data() + offset, count);
+  return count;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -50,9 +76,44 @@ int main(int argc, char** argv) {
   }
   const std::vector<uint8_t> bytes = readFile(argv[1]);
 
+  AllocationStats allocationStats;
+  FtFont::MemoryCallbacks memory{&allocationStats, testAllocate, testDeallocate, testReallocate};
+  expect(FtFont::configureMemory(&memory), "custom allocator can be configured before first use");
+
+  FtFont::FaceInfo memoryInfo;
+  char memoryFamily[128];
+  expect(FtFont::inspectMemory(bytes.data(), static_cast<uint32_t>(bytes.size()), memoryInfo, memoryFamily,
+                               sizeof(memoryFamily)) == FtFont::InspectResult::Ok,
+         "inspectMemory() reads reusable face metadata");
+  MemorySource source{&bytes};
+  FtFont::FaceInfo streamInfo;
+  char streamFamily[128];
+  expect(FtFont::inspectStream(readMemory, &source, bytes.size(), streamInfo, streamFamily, sizeof(streamFamily)) ==
+             FtFont::InspectResult::Ok,
+         "inspectStream() reads metadata without retaining the face");
+  expect(memoryFamily[0] && std::strcmp(memoryFamily, streamFamily) == 0 && memoryInfo.weight == streamInfo.weight &&
+             memoryInfo.italic == streamInfo.italic,
+         "memory and stream inspection report the same family and style");
+  expect(allocationStats.allocations > 0, "FreeType routes allocations through the configured callbacks");
+  expect(!FtFont::configureMemory(nullptr), "allocator configuration freezes after first SDK use");
+
   FtFont font;
   expect(font.init(bytes.data(), static_cast<uint32_t>(bytes.size()), 16, 400, false), "init() loads the face");
   expect(font.hasGlyph('A'), "face covers 'A'");
+
+  constexpr uint32_t kFractionalSize26_6 = 17 * 64 + 32;
+  const FtFont::GlyphId glyphA = font.glyphId('A');
+  expect(glyphA != 0, "glyphId() exposes the cmap result");
+  FtFont::GlyphMetrics fractionalMetrics;
+  expect(font.metricsGlyph26_6(glyphA, kFractionalSize26_6, fractionalMetrics) && fractionalMetrics.advance26_6 > 0,
+         "metricsGlyph26_6() preserves fractional pixel sizing");
+  expect(font.rasterizeGlyph26_6(glyphA, kFractionalSize26_6) != nullptr,
+         "rasterizeGlyph26_6() renders an explicit glyph ID");
+  FtFont::LineMetrics fractionalLine;
+  expect(font.lineMetrics26_6(kFractionalSize26_6, fractionalLine) && fractionalLine.height26_6 > 0,
+         "lineMetrics26_6() reports fixed-point line metrics");
+  expect(font.kerningGlyphs26_6(glyphA, font.glyphId('V'), kFractionalSize26_6) < 0,
+         "kerningGlyphs26_6() returns fractional glyph-ID kerning");
 
   const auto* bmDefault = font.rasterize('A', 16);
   expect(bmDefault != nullptr, "rasterize('A') under HintingMode::Default returns a bitmap");
@@ -85,6 +146,11 @@ int main(int argc, char** argv) {
   font.setRenderOptions(autoHint);
   expect(font.rasterize('A', 16) != nullptr,
          "rasterize('A') under HintingMode::Auto (registered autofit module) returns a bitmap");
+
+  autoHint.embolden26_6 = 32;
+  autoHint.slant16_16 = 9209;
+  expect(font.setRenderOptions(autoHint) && font.rasterize26_6('A', kFractionalSize26_6) != nullptr,
+         "generic embolden and slant options compose with fixed-point rendering");
 
   FtFont::RenderOptions light;
   light.hinting = FtFont::HintingMode::Light;
@@ -165,9 +231,8 @@ int main(int argc, char** argv) {
     std::vector<uint8_t> nativeProbePixels;
     if (bmNative && bmNative->width && bmNative->height)
       nativeProbePixels.assign(bmNative->pixels, bmNative->pixels + size_t(bmNative->width) * bmNative->height);
-    const bool nativeDiffers = bmNative &&
-                               (bmNative->width != defaultWidth || bmNative->height != defaultHeight ||
-                                nativeProbePixels != defaultPixels);
+    const bool nativeDiffers = bmNative && (bmNative->width != defaultWidth || bmNative->height != defaultHeight ||
+                                            nativeProbePixels != defaultPixels);
     expect(nativeDiffers, "fixture probe distinguishes Native v35 from Default/v40");
     if (!nativeDiffers) {
       fprintf(stderr,
