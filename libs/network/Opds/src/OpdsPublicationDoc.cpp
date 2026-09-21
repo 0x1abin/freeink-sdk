@@ -137,6 +137,8 @@ enum class PubScope : uint8_t {
   LINKS,       // "links" array
   LINK,        // one link object
   LINK_REL,    // link "rel" array
+  IMAGES,      // top-level "images" array (cover art)
+  IMAGE,       // one image object
   PROPS,       // link "properties" object
   AVAIL,       // properties.availability
   HOLDS,       // properties.holds
@@ -194,7 +196,12 @@ PubScope pubChildScope(const PubDoc2Ctx& c, PubScope parent, bool obj) {
     case PubScope::ROOT:
       if (obj && strcmp(c.key, "metadata") == 0) return PubScope::META;
       if (!obj && strcmp(c.key, "links") == 0) return PubScope::LINKS;
+      if (!obj && strcmp(c.key, "images") == 0) return PubScope::IMAGES;
       return PubScope::SKIP;
+    case PubScope::IMAGES:
+      return obj ? PubScope::IMAGE : PubScope::SKIP;
+    case PubScope::IMAGE:
+      return PubScope::SKIP;  // href/type read as strings under IMAGE
     case PubScope::META:
       if (strcmp(c.key, "author") == 0) return obj ? PubScope::AUTHOR : PubScope::AUTHOR_ARR;
       if (obj && strcmp(c.key, "title") == 0) return PubScope::META_TITLE;
@@ -258,6 +265,10 @@ void pubOnString(void* ud, const char* v, size_t len) {
       break;
     case PubScope::AUTHOR_ARR:
       if (c.out->author.empty()) set(c.out->author, OpdsLimits::MAX_AUTHOR_CHARS);
+      break;
+    case PubScope::IMAGE:
+      // First image entry is the cover; keep its href.
+      if (strcmp(c.key, "href") == 0 && c.out->coverHref.empty()) set(c.out->coverHref, OpdsLimits::MAX_HREF_CHARS);
       break;
     case PubScope::LINK:
       if (strcmp(c.key, "href") == 0)

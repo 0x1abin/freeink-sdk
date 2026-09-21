@@ -40,6 +40,7 @@ struct OpdsPublication {
   std::string language;
   std::string publisher;
   std::string published;  // metadata.published or .modified
+  std::string coverHref;  // first top-level `images` entry (cover art), if any
 
   // Best acquisition link (same ranking as the feed parser).
   std::string acquisitionHref;
