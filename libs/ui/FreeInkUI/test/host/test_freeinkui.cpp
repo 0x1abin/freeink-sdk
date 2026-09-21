@@ -4298,6 +4298,77 @@ void testBookCardCenteredTextAndProgressLabel() {
   CHECK_EQ(interactions.data()[0].action, 502);
 }
 
+void testSpaceBetweenLayouts() {
+  for (const int width : {300, 301}) {
+    for (const int count : {1, 4, 5}) {
+      FakeDrawTarget draw;
+      DeviceContext device = makeDevice(480, 800);
+      InputSnapshot input;
+      InteractionBuffer<8> interactions;
+      Frame<8> frame(draw, device, input, interactions);
+      TabItem items[5]{};
+      Rect icons[5]{};
+      for (int i = 0; i < count; ++i) items[i].value = 10 + i;
+      TabBarProps tabs;
+      tabs.tabs = items;
+      tabs.count = count;
+      tabs.action = 501;
+      tabs.layout = TabBarLayout::SpaceBetween;
+      tabs.distributedSlotWidth = 44;
+      tabs.iconSize = 32;
+      tabs.iconPainterUserData = icons;
+      tabs.iconPainter = [](DrawTarget&, Rect rect, const TabItem&, uint8_t index, void* user) {
+        static_cast<Rect*>(user)[index] = rect;
+        return true;
+      };
+      tabBar(frame, Rect{10, 20, static_cast<int16_t>(width), 56}, tabs);
+      CHECK_EQ(interactions.count(), static_cast<size_t>(count));
+      for (int i = 0; i < count; ++i) {
+        const int x = 10 + (count > 1 ? i * (width - 44) / (count - 1) : (width - 44) / 2);
+        CHECK_EQ(icons[i].x, x + 6);
+        CHECK_EQ(interactions.data()[i].value, 10 + i);
+        InputSnapshot tap;
+        tap.touchReleased = true;
+        tap.touchX = icons[i].x + 16;
+        tap.touchY = icons[i].y + 16;
+        CHECK_EQ(interactions.route(tap).value, 10 + i);
+      }
+    }
+    FakeDrawTarget draw;
+    DeviceContext device = makeDevice(480, 800);
+    InputSnapshot input;
+    InteractionBuffer<8> interactions;
+    Frame<8> frame(draw, device, input, interactions);
+    CoverGridItem items[6]{};
+    Rect covers[6]{};
+    for (int i = 0; i < 6; ++i) items[i] = coverGridItem(nullptr, i + 1);
+    CoverGridProps grid;
+    grid.items = items;
+    grid.count = 6;
+    grid.columns = 3;
+    grid.action = 502;
+    grid.columnLayout = CoverGridColumnLayout::SpaceBetween;
+    grid.coverSize = Size{60, 90};
+    grid.cellInset = Insets{6, 6, 6, 6};
+    grid.rowHeight = 102;
+    grid.rowGap = 8;
+    grid.labelHeight = 0;
+    grid.coverPainterUserData = covers;
+    grid.coverPainter = [](DrawTarget&, Rect rect, const CoverGridItem&, uint16_t index, void* user) {
+      static_cast<Rect*>(user)[index] = rect;
+      return true;
+    };
+    coverGrid(frame, Rect{10, 100, static_cast<int16_t>(width), 212}, grid);
+    CHECK_EQ(interactions.count(), 6u);
+    CHECK_EQ(covers[0].x, 16);
+    CHECK_EQ(covers[2].right(), 10 + width - 6);
+    CHECK_EQ(covers[3].x, covers[0].x);
+    CHECK_EQ(covers[5].right(), covers[2].right());
+    CHECK_EQ(covers[3].y - covers[0].y, 110);
+    for (int i = 0; i < 6; ++i) CHECK_EQ(interactions.data()[i].value, i + 1);
+  }
+}
+
 void testCoverGridLabelAlignment() {
   FakeDrawTarget draw;
   DeviceContext device = makeDevice(320, 240);
@@ -5279,6 +5350,7 @@ int main() {
   testScreenContentMarginCoordinateSpaces();
   testEReaderChromeMenusAndPanels();
   testEReaderBookSurfaces();
+  testSpaceBetweenLayouts();
   testCoverGridLabelAlignment();
   testBookCardCenteredTextAndProgressLabel();
   testHeaderBorderEdges();

@@ -33,6 +33,8 @@ enum class CoverGridSelectionIndicator {
   CoverFrame,
 };
 
+enum class CoverGridColumnLayout : uint8_t { EqualWidth, SpaceBetween };
+
 struct CoverGridProps {
   const CoverGridItem* items = nullptr;
   CoverGridItemProvider itemProvider = nullptr;
@@ -46,6 +48,7 @@ struct CoverGridProps {
   StyleSet cellStyles{};
   CoverGridSelectionIndicator selectionIndicator = CoverGridSelectionIndicator::Cell;
   uint8_t columns = 3;
+  CoverGridColumnLayout columnLayout = CoverGridColumnLayout::EqualWidth;
   Size coverSize{72, 104};
   int16_t rowHeight = 132;
   int16_t gap = 8;
@@ -114,14 +117,23 @@ void coverGrid(Frame<MaxInteractions>& frame, Rect rect, const CoverGridProps& p
                              props.scrollIndicatorWidth, thumbH},
                         Paint::solid(Color::Black));
   }
-  const int16_t cellW = static_cast<int16_t>((gridRect.width - (props.columns - 1) * props.gap) / props.columns);
+  const int16_t naturalCellW = props.coverSize.width + props.cellInset.left + props.cellInset.right;
+  const bool distribute = props.columnLayout == CoverGridColumnLayout::SpaceBetween && naturalCellW > 0 &&
+                          static_cast<int32_t>(naturalCellW) * props.columns +
+                              static_cast<int32_t>(props.columns - 1) * props.gap <= gridRect.width;
+  const int16_t cellW = distribute ? naturalCellW
+      : static_cast<int16_t>((gridRect.width - (props.columns - 1) * props.gap) / props.columns);
   uint16_t top = props.topIndex;
   if (top >= props.count) top = 0;
   for (uint16_t visible = 0; visible < cellsVisible && top + visible < props.count; ++visible) {
     const uint16_t index = static_cast<uint16_t>(top + visible);
     const uint8_t col = static_cast<uint8_t>(visible % props.columns);
     const uint16_t row = static_cast<uint16_t>(visible / props.columns);
-    Rect cell{static_cast<int16_t>(gridRect.x + col * (cellW + props.gap)),
+    const int16_t columnOffset = distribute
+        ? static_cast<int16_t>(props.columns > 1 ? static_cast<int32_t>(col) * (gridRect.width - cellW) / (props.columns - 1)
+                                                : (gridRect.width - cellW) / 2)
+        : static_cast<int16_t>(col * (cellW + props.gap));
+    Rect cell{static_cast<int16_t>(gridRect.x + columnOffset),
               static_cast<int16_t>(gridRect.y + row * strideY), cellW, props.rowHeight};
     const CoverGridItem providedItem =
         props.itemProvider ? props.itemProvider(index, props.itemProviderUserData) : CoverGridItem{};

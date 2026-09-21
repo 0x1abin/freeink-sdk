@@ -1611,3 +1611,18 @@ shelf props, so assign each shelf's fonts explicitly when using multiple styles.
 Use app-level loading/error/empty-catalog screens as appropriate. A shelf's
 `emptyLabel` is customizable. No OPDS requests or CrossPoint firmware screen
 changes are performed by these SDK components.
+
+### Evenly distributed cover columns and tabs
+
+Set `CoverGridProps::columnLayout` to `CoverGridColumnLayout::SpaceBetween` to
+keep cover cells at their natural width (cover width plus cell insets) and
+spread the remaining width between columns. Both outside cell edges stay fixed;
+rounding is absorbed between columns. A single column is centered. `gap` is the
+minimum spacing; layouts that do not fit fall back to equal-width cells.
+
+Set `TabBarProps::layout` to `TabBarLayout::SpaceBetween` for the same distribution
+of tab slots. `distributedSlotWidth` specifies the slot width; zero uses the
+widest natural tab. Slot bounds include the tab insets, and touch targets and
+selection indicators follow the slots. A single tab is centered. If the slots
+and minimum `gap` do not fit, the bar falls back to equal-width slots.
+Existing default layouts are unchanged. Neither option allocates memory.
