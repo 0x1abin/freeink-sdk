@@ -400,8 +400,13 @@ FT_BEGIN_HEADER
    *
    * The size in bytes of the render pool used by the scan-line converter to
    * do all of its work.
+   *
+   * FreeInkFont: the smooth rasterizer places this pool on the STACK
+   * (`gray_convert_glyph`), so it must fit within an embedded FreeRTOS task
+   * stack.  A smaller pool only makes the rasterizer subdivide into more
+   * bands; output is identical.
    */
-#define FT_RENDER_POOL_SIZE  16384L
+#define FT_RENDER_POOL_SIZE  4096L
 
 
   /**************************************************************************
