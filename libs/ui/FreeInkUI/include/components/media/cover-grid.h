@@ -54,6 +54,9 @@ struct CoverGridProps {
   Insets labelInset{};
   int16_t labelHeight = 20;
   int16_t labelGap = 2;
+  TextAlign labelAlign = TextAlign::Center;
+  // Constrain the label to the cover slot rather than the full cell content.
+  bool labelFollowsCover = false;
   int16_t minTouchSize = 44;
   bool scrollIndicator = true;
   int16_t scrollIndicatorWidth = 3;
@@ -166,10 +169,11 @@ void coverGrid(Frame<MaxInteractions>& frame, Rect rect, const CoverGridProps& p
     }
     if (item.title && props.labelHeight > 0) {
       TextStyle title = textStyleWithForeground(props.titleText, style.foreground);
-      title.align = TextAlign::Center;
+      title.align = props.labelAlign;
       title.maxLines = title.maxLines > 0 ? title.maxLines : 1;
-      Rect labelRect{content.x, static_cast<int16_t>(coverRect.bottom() + props.labelGap), content.width,
-                     props.labelHeight};
+      Rect labelRect{props.labelFollowsCover ? coverRect.x : content.x,
+                     static_cast<int16_t>(coverRect.bottom() + props.labelGap),
+                     props.labelFollowsCover ? coverRect.width : content.width, props.labelHeight};
       labelRect = labelRect.inset(props.labelInset);
       if (!labelRect.empty()) {
         const int16_t reservedHeight = static_cast<int16_t>(frame.target().lineHeight(title.font) * title.maxLines);

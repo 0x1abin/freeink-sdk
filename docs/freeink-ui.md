@@ -887,6 +887,11 @@ card.value = bookIndex;
 bookCard(ui, rowRect, card);
 ```
 
+`bookCard` accepts `progressLabel` and `progressText` to place a percentage or
+other short label before the bar, separated by `progressLabelGap`. Set
+`centerTextOnCover = true` to center the title/author block against the cover;
+the block shifts upward if needed to leave room for the progress row.
+
 Both `bookCard` and `coverGrid` default to highlighting the whole
 card/cell when selected. Set `selectionIndicator` to the `CoverFrame` mode
 (`BookCardSelectionIndicator::CoverFrame` / `CoverGridSelectionIndicator::CoverFrame`)
@@ -894,6 +899,9 @@ to draw a frame around the cover art instead, tuned with
 `selectedCoverFrameGap`/`Width`/`Radius`. Both also accept a `coverPainter`
 callback, so the app can render decoded cover art into the slot rect while the
 component still owns layout, the dithered placeholder, and selection chrome.
+Grid titles default to centered across the cell. Set `labelAlign = TextAlign::Left`
+and `labelFollowsCover = true` to left-align titles within the cover slot's width;
+`labelInset` is applied inside those bounds.
 `coverGrid` draws a scroll indicator when its contents overflow the visible
 rows (`scrollIndicator`, `scrollIndicatorWidth`/`Gap`); pair it with the
 `coverGridVisibleCells()` and `coverGridTopIndexFor()` helpers to keep the
