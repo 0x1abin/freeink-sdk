@@ -7,6 +7,8 @@
 #include <array>
 #include <cstring>
 
+#include "../lut/StickyCombinedAa.h"
+
 namespace freeink {
 namespace {
 constexpr uint8_t CMD_SOFT_RESET = 0x12;
@@ -159,7 +161,8 @@ void paperMonoAbortGray() { paperMonoDriver().abortGray(); }
 void paperMonoResetGray() { paperMonoDriver().resetGray(); }
 
 uint32_t PaperMonoDriver::spiHz() const {
-  return BoardConfig::ACTIVE.displaySpiHz != 0 ? BoardConfig::ACTIVE.displaySpiHz : 20000000;
+  return BoardConfig::ACTIVE.displaySpiHz != 0 ? BoardConfig::ACTIVE.displaySpiHz
+                                               : (FREEINK_STICKY_COMBINED_AA ? 40000000 : 20000000);
 }
 
 PanelGeometry PaperMonoDriver::geometry() const { return {WIDTH, HEIGHT, WIDTH_BYTES, BUFFER_SIZE}; }
@@ -179,6 +182,14 @@ bool PaperMonoDriver::allocateBuffers() {
     memset(_glassNonWhite, 0, BUFFER_SIZE);
     memset(_glassBlack, 0, BUFFER_SIZE);
   }
+  if (!ok) {
+    // Free a partial attempt before the facade selects the original Sticky driver.
+    for (uint8_t** ptr :
+         {&_lastBw, &_pendingBw, &_grayLsb, &_grayMsb, &_glassNonWhite, &_glassBlack, &_sel24, &_sel26}) {
+      heap_caps_free(*ptr);
+      *ptr = nullptr;
+    }
+  }
   return ok;
 }
 
@@ -192,7 +203,7 @@ void PaperMonoDriver::begin(EpdBus& bus) {
   // and splash residue doesn't ghost through (see runBootCleanPass()). Three
   // paints so an intermediate progress paint can't exhaust the budget before
   // the home screen lands.
-  _bootCleanPaints = 3;
+  _bootCleanPaints = FREEINK_STICKY_COMBINED_AA ? 0 : 3;
   _lastBwValid = false;
   _abortGeneration.store(0);
   _displayWorkGeneration = 0;
@@ -200,10 +211,18 @@ void PaperMonoDriver::begin(EpdBus& bus) {
   _lutState = LutState::Unknown;
   _windowBaselineValid = false;
   resetGray();
+#if FREEINK_STICKY_COMBINED_AA
+  _tri.preUp = stickyCombinedAa::KICK_FRAMES;
+  _tri.tGray = stickyCombinedAa::GRAY_FRAMES;
+  _tri.tBlack = stickyCombinedAa::BLACK_FRAMES;
+#endif
 }
 
 void PaperMonoDriver::initController(EpdBus& bus) {
   bus.cmd(CMD_SOFT_RESET);
+#if FREEINK_STICKY_COMBINED_AA
+  delay(10);  // Match Sticky's reset settle before sampling BUSY.
+#endif
   bus.waitBusy("PaperMono reset");
   _controllerPowered = false;
   _lutState = LutState::Unknown;
@@ -253,10 +272,20 @@ void PaperMonoDriver::setRamWindow(EpdBus& bus, uint16_t x, uint16_t y, uint16_t
   // Paper Mono uses X-/Y+ data entry. Reversing each source row already
   // aligns framebuffer X with controller X; mirroring the RAM X range again
   // moves the driven rectangle to WIDTH-x-w. Only Y needs the mount flip.
+#if FREEINK_STICKY_COMBINED_AA
+  // Match Sticky's existing X+/Y- controller layout with untransformed bytes.
+  bus.cmd(0x11);
+  bus.data(0x01);
+  const uint16_t xStart = x;
+  const uint16_t xEnd = static_cast<uint16_t>(x + w - 1);
+  const uint16_t yStart = static_cast<uint16_t>(HEIGHT - 1 - y);
+  const uint16_t yEnd = static_cast<uint16_t>(HEIGHT - y - h);
+#else
   const uint16_t xStart = static_cast<uint16_t>(x + w - 1);
   const uint16_t xEnd = x;
   const uint16_t yStart = static_cast<uint16_t>(HEIGHT - y - h);
   const uint16_t yEnd = static_cast<uint16_t>(HEIGHT - 1 - y);
+#endif
 
   bus.cmd(CMD_SET_RAM_X_RANGE);
   bus.data(static_cast<uint8_t>(xStart & 0xFF));
@@ -279,6 +308,10 @@ void PaperMonoDriver::setRamWindow(EpdBus& bus, uint16_t x, uint16_t y, uint16_t
 void PaperMonoDriver::restoreFullRamWindow(EpdBus& bus) { setRamWindow(bus, 0, 0, WIDTH, HEIGHT); }
 
 void PaperMonoDriver::resetRamCounter(EpdBus& bus) {
+#if FREEINK_STICKY_COMBINED_AA
+  restoreFullRamWindow(bus);
+  return;
+#endif
   const uint16_t xStart = WIDTH - 1;
   bus.cmd(CMD_SET_RAM_X_COUNTER);
   bus.data(static_cast<uint8_t>(xStart & 0xFF));
@@ -292,7 +325,8 @@ void PaperMonoDriver::writePlane(EpdBus& bus, uint8_t command, const uint8_t* da
   if (!data) return;
   resetRamCounter(bus);
   bus.cmd(command);
-  const bool rotate180 = BoardConfig::ACTIVE.orientation.mirrorX && BoardConfig::ACTIVE.orientation.mirrorY;
+  const bool rotate180 =
+      !FREEINK_STICKY_COMBINED_AA && BoardConfig::ACTIVE.orientation.mirrorX && BoardConfig::ACTIVE.orientation.mirrorY;
   if (!rotate180) {
     bus.data(data, static_cast<uint16_t>(BUFFER_SIZE));
     return;
@@ -348,6 +382,12 @@ void PaperMonoDriver::activate(EpdBus& bus, uint8_t control) {
 }
 
 void PaperMonoDriver::activateOtp(EpdBus& bus) {
+#if FREEINK_STICKY_COMBINED_AA
+  activate(bus, 0xFF);  // Sticky DU reloads OTP and powers down afterward.
+  _controllerPowered = false;
+  _lutState = LutState::OtpBw;
+  return;
+#endif
   const bool warm = _controllerPowered && _lutState == LutState::OtpBw;
   activate(bus, warm ? CTRL_DISPLAY_HOLD_WARM : CTRL_OTP_BW_HOLD);
   _controllerPowered = true;
@@ -382,17 +422,28 @@ void PaperMonoDriver::powerOffController(EpdBus& bus) {
 }
 
 void PaperMonoDriver::loadCustomLut(EpdBus& bus, const uint8_t lut[111]) {
+#if FREEINK_STICKY_COMBINED_AA
+  bus.cmd(0x3C);
+  bus.data(0x80);
+#endif
   bus.cmd(0x32);
   bus.data(lut, 105);
   // The analog registers are volatile across reset/deep-sleep, and the OTP
   // paths reload their own WS-bank values on every 0xFC trigger, so the custom
   // set must be re-asserted with the LUT every time.
   bus.cmd(0x03);
+#if FREEINK_STICKY_COMBINED_AA
+  bus.data(stickyCombinedAa::VOLTAGES[0]);
+  bus.cmdData(0x04, stickyCombinedAa::VOLTAGES + 1, 3);
+  bus.cmd(0x2C);
+  bus.data(stickyCombinedAa::VOLTAGES[4]);
+#else
   bus.data(VOLT_VGH);
   static constexpr uint8_t source[3] = {VOLT_VSH1, VOLT_VSH2, VOLT_VSL};
   bus.cmdData(0x04, source, sizeof(source));
   bus.cmd(0x2C);
   bus.data(VOLT_VCOM);
+#endif
   _lutState = LutState::Custom;
 }
 
@@ -613,8 +664,20 @@ bool PaperMonoDriver::runOtpUpdate(EpdBus& bus, const uint8_t* bwTarget, bool fo
   bus.data(0x80);  // VCOM border; do not let the custom LUT drive a dark rim.
   writePlane(bus, CMD_WRITE_NEW, bwTarget);
   writePlane(bus, CMD_WRITE_OLD, _sel26);
+#if FREEINK_STICKY_COMBINED_AA
+  if (forceAll) {
+    bus.cmd(0x3C);
+    bus.data(0x01);
+    activate(bus, 0xF7);
+    _controllerPowered = false;
+    _lutState = LutState::OtpBw;
+  } else {
+    activateOtp(bus);
+  }
+#else
   activateOtp(bus);
   runBootCleanPass(bus, bwTarget, _sel26);
+#endif
 
   for (uint32_t i = 0; i < BUFFER_SIZE; ++i) {
     const uint8_t black = static_cast<uint8_t>(~bwTarget[i]);
@@ -697,6 +760,12 @@ bool PaperMonoDriver::runUpdate(EpdBus& bus, const uint8_t* bwTarget, bool useGr
   writePlane(bus, CMD_WRITE_NEW, _sel24);
   writePlane(bus, CMD_WRITE_OLD, _sel26);
   loadCustomLut(bus, lut);
+#if FREEINK_STICKY_COMBINED_AA
+  if (!_controllerPowered) {
+    activate(bus, 0xC0);  // Settle Sticky's rails without driving any pixels.
+    _controllerPowered = true;
+  }
+#endif
   activate(bus, _controllerPowered ? CTRL_DISPLAY_HOLD_WARM : CTRL_CUSTOM_HOLD_COLD);
   _controllerPowered = true;
   // No boot-clean pass here: re-running the tri LUT is not direction-safe the
@@ -750,7 +819,8 @@ void PaperMonoDriver::stashTarget(const uint8_t* fb, RefreshMode mode) {
   if (!allocateBuffers()) return;
   memcpy(_pendingBw, fb, BUFFER_SIZE);
   _pendingTri = true;
-  _pendingCorrective = _needsFull || mode == RefreshMode::Full;
+  _pendingCorrective =
+      _needsFull || mode == RefreshMode::Full || (FREEINK_STICKY_COMBINED_AA && mode == RefreshMode::Half);
   _pendingGeneration = _renderGeneration;
 }
 
@@ -764,6 +834,9 @@ bool PaperMonoDriver::commitPending(EpdBus& bus, bool useGray) {
   }
   _pendingTri = false;
   const bool corrective = _pendingCorrective;
+#if FREEINK_STICKY_COMBINED_AA
+  if (corrective && useGray) runOtpUpdate(bus, _pendingBw, true);
+#endif
   const bool ran = runUpdate(bus, _pendingBw, useGray, corrective);
   if (ran) _needsFull = false;
   _pendingCorrective = false;
@@ -790,7 +863,8 @@ void PaperMonoDriver::display(EpdBus& bus, const uint8_t* fb, const uint8_t* pre
   }
   if (!allocateBuffers()) return;
 
-  const bool corrective = _needsFull || mode == RefreshMode::Full;
+  const bool corrective =
+      _needsFull || mode == RefreshMode::Full || (FREEINK_STICKY_COMBINED_AA && mode == RefreshMode::Half);
   if (!corrective && _lastBwValid && !_panelHasGray && !_grayLsbReady && !_grayMsbReady &&
       memcmp(_lastBw, fb, BUFFER_SIZE) == 0) {
     // UI screens deliberately re-render an identical frame once their async
@@ -814,7 +888,8 @@ void PaperMonoDriver::displayWindow(EpdBus& bus, const uint8_t* fb, const uint8_
   }
   if (!allocateBuffers()) return;
 
-  const bool rotate180 = BoardConfig::ACTIVE.orientation.mirrorX && BoardConfig::ACTIVE.orientation.mirrorY;
+  const bool rotate180 =
+      !FREEINK_STICKY_COMBINED_AA && BoardConfig::ACTIVE.orientation.mirrorX && BoardConfig::ACTIVE.orientation.mirrorY;
   if (!rotate180 || _needsFull || !_lastBwValid || _panelHasGray || _grayLsbReady || _grayMsbReady) {
     display(bus, fb, prev, RefreshMode::Fast, turnOff);
     return;
@@ -892,6 +967,7 @@ void PaperMonoDriver::seedPreviousFrame(EpdBus& bus, const uint8_t* buf) {
 }
 
 void PaperMonoDriver::displayGrayscaleBase(EpdBus& bus, const uint8_t* fb, RefreshMode fallback, bool turnOff) {
+  beginDisplayWork();
   _preparingGray = true;
   display(bus, fb, nullptr, fallback, turnOff);
   _preparingGray = false;
@@ -998,6 +1074,9 @@ void PaperMonoDriver::displayGray(EpdBus& bus, const uint8_t* fb, bool turnOff, 
                        _grayMsbGeneration == _renderGeneration;
   if (_pendingTri) {
     commitPending(bus, useGray);
+#if FREEINK_STICKY_COMBINED_AA
+    if (turnOff) powerOffController(bus);
+#endif
     return;
   }
   // No two-level target is outstanding (a caller displayed one separately).
@@ -1014,6 +1093,9 @@ void PaperMonoDriver::displayGray(EpdBus& bus, const uint8_t* fb, bool turnOff, 
   // the AA grays as a changed-pixels-only overlay: driving the full non-white
   // body a second time through the kick phases reads as a page-wide flash.
   runUpdate(bus, _lastBw, true, false, /*overlayOnly=*/true);
+#if FREEINK_STICKY_COMBINED_AA
+  if (turnOff) powerOffController(bus);
+#endif
   clearGrayStaging();
 }
 

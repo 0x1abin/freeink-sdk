@@ -37,6 +37,8 @@ struct PaperMonoGrayParams {
 
 class PaperMonoDriver final : public PanelDriver {
  public:
+  // Eight 48 KB planes are reused for the driver's lifetime, exclusively in PSRAM.
+  bool prepareBuffers() { return allocateBuffers(); }
   uint32_t spiHz() const override;
   BusyPolarity busyPolarity() const override { return BusyPolarity::ActiveHigh; }
   PanelGeometry geometry() const override;

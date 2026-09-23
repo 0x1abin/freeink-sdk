@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include <cstring>
+#define DRAM_ATTR
 #define PROGMEM
 inline uint8_t pgm_read_byte(const unsigned char* p) { return *p; }
 inline uint32_t ticks = 0;
