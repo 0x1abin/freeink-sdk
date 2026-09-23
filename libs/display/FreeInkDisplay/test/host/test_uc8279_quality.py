@@ -7,7 +7,7 @@ import tempfile
 
 root = Path(__file__).resolve().parents[2]
 source = (root / "src/driver/Uc8279X4Driver.cpp").read_text()
-function = source[source.index("const uint8_t (*scaledQualityBank()"):
+function = source[source.index("struct GrayBank"):
                   source.index("// Register order for the quality bank")]
 # Byte-for-byte output of upstream 14028b17 before packing Phase's bounded fields.
 expected = {
@@ -27,8 +27,7 @@ using namespace freeink;
 constexpr uint8_t GRAY_LUT_LEN = 49;
 """ + function + """
 int main() {
-  const auto* bank = scaledQualityBank();
-  assert(bank == scaledQualityBank());
+  const auto* bank = kQualityBank.data;
   std::fwrite(bank, 1, 5 * GRAY_LUT_LEN, stdout);
 }
 """

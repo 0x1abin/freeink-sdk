@@ -23,6 +23,9 @@ class EpdBus {
       ++activation;
     }
   }
+  void beginTxn() {}
+  void endTxn() {}
+  void rawWriteBytes(const uint8_t* p, uint16_t n) { data(p, n); }
   void data(uint8_t b) { events.back().bytes.push_back(b); }
   void data(const uint8_t* p, uint16_t n) { events.back().bytes.insert(events.back().bytes.end(), p, p + n); }
   void waitBusy(const char*) {

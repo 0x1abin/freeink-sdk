@@ -15,6 +15,9 @@ def run_trace(source=None, includes=()):
         for name in ("driver", "lut"):
             shutil.copytree(DISPLAY / "src" / name, tmp / name)
         shutil.copytree(HERE / "ssd1677_stubs", tmp, dirs_exist_ok=True)
+        shutil.copy2(DISPLAY / "include/GrayscaleCapabilities.h", tmp / "GrayscaleCapabilities.h")
+        panel = tmp / "driver/PanelDriver.h"
+        panel.write_text(panel.read_text().replace("../../include/GrayscaleCapabilities.h", "../GrayscaleCapabilities.h"))
         command = ["c++", "-std=c++17", "-I", str(tmp), "-I", str(HERE),
                    "-I", str(DISPLAY / "include"), "-I",
                    str(DISPLAY.parents[1] / "hardware/BoardConfig/include")]
