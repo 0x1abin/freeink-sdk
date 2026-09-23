@@ -126,18 +126,20 @@ void InputManager::begin() {
 
   const int8_t pins[] = {BoardConfig::ACTIVE.input.back, BoardConfig::ACTIVE.input.confirm,
                          BoardConfig::ACTIVE.input.left, BoardConfig::ACTIVE.input.right,
-                         BoardConfig::ACTIVE.input.up,   BoardConfig::ACTIVE.input.down,
-                         BoardConfig::ACTIVE.input.power};
+                         BoardConfig::ACTIVE.input.up,   BoardConfig::ACTIVE.input.down};
   for (const int8_t pin : pins) {
     if (pin >= 0) {
       pinMode(pin, INPUT_PULLUP);
     }
   }
-#if FREEINK_DEVICE_EEGO_A4
-  if (BoardConfig::ACTIVE.board == BoardConfig::Board::EegoA4 && BoardConfig::ACTIVE.input.power >= 0) {
+  // Power follows its declared polarity, as in the ladder branch above. An
+  // active-high button (EEGO A4) needs INPUT_PULLDOWN: the unconditional
+  // pull-up fights its weak external pull-down into mid-rail phantom presses.
+  // Configured after the loop so a pin shared with a button (all such boards
+  // are active-low) resolves to the same INPUT_PULLUP either way.
+  if (BoardConfig::ACTIVE.input.power >= 0) {
     pinMode(BoardConfig::ACTIVE.input.power, BoardConfig::ACTIVE.input.powerActiveHigh ? INPUT_PULLDOWN : INPUT_PULLUP);
   }
-#endif
   beginTouch();
 }
 
@@ -237,6 +239,7 @@ void InputManager::beginAsync(const uint8_t taskPriority, const uint32_t pollMs,
   _asyncSwipeQueue = xQueueCreate(queueLen, sizeof(float) * 4);
   _asyncMultiTouchSwipeQueue = xQueueCreate(queueLen, sizeof(QueuedMultiTouchSwipe));
   _asyncMultiTouchRotationQueue = xQueueCreate(queueLen, sizeof(QueuedMultiTouchRotation));
+  _asyncMultiTouchPinchQueue = xQueueCreate(queueLen, sizeof(QueuedMultiTouchPinch));
   xTaskCreate(asyncTaskTrampoline, "fi_input", 4096, this, taskPriority, &_asyncTask);
 }
 
@@ -267,6 +270,11 @@ void InputManager::asyncPoll() {
       const QueuedMultiTouchRotation rotation = {multiTouchRotationDegrees, multiTouchRotationCenterX,
                                                  multiTouchRotationCenterY, multiTouchRotationDurationMs};
       xQueueSend(_asyncMultiTouchRotationQueue, &rotation, 0);
+    }
+    if (_asyncMultiTouchPinchQueue && multiTouchPinchEvent && !touchSuppressed) {
+      const QueuedMultiTouchPinch pinch = {multiTouchPinchScale, multiTouchPinchCenterX, multiTouchPinchCenterY,
+                                           multiTouchPinchDurationMs};
+      xQueueSend(_asyncMultiTouchPinchQueue, &pinch, 0);
     }
     vTaskDelay(pdMS_TO_TICKS(_asyncPollMs));
   }
@@ -319,6 +327,16 @@ bool InputManager::popMultiTouchRotation(float& degrees, float& nxCenter, float&
   return true;
 }
 
+bool InputManager::popMultiTouchPinch(float& scale, float& nxCenter, float& nyCenter, unsigned long& durationMs) {
+  if (!_asyncMultiTouchPinchQueue) return false;
+  QueuedMultiTouchPinch pinch{};
+  if (xQueueReceive(_asyncMultiTouchPinchQueue, &pinch, 0) != pdTRUE) return false;
+  scale = pinch.scale;
+  normalizeTouchPoint(pinch.centerX, pinch.centerY, nxCenter, nyCenter);
+  durationMs = pinch.durationMs;
+  return true;
+}
+
 bool InputManager::isDigitalPressed(const int8_t pin) const { return pin >= 0 && digitalRead(pin) == LOW; }
 
 uint8_t InputManager::getDigitalState() const {
@@ -334,22 +352,8 @@ uint8_t InputManager::getDigitalState() const {
   if (isDigitalPressed(BoardConfig::ACTIVE.input.right)) state |= (1 << BTN_RIGHT);
   if (isDigitalPressed(BoardConfig::ACTIVE.input.up)) state |= (1 << BTN_UP);
   if (isDigitalPressed(BoardConfig::ACTIVE.input.down)) state |= (1 << BTN_DOWN);
-#if FREEINK_DEVICE_EEGO_A4
-  if (BoardConfig::ACTIVE.board == BoardConfig::Board::EegoA4) {
-    // A4 power key: self-contained polarity-aware read. The generic
-    // LOW-active fallback below must never see A4's idle pull-down level —
-    // it would report the un-pressed key as held forever (root cause of the
-    // 4508ms boot-time sleep on 118aa1e0). Non-A4 boards keep upstream logic.
-    if (BoardConfig::ACTIVE.input.power >= 0 &&
-        digitalRead(BoardConfig::ACTIVE.input.power) ==
-            (BoardConfig::ACTIVE.input.powerActiveHigh ? HIGH : LOW) &&
-        BoardConfig::ACTIVE.inputStyle != BoardConfig::InputStyle::DigitalConfirmBackHold &&
-        BoardConfig::ACTIVE.inputStyle != BoardConfig::InputStyle::DigitalConfirmPowerHold) {
-      state |= (1 << BTN_POWER);
-    }
-  } else
-#endif
-  if (isDigitalPressed(BoardConfig::ACTIVE.input.power) &&
+  // Power reads at its declared polarity (isDigitalPressed assumes active-low).
+  if (isPowerButtonPhysicallyPressed() &&
       BoardConfig::ACTIVE.inputStyle != BoardConfig::InputStyle::DigitalConfirmBackHold &&
       BoardConfig::ACTIVE.inputStyle != BoardConfig::InputStyle::DigitalConfirmPowerHold) {
     state |= (1 << BTN_POWER);
@@ -586,6 +590,7 @@ void InputManager::update() {
   touchLongPressEvent = false;
   multiTouchSwipeEvent = false;
   multiTouchRotationEvent = false;
+  multiTouchPinchEvent = false;
   touchHomeKeyEvent = false;
   touchHomeKeyTapEvent = false;
   touchHomeKeyLongEvent = false;
@@ -887,6 +892,22 @@ bool InputManager::wasMultiTouchRotation(float& degrees, float& nxCenter, float&
 #endif
 }
 
+bool InputManager::wasMultiTouchPinch(float& scale, float& nxCenter, float& nyCenter, unsigned long& durationMs) const {
+#if FREEINK_CAP_TOUCH
+  if (!multiTouchPinchEvent || touchSuppressed) return false;
+  scale = multiTouchPinchScale;
+  normalizeTouchPoint(multiTouchPinchCenterX, multiTouchPinchCenterY, nxCenter, nyCenter);
+  durationMs = multiTouchPinchDurationMs;
+  return true;
+#else
+  (void)scale;
+  (void)nxCenter;
+  (void)nyCenter;
+  (void)durationMs;
+  return false;
+#endif
+}
+
 bool InputManager::wasTouchLongPress(float& nx, float& ny) const {
 #if FREEINK_CAP_TOUCH
   if (!touchLongPressEvent || touchMultiContactSequence) return false;
@@ -916,6 +937,7 @@ void InputManager::suppressTouchContact() {
   cancelMultiTouchGesture();
   if (_asyncMultiTouchSwipeQueue) xQueueReset(_asyncMultiTouchSwipeQueue);
   if (_asyncMultiTouchRotationQueue) xQueueReset(_asyncMultiTouchRotationQueue);
+  if (_asyncMultiTouchPinchQueue) xQueueReset(_asyncMultiTouchPinchQueue);
 #endif
 }
 
@@ -973,6 +995,7 @@ void InputManager::resetMultiTouchGesture() {
 void InputManager::cancelMultiTouchGesture() {
   multiTouchSwipeEvent = false;
   multiTouchRotationEvent = false;
+  multiTouchPinchEvent = false;
   multiTouchGestureState =
       (touchPressed || touchReleasedEvent) ? MultiTouchGestureState::Blocked : MultiTouchGestureState::Idle;
 }
@@ -1177,8 +1200,35 @@ bool InputManager::classifyMultiTouchRotation(const unsigned long now) {
   return true;
 }
 
+bool InputManager::classifyMultiTouchPinch(const unsigned long now) {
+  if (trackedTouchContactCount != 2 || now - multiTouchContacts[0].start.timestamp > TOUCH_MULTI_SWIPE_MAX_MS) {
+    return false;
+  }
+
+  const auto toGesturePoint = [](const TouchPoint& point) {
+    return freeink::input_detail::GesturePoint{point.x, point.y};
+  };
+  freeink::input_detail::PinchResult result;
+  if (!freeink::input_detail::classifyPinch(
+          toGesturePoint(multiTouchContacts[0].start), toGesturePoint(multiTouchContacts[1].start),
+          toGesturePoint(multiTouchContacts[0].last), toGesturePoint(multiTouchContacts[1].last), result)) {
+    return false;
+  }
+
+  multiTouchPinchScale = result.scale;
+  multiTouchPinchCenterX = result.centerX;
+  multiTouchPinchCenterY = result.centerY;
+  multiTouchPinchDurationMs = static_cast<uint16_t>(now - multiTouchContacts[0].start.timestamp);
+  multiTouchPinchEvent = true;
+  return true;
+}
+
 void InputManager::finishMultiTouchGesture(const unsigned long now) {
   if (classifyMultiTouchRotation(now)) {
+    multiTouchGestureState = MultiTouchGestureState::Blocked;
+    return;
+  }
+  if (classifyMultiTouchPinch(now)) {
     multiTouchGestureState = MultiTouchGestureState::Blocked;
     return;
   }

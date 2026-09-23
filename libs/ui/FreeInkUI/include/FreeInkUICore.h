@@ -1,5 +1,7 @@
 #pragma once
 
+#define FREEINK_UI_THEME_LAYOUT_POLICY 1
+
 // FreeInk SDK — lightweight UI primitives.
 //
 // FreeInkUI is intentionally not a retained DOM. It provides small value types,
@@ -643,7 +645,12 @@ inline uint8_t resolveRadius(const uint8_t propRadius, const uint8_t fallback) {
   return propRadius == RADIUS_INHERIT ? fallback : propRadius;
 }
 
+// Content sizing is the upstream default; ThemeRow preserves an explicit theme grid.
+enum class ListLayoutPolicy : uint8_t { Content, ThemeRow };
+enum class TextCentering : uint8_t { InkBounds, Advance };
+
 struct ThemeTokens {
+  ListLayoutPolicy listLayoutPolicy = ListLayoutPolicy::Content;
   FontId fontSmall = 0;
   FontId fontBody = 0;
   FontId fontTitle = 0;
@@ -656,9 +663,15 @@ struct ThemeTokens {
   int16_t headerHeight = 44;
   int16_t footerHeight = 40;
   int16_t progressHeight = 4;
-  // List shape tokens: the theme supplies geometry (gaps, radii, insets)
-  // while rowHeight and text sizes derive from the bound fonts. Screen::list()
-  // forwards these into any ListProps field left at its inherit sentinel.
+  // Lists size each row from its content, separately from generic controls.
+  // An optional minimum supports deliberately spacious list themes.
+  int16_t listMinRowHeight = 0;
+  int16_t listRowPaddingY = 4;
+  // Touch comfort is distinct from the minimum valid hit-target size.
+  int16_t listTouchMinRowHeight = 56;
+  int16_t listTouchRowPaddingY = 8;
+  int16_t listTouchRowGap = 6;
+  // List shape tokens forwarded by Screen::resolveListProps().
   int16_t listRowGap = 0;
   uint8_t listRowRadius = 0;
   int16_t listSidePadding = 8; // text inset within a row
@@ -715,6 +728,10 @@ struct ThemeDocument {
 class DrawTarget {
 public:
   virtual ~DrawTarget() = default;
+  // Optional pixel clipping in logical coordinates. Unsupported targets return
+  // false; components must then omit partially visible content.
+  virtual Rect clipRect() const { return Rect{0, 0, 32767, 32767}; }
+  virtual bool setClipRect(Rect) { return false; }
   virtual Size measureText(FontId font, const char *text,
                            TextStyle style) const = 0;
   virtual int16_t lineHeight(FontId font) const = 0;
@@ -955,6 +972,9 @@ public:
 
   void setEnabled(bool enabled) { enabled_ = enabled; }
   bool enabled() const { return enabled_; }
+
+  Rect clipRect() const override { return inner_.clipRect(); }
+  bool setClipRect(Rect rect) override { return inner_.setClipRect(rect); }
 
   Size measureText(FontId font, const char *text,
                    TextStyle style) const override {
@@ -1724,6 +1744,9 @@ inline void setStyleRadius(StyleSet &styles, uint8_t radius) {
   styles.disabled.radius = radius;
 }
 
+// Lucide's delete icon at the keyboard's native display size. Keeping the
+// raster at its rendered size avoids the jagged edges caused by enlarging the
+// old 16px mask with nearest-neighbor scaling.
 inline BitmapRef lucideDeleteIcon16() {
   static constexpr uint8_t bits[] = {
       0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xF8, 0x01, 0xF3, 0xFD, 0xE7,
@@ -1731,6 +1754,22 @@ inline BitmapRef lucideDeleteIcon16() {
       0xF3, 0xFD, 0xF8, 0x01, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
   };
   return BitmapRef{bits, 16, 16, BitmapFormat::Mask1};
+}
+
+inline BitmapRef lucideDeleteIcon28() {
+  static constexpr uint8_t bits[] = {
+      0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+      0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xC0, 0x00, 0x7F,
+      0xFF, 0x00, 0x00, 0x3F, 0xFE, 0x1F, 0xFF, 0x1F, 0xFC, 0x7F, 0xFF, 0x9F,
+      0xF8, 0xFF, 0xFF, 0x9F, 0xF1, 0xF8, 0xE3, 0x9F, 0xE3, 0xF8, 0x43, 0x9F,
+      0xC7, 0xFC, 0x07, 0x9F, 0x8F, 0xFE, 0x0F, 0x9F, 0x8F, 0xFE, 0x0F, 0x9F,
+      0xC7, 0xFC, 0x07, 0x9F, 0xE3, 0xF8, 0x43, 0x9F, 0xF1, 0xF8, 0xE3, 0x9F,
+      0xF8, 0xFF, 0xFF, 0x9F, 0xFC, 0x7F, 0xFF, 0x9F, 0xFE, 0x1F, 0xFF, 0x1F,
+      0xFF, 0x00, 0x00, 0x3F, 0xFF, 0xC0, 0x00, 0x7F, 0xFF, 0xFF, 0xFF, 0xFF,
+      0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
+      0xFF, 0xFF, 0xFF, 0xFF,
+  };
+  return BitmapRef{bits, 28, 28, BitmapFormat::Mask1};
 }
 
 // Lucide's globe at 32px, the size the key sizer lands on for a keyboard row.
