@@ -38,6 +38,7 @@ struct PaperMonoGrayParams {
 class PaperMonoDriver final : public PanelDriver {
  public:
   // Eight 48 KB planes are reused for the driver's lifetime, exclusively in PSRAM.
+  void setOriginalDriver(PanelDriver* driver) { _originalDriver = driver; }
   bool prepareBuffers() { return allocateBuffers(); }
   uint32_t spiHz() const override;
   BusyPolarity busyPolarity() const override { return BusyPolarity::ActiveHigh; }
@@ -102,6 +103,10 @@ class PaperMonoDriver final : public PanelDriver {
     uint8_t postCleanCycles = 0;  // retired; nonzero only for lab experiments
   };
 
+  PanelDriver* _originalDriver = nullptr;
+  RefreshMode _pendingMode = RefreshMode::Fast;
+  bool _ioFailed = false;
+  bool checkIdle(EpdBus& bus);
   bool allocateBuffers();
   void initController(EpdBus& bus);
   // Re-runs the just-finished drive (planes rewritten, then re-trigger) while

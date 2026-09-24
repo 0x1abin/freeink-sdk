@@ -26,8 +26,8 @@ int main() {
   assert(d.prepareBuffers());
   const int allocated = allocationCalls;
   assert(d.prepareBuffers() && allocationCalls == allocated);
-  BoardConfig::ACTIVE.orientation.mirrorX = !FREEINK_STICKY_COMBINED_AA;
-  BoardConfig::ACTIVE.orientation.mirrorY = !FREEINK_STICKY_COMBINED_AA;
+  BoardConfig::ACTIVE.orientation.mirrorX = !FREEINK_SSD1677_TEXT_ROUTING;
+  BoardConfig::ACTIVE.orientation.mirrorY = !FREEINK_SSD1677_TEXT_ROUTING;
   EpdBus bus;
   d.begin(bus);
   std::array<uint8_t, 48000> bw, gray{}, empty{};
@@ -35,7 +35,7 @@ int main() {
   bw[0] = 0x7F;
   bw.back() = 0xFE;
   d.display(bus, bw.data(), nullptr, Mode::Full, false);
-#if FREEINK_STICKY_COMBINED_AA
+#if FREEINK_SSD1677_TEXT_ROUTING
   assert(bus.sequences() == std::vector<uint8_t>{0xF7});
   assert(bus.last(0x11) == std::vector<uint8_t>{0x01});
   assert(bus.last(0x4E) == (std::vector<uint8_t>{0, 0}));
@@ -67,7 +67,7 @@ int main() {
   assert(pixelRefreshes(bus) == 1);
   assert(bus.last(0x32).size() == 105);
   const auto selectors = bus.last(0x24);
-#if FREEINK_STICKY_COMBINED_AA
+#if FREEINK_SSD1677_TEXT_ROUTING
   assert(selectors[200] == 0xFF);        // black -> target class 3
   assert((selectors[101] & 0x40) == 0);  // gray -> target class 2
 #endif
@@ -88,7 +88,7 @@ int main() {
   d.cleanupGrayscaleBuffers(bus, bw.data());
   assert(pixelRefreshes(bus) >= 1 && bus.last(0x32).empty());
 
-#if FREEINK_STICKY_COMBINED_AA
+#if FREEINK_SSD1677_TEXT_ROUTING
   // HALF/manual cleanup retains a real F7 even with gray submitted afterwards.
   bus.clear();
   d.displayGrayscaleBase(bus, bw.data(), Mode::Half, false);
@@ -107,14 +107,39 @@ int main() {
   d.copyGrayscaleLsb(bus, gray.data());
   d.copyGrayscaleMsb(bus, empty.data());
   d.displayGray(bus, bw.data(), true, nullptr, false);
-#if FREEINK_STICKY_COMBINED_AA
+#if FREEINK_SSD1677_TEXT_ROUTING
   assert(bus.sequences().back() == 0x03);
 #endif
   d.deepSleep(bus);
   bus.clear();
   d.display(bus, bw.data(), nullptr, Mode::Fast, false);
-#if FREEINK_STICKY_COMBINED_AA
+#if FREEINK_SSD1677_TEXT_ROUTING
   assert(bus.sequences() == std::vector<uint8_t>{0xF7});
+#endif
+  // A BUSY timeout at the gray activation cannot commit or issue power-off.
+  bus.clear();
+  bw[500] = 0;
+  d.displayGrayscaleBase(bus, bw.data(), Mode::Fast, false);
+  d.copyGrayscaleLsb(bus, gray.data());
+  d.copyGrayscaleMsb(bus, empty.data());
+  bus.failAt = bus.activation + 1;
+  d.displayGray(bus, bw.data(), true, nullptr, false);
+  assert(bus.isBusy() && !d.displayCommitted());
+  const auto eventsAfterFailure = bus.events.size();
+  d.cleanupGrayscaleBuffers(bus, bw.data());
+  d.controllerIdle(bus);
+  d.deepSleep(bus);
+  assert(bus.events.size() == eventsAfterFailure + 1);  // deepSleep waits, but never writes
+  bus.failAt = 0;
+  bus.busy = false;
+  bus.clear();
+  d.displayGrayscaleBase(bus, bw.data(), Mode::Fast, false);
+  d.copyGrayscaleLsb(bus, gray.data());
+  d.copyGrayscaleMsb(bus, empty.data());
+  d.displayGray(bus, bw.data(), false, nullptr, false);
+  assert(d.displayCommitted());
+#if FREEINK_SSD1677_TEXT_ROUTING
+  assert(bus.sequences().front() == 0xF7);  // recovered page resynchronizes
 #endif
   assert(allocationCalls == allocated);  // no per-page allocations
 }

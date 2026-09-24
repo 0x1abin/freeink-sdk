@@ -7,7 +7,7 @@
 #include <array>
 #include <cstring>
 
-#include "../lut/StickyCombinedAa.h"
+#include "../lut/Ssd1677CombinedAa.h"
 
 namespace freeink {
 namespace {
@@ -44,7 +44,11 @@ constexpr uint8_t VS_WEAK = 0x03;   // VSH2, +5 V
 
 // Frame-rate code 0x08 is 5000 us/frame, the fastest the controller offers.
 // Every timing in this file is expressed in those frames.
+#if FREEINK_SSD1677_TEXT_ROUTING
+const uint8_t FRAME_RATE_CODE = combinedAa::calibration().frameRate;
+#else
 constexpr uint8_t FRAME_RATE_CODE = 0x08;
+#endif
 
 // Lab-validated analog set for this glass, written on every custom LUT load
 // exactly like the panel lab's loadLut(). The whole tone model -- the 10-frame
@@ -162,7 +166,7 @@ void paperMonoResetGray() { paperMonoDriver().resetGray(); }
 
 uint32_t PaperMonoDriver::spiHz() const {
   return BoardConfig::ACTIVE.displaySpiHz != 0 ? BoardConfig::ACTIVE.displaySpiHz
-                                               : (FREEINK_STICKY_COMBINED_AA ? 40000000 : 20000000);
+                                               : (FREEINK_SSD1677_TEXT_ROUTING ? 40000000 : 20000000);
 }
 
 PanelGeometry PaperMonoDriver::geometry() const { return {WIDTH, HEIGHT, WIDTH_BYTES, BUFFER_SIZE}; }
@@ -183,7 +187,8 @@ bool PaperMonoDriver::allocateBuffers() {
     memset(_glassBlack, 0, BUFFER_SIZE);
   }
   if (!ok) {
-    // Free a partial attempt before the facade selects the original Sticky driver.
+    esp_rom_printf("SSD1677 combined AA: PSRAM allocation failed (8 x 48000 bytes); releasing partial buffers\n");
+    // Free a partial attempt before the facade selects the original driver.
     for (uint8_t** ptr :
          {&_lastBw, &_pendingBw, &_grayLsb, &_grayMsb, &_glassNonWhite, &_glassBlack, &_sel24, &_sel26}) {
       heap_caps_free(*ptr);
@@ -194,16 +199,18 @@ bool PaperMonoDriver::allocateBuffers() {
 }
 
 void PaperMonoDriver::begin(EpdBus& bus) {
-  allocateBuffers();
+  if (!allocateBuffers() || !checkIdle(bus)) return;
+  _ioFailed = false;
   bus.reset();
   initController(bus);
+  if (!checkIdle(bus)) return;
   _needsFull = true;
   // The first paints after boot (splash, then whatever replaces it — the one
   // that must erase the dwelled logo) each get extra drive passes so pre-boot
   // and splash residue doesn't ghost through (see runBootCleanPass()). Three
   // paints so an intermediate progress paint can't exhaust the budget before
   // the home screen lands.
-  _bootCleanPaints = FREEINK_STICKY_COMBINED_AA ? 0 : 3;
+  _bootCleanPaints = FREEINK_SSD1677_TEXT_ROUTING ? 0 : 3;
   _lastBwValid = false;
   _abortGeneration.store(0);
   _displayWorkGeneration = 0;
@@ -211,19 +218,20 @@ void PaperMonoDriver::begin(EpdBus& bus) {
   _lutState = LutState::Unknown;
   _windowBaselineValid = false;
   resetGray();
-#if FREEINK_STICKY_COMBINED_AA
-  _tri.preUp = stickyCombinedAa::KICK_FRAMES;
-  _tri.tGray = stickyCombinedAa::GRAY_FRAMES;
-  _tri.tBlack = stickyCombinedAa::BLACK_FRAMES;
+#if FREEINK_SSD1677_TEXT_ROUTING
+  _tri.preUp = combinedAa::calibration().kick;
+  _tri.tGray = combinedAa::calibration().gray;
+  _tri.tBlack = combinedAa::calibration().black;
 #endif
 }
 
 void PaperMonoDriver::initController(EpdBus& bus) {
   bus.cmd(CMD_SOFT_RESET);
-#if FREEINK_STICKY_COMBINED_AA
+#if FREEINK_SSD1677_TEXT_ROUTING
   delay(10);  // Match Sticky's reset settle before sampling BUSY.
 #endif
   bus.waitBusy("PaperMono reset");
+  if (!checkIdle(bus)) return;
   _controllerPowered = false;
   _lutState = LutState::Unknown;
   _windowBaselineValid = false;
@@ -236,7 +244,7 @@ void PaperMonoDriver::initController(EpdBus& bus) {
   bus.cmd(0x01);
   bus.data(static_cast<uint8_t>((HEIGHT - 1) & 0xFF));
   bus.data(static_cast<uint8_t>((HEIGHT - 1) >> 8));
-  bus.data(0x02);
+  bus.data(FREEINK_SSD1677_TEXT_ROUTING && BoardConfig::ACTIVE.orientation.mirrorY ? 0x03 : 0x02);
   // Keep the border on VCOM, as used by the panel-lab characterisation. On the
   // SSD1677 A[7:6]=10 means VCOM; actual HiZ would be 0xC0.
   bus.cmd(0x3C);
@@ -272,12 +280,13 @@ void PaperMonoDriver::setRamWindow(EpdBus& bus, uint16_t x, uint16_t y, uint16_t
   // Paper Mono uses X-/Y+ data entry. Reversing each source row already
   // aligns framebuffer X with controller X; mirroring the RAM X range again
   // moves the driven rectangle to WIDTH-x-w. Only Y needs the mount flip.
-#if FREEINK_STICKY_COMBINED_AA
+#if FREEINK_SSD1677_TEXT_ROUTING
   // Match Sticky's existing X+/Y- controller layout with untransformed bytes.
   bus.cmd(0x11);
-  bus.data(0x01);
-  const uint16_t xStart = x;
-  const uint16_t xEnd = static_cast<uint16_t>(x + w - 1);
+  const bool mirrorX = BoardConfig::ACTIVE.orientation.mirrorX;
+  bus.data(mirrorX ? 0x00 : 0x01);
+  const uint16_t xStart = mirrorX ? static_cast<uint16_t>(x + w - 1) : x;
+  const uint16_t xEnd = mirrorX ? x : static_cast<uint16_t>(x + w - 1);
   const uint16_t yStart = static_cast<uint16_t>(HEIGHT - 1 - y);
   const uint16_t yEnd = static_cast<uint16_t>(HEIGHT - y - h);
 #else
@@ -308,7 +317,7 @@ void PaperMonoDriver::setRamWindow(EpdBus& bus, uint16_t x, uint16_t y, uint16_t
 void PaperMonoDriver::restoreFullRamWindow(EpdBus& bus) { setRamWindow(bus, 0, 0, WIDTH, HEIGHT); }
 
 void PaperMonoDriver::resetRamCounter(EpdBus& bus) {
-#if FREEINK_STICKY_COMBINED_AA
+#if FREEINK_SSD1677_TEXT_ROUTING
   restoreFullRamWindow(bus);
   return;
 #endif
@@ -325,8 +334,8 @@ void PaperMonoDriver::writePlane(EpdBus& bus, uint8_t command, const uint8_t* da
   if (!data) return;
   resetRamCounter(bus);
   bus.cmd(command);
-  const bool rotate180 =
-      !FREEINK_STICKY_COMBINED_AA && BoardConfig::ACTIVE.orientation.mirrorX && BoardConfig::ACTIVE.orientation.mirrorY;
+  const bool rotate180 = !FREEINK_SSD1677_TEXT_ROUTING && BoardConfig::ACTIVE.orientation.mirrorX &&
+                         BoardConfig::ACTIVE.orientation.mirrorY;
   if (!rotate180) {
     bus.data(data, static_cast<uint16_t>(BUFFER_SIZE));
     return;
@@ -371,7 +380,19 @@ void PaperMonoDriver::writePlaneWindow(EpdBus& bus, uint8_t command, const uint8
   bus.endTxn();
 }
 
+bool PaperMonoDriver::checkIdle(EpdBus& bus) {
+  if (!bus.isBusy()) return true;
+  if (!_ioFailed) esp_rom_printf("SSD1677 combined AA: BUSY timeout; resync required\n");
+  _ioFailed = true;
+  _needsFull = true;
+  _lastBwValid = false;
+  _windowBaselineValid = false;
+  _displayCommitted = false;
+  return false;
+}
+
 void PaperMonoDriver::activate(EpdBus& bus, uint8_t control) {
+  if (!checkIdle(bus)) return;
   // An activation may swap or consume the controller plane roles. A future
   // window update must not trust them until they are explicitly re-seeded.
   _windowBaselineValid = false;
@@ -379,17 +400,20 @@ void PaperMonoDriver::activate(EpdBus& bus, uint8_t control) {
   bus.data(control);
   bus.cmd(0x20);
   bus.waitRefreshComplete("PaperMono refresh");
+  checkIdle(bus);
 }
 
 void PaperMonoDriver::activateOtp(EpdBus& bus) {
-#if FREEINK_STICKY_COMBINED_AA
+#if FREEINK_SSD1677_TEXT_ROUTING
   activate(bus, 0xFF);  // Sticky DU reloads OTP and powers down afterward.
+  if (!checkIdle(bus)) return;
   _controllerPowered = false;
   _lutState = LutState::OtpBw;
   return;
 #endif
   const bool warm = _controllerPowered && _lutState == LutState::OtpBw;
   activate(bus, warm ? CTRL_DISPLAY_HOLD_WARM : CTRL_OTP_BW_HOLD);
+  if (!checkIdle(bus)) return;
   _controllerPowered = true;
   _lutState = LutState::OtpBw;
 }
@@ -412,19 +436,28 @@ void PaperMonoDriver::runBootCleanPass(EpdBus& bus, const uint8_t* newPlane, con
     writePlane(bus, CMD_WRITE_NEW, newPlane);
     writePlane(bus, CMD_WRITE_OLD, oldPlane);
     activate(bus, CTRL_DISPLAY_HOLD_WARM);
+    if (!checkIdle(bus)) return;
   }
 }
 
 void PaperMonoDriver::powerOffController(EpdBus& bus) {
   if (!_controllerPowered) return;
+#if FREEINK_SSD1677_TEXT_ROUTING
+  if (!checkIdle(bus)) return;
+  bus.cmd(0x3C);
+  bus.data(0x80);
+  activate(bus, combinedAa::calibration().powerOff);
+#else
   activate(bus, CTRL_POWER_OFF);
+#endif
+  if (!checkIdle(bus)) return;
   _controllerPowered = false;
 }
 
 void PaperMonoDriver::loadCustomLut(EpdBus& bus, const uint8_t lut[111]) {
-#if FREEINK_STICKY_COMBINED_AA
+#if FREEINK_SSD1677_TEXT_ROUTING
   bus.cmd(0x3C);
-  bus.data(0x80);
+  bus.data(combinedAa::calibration().border);
 #endif
   bus.cmd(0x32);
   bus.data(lut, 105);
@@ -432,11 +465,11 @@ void PaperMonoDriver::loadCustomLut(EpdBus& bus, const uint8_t lut[111]) {
   // paths reload their own WS-bank values on every 0xFC trigger, so the custom
   // set must be re-asserted with the LUT every time.
   bus.cmd(0x03);
-#if FREEINK_STICKY_COMBINED_AA
-  bus.data(stickyCombinedAa::VOLTAGES[0]);
-  bus.cmdData(0x04, stickyCombinedAa::VOLTAGES + 1, 3);
+#if FREEINK_SSD1677_TEXT_ROUTING
+  bus.data(combinedAa::calibration().voltages[0]);
+  bus.cmdData(0x04, combinedAa::calibration().voltages + 1, 3);
   bus.cmd(0x2C);
-  bus.data(stickyCombinedAa::VOLTAGES[4]);
+  bus.data(combinedAa::calibration().voltages[4]);
 #else
   bus.data(VOLT_VGH);
   static constexpr uint8_t source[3] = {VOLT_VSH1, VOLT_VSH2, VOLT_VSL};
@@ -603,10 +636,11 @@ uint16_t PaperMonoDriver::makeTriLut(uint8_t out[111], bool bgTopUp) const {
 // definite. `forceAll` does the same for every pixel when the glass history is
 // unknown or the caller explicitly requests a full resync.
 bool PaperMonoDriver::runOtpUpdate(EpdBus& bus, const uint8_t* bwTarget, bool forceAll) {
-  if (!bwTarget || !allocateBuffers()) return false;
+  if (!bwTarget || !allocateBuffers() || !checkIdle(bus)) return false;
   if (!_initialized) {
     bus.reset();
     initController(bus);
+    if (!checkIdle(bus)) return false;
   }
 
   // Only "did anything change at all" gates the update; the exact bit count is
@@ -660,25 +694,42 @@ bool PaperMonoDriver::runOtpUpdate(EpdBus& bus, const uint8_t* bwTarget, bool fo
   if (changedBits == 0) return false;
 
   const unsigned long started = millis();
-  bus.cmd(0x3C);
-  bus.data(0x80);  // VCOM border; do not let the custom LUT drive a dark rim.
-  writePlane(bus, CMD_WRITE_NEW, bwTarget);
-  writePlane(bus, CMD_WRITE_OLD, _sel26);
-#if FREEINK_STICKY_COMBINED_AA
-  if (forceAll) {
-    bus.cmd(0x3C);
-    bus.data(0x01);
-    activate(bus, 0xF7);
+#if FREEINK_SSD1677_TEXT_ROUTING && !FREEINK_DEVICE_STICKY
+  if (_originalDriver) {
+    _originalDriver->begin(bus);
+    if (!checkIdle(bus)) return false;
+    _originalDriver->display(bus, bwTarget, nullptr, forceAll ? _pendingMode : RefreshMode::Fast, true);
+    if (!checkIdle(bus)) return false;
+    // Original B/W may have changed every controller register. Reinitialize
+    // before the next custom waveform, without changing the on-glass model.
+    _initialized = false;
     _controllerPowered = false;
-    _lutState = LutState::OtpBw;
-  } else {
-    activateOtp(bus);
-  }
+    _lutState = LutState::Unknown;
+  } else
+#endif
+  {
+    bus.cmd(0x3C);
+    bus.data(0x80);  // VCOM border; do not let the custom LUT drive a dark rim.
+    writePlane(bus, CMD_WRITE_NEW, bwTarget);
+    writePlane(bus, CMD_WRITE_OLD, _sel26);
+#if FREEINK_SSD1677_TEXT_ROUTING
+    if (forceAll) {
+      bus.cmd(0x3C);
+      bus.data(0x01);
+      activate(bus, 0xF7);
+      if (!checkIdle(bus)) return false;
+      _controllerPowered = false;
+      _lutState = LutState::OtpBw;
+    } else {
+      activateOtp(bus);
+    }
 #else
   activateOtp(bus);
+  if (!checkIdle(bus)) return false;
   runBootCleanPass(bus, bwTarget, _sel26);
 #endif
-
+  }
+  if (!checkIdle(bus)) return false;
   for (uint32_t i = 0; i < BUFFER_SIZE; ++i) {
     const uint8_t black = static_cast<uint8_t>(~bwTarget[i]);
     _glassNonWhite[i] = black;
@@ -702,10 +753,11 @@ bool PaperMonoDriver::runUpdate(EpdBus& bus, const uint8_t* bwTarget, bool useGr
     if (otpRan) _displayCommitted = true;
     return otpRan;
   }
-  if (!bwTarget || !allocateBuffers()) return false;
+  if (!bwTarget || !allocateBuffers() || !checkIdle(bus)) return false;
   if (!_initialized) {
     bus.reset();
     initController(bus);
+    if (!checkIdle(bus)) return false;
   }
 
   // q24 means non-white and q26 means black, so level = q24 + q26 gives
@@ -760,13 +812,15 @@ bool PaperMonoDriver::runUpdate(EpdBus& bus, const uint8_t* bwTarget, bool useGr
   writePlane(bus, CMD_WRITE_NEW, _sel24);
   writePlane(bus, CMD_WRITE_OLD, _sel26);
   loadCustomLut(bus, lut);
-#if FREEINK_STICKY_COMBINED_AA
-  if (!_controllerPowered) {
-    activate(bus, 0xC0);  // Settle Sticky's rails without driving any pixels.
+#if FREEINK_SSD1677_TEXT_ROUTING
+  if (!_controllerPowered && combinedAa::calibration().powerUpFirst) {
+    activate(bus, 0xC0);  // Settle rails without driving any pixels.
+    if (!checkIdle(bus)) return false;
     _controllerPowered = true;
   }
 #endif
   activate(bus, _controllerPowered ? CTRL_DISPLAY_HOLD_WARM : CTRL_CUSTOM_HOLD_COLD);
+  if (!checkIdle(bus)) return false;
   _controllerPowered = true;
   // No boot-clean pass here: re-running the tri LUT is not direction-safe the
   // way the OTP B/W waveform is. Its activation kick charges driven pixels
@@ -782,6 +836,7 @@ bool PaperMonoDriver::runUpdate(EpdBus& bus, const uint8_t* bwTarget, bool useGr
     cleanFrames = makePostCleanLut(lut);
     loadCustomLut(bus, lut);
     activate(bus, CTRL_DISPLAY_HOLD_WARM);
+    if (!checkIdle(bus)) return false;
     ++stages;
     cleanedPixels = static_cast<uint32_t>(WIDTH) * HEIGHT;
   }
@@ -820,8 +875,9 @@ void PaperMonoDriver::stashTarget(const uint8_t* fb, RefreshMode mode) {
   memcpy(_pendingBw, fb, BUFFER_SIZE);
   _pendingTri = true;
   _pendingCorrective =
-      _needsFull || mode == RefreshMode::Full || (FREEINK_STICKY_COMBINED_AA && mode == RefreshMode::Half);
+      _needsFull || mode == RefreshMode::Full || (FREEINK_SSD1677_TEXT_ROUTING && mode == RefreshMode::Half);
   _pendingGeneration = _renderGeneration;
+  _pendingMode = mode;
 }
 
 bool PaperMonoDriver::commitPending(EpdBus& bus, bool useGray) {
@@ -834,13 +890,19 @@ bool PaperMonoDriver::commitPending(EpdBus& bus, bool useGray) {
   }
   _pendingTri = false;
   const bool corrective = _pendingCorrective;
-#if FREEINK_STICKY_COMBINED_AA
-  if (corrective && useGray) runOtpUpdate(bus, _pendingBw, true);
+#if FREEINK_SSD1677_TEXT_ROUTING
+  if (corrective && useGray) {
+    runOtpUpdate(bus, _pendingBw, true);
+    if (!checkIdle(bus)) {
+      clearGrayStaging();
+      return false;
+    }
+  }
 #endif
   const bool ran = runUpdate(bus, _pendingBw, useGray, corrective);
   if (ran) _needsFull = false;
   _pendingCorrective = false;
-  if (_lastBw && (ran || !corrective)) {
+  if (_lastBw && !_ioFailed && (ran || !corrective)) {
     memcpy(_lastBw, _pendingBw, BUFFER_SIZE);
     _lastBwValid = true;
   }
@@ -852,7 +914,9 @@ bool PaperMonoDriver::commitPending(EpdBus& bus, bool useGray) {
 void PaperMonoDriver::display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) {
   (void)prev;
   (void)turnOff;
-  if (!fb) return;
+  if (!fb || !checkIdle(bus)) return;
+  if (_ioFailed) _initialized = false;
+  _ioFailed = false;
   // Not initialised no longer implies an unknown glass state: controllerIdle()
   // parks the controller in deep sleep between pages. The paths that really do
   // invalidate the image -- begin(), deepSleep(), requestResync() -- raise
@@ -860,11 +924,12 @@ void PaperMonoDriver::display(EpdBus& bus, const uint8_t* fb, const uint8_t* pre
   if (!_initialized) {
     bus.reset();
     initController(bus);
+    if (!checkIdle(bus)) return;
   }
   if (!allocateBuffers()) return;
 
   const bool corrective =
-      _needsFull || mode == RefreshMode::Full || (FREEINK_STICKY_COMBINED_AA && mode == RefreshMode::Half);
+      _needsFull || mode == RefreshMode::Full || (FREEINK_SSD1677_TEXT_ROUTING && mode == RefreshMode::Half);
   if (!corrective && _lastBwValid && !_panelHasGray && !_grayLsbReady && !_grayMsbReady &&
       memcmp(_lastBw, fb, BUFFER_SIZE) == 0) {
     // UI screens deliberately re-render an identical frame once their async
@@ -885,11 +950,12 @@ void PaperMonoDriver::displayWindow(EpdBus& bus, const uint8_t* fb, const uint8_
   if (!_initialized) {
     bus.reset();
     initController(bus);
+    if (!checkIdle(bus)) return;
   }
   if (!allocateBuffers()) return;
 
-  const bool rotate180 =
-      !FREEINK_STICKY_COMBINED_AA && BoardConfig::ACTIVE.orientation.mirrorX && BoardConfig::ACTIVE.orientation.mirrorY;
+  const bool rotate180 = !FREEINK_SSD1677_TEXT_ROUTING && BoardConfig::ACTIVE.orientation.mirrorX &&
+                         BoardConfig::ACTIVE.orientation.mirrorY;
   if (!rotate180 || _needsFull || !_lastBwValid || _panelHasGray || _grayLsbReady || _grayMsbReady) {
     display(bus, fb, prev, RefreshMode::Fast, turnOff);
     return;
@@ -917,6 +983,7 @@ void PaperMonoDriver::displayWindow(EpdBus& bus, const uint8_t* fb, const uint8_
   writePlaneWindow(bus, CMD_WRITE_NEW, fb, x, y, w, h);
   writePlaneWindow(bus, CMD_WRITE_OLD, _lastBw, x, y, w, h);
   activateOtp(bus);
+  if (!checkIdle(bus)) return;
 
   // Commit only the addressed rectangle to the host glass model and previous
   // target. Window-external pixels were represented by equal NEW/OLD planes
@@ -957,7 +1024,7 @@ void PaperMonoDriver::displayFinish(EpdBus& bus, const uint8_t* fb) {
 }
 
 void PaperMonoDriver::seedPreviousFrame(EpdBus& bus, const uint8_t* buf) {
-  if (!buf || !allocateBuffers()) return;
+  if (!buf || !allocateBuffers() || !checkIdle(bus)) return;
   // There is no host-managed previous-frame plane in this design: the selector
   // planes are rebuilt from _glass* on every activation. Record the caller's
   // baseline so the unchanged-frame test stays honest.
@@ -1056,7 +1123,7 @@ void PaperMonoDriver::displayGray(EpdBus& bus, const uint8_t* fb, bool turnOff, 
   (void)turnOff;
   (void)lut;
   (void)factoryMode;
-  if (!allocateBuffers()) return;
+  if (!allocateBuffers() || !checkIdle(bus)) return;
 
   if (displayWorkCancelled()) {
     // Input arrived while this page was being composed. Drop it whole: the
@@ -1074,7 +1141,7 @@ void PaperMonoDriver::displayGray(EpdBus& bus, const uint8_t* fb, bool turnOff, 
                        _grayMsbGeneration == _renderGeneration;
   if (_pendingTri) {
     commitPending(bus, useGray);
-#if FREEINK_STICKY_COMBINED_AA
+#if FREEINK_SSD1677_TEXT_ROUTING
     if (turnOff) powerOffController(bus);
 #endif
     return;
@@ -1093,7 +1160,7 @@ void PaperMonoDriver::displayGray(EpdBus& bus, const uint8_t* fb, bool turnOff, 
   // the AA grays as a changed-pixels-only overlay: driving the full non-white
   // body a second time through the kick phases reads as a page-wide flash.
   runUpdate(bus, _lastBw, true, false, /*overlayOnly=*/true);
-#if FREEINK_STICKY_COMBINED_AA
+#if FREEINK_SSD1677_TEXT_ROUTING
   if (turnOff) powerOffController(bus);
 #endif
   clearGrayStaging();
@@ -1141,15 +1208,20 @@ void PaperMonoDriver::cleanupGrayscaleBuffers(EpdBus& bus, const uint8_t* bw) {
 }
 
 void PaperMonoDriver::controllerIdle(EpdBus& bus) {
-  if (!_initialized) return;
+  if (!_initialized || !checkIdle(bus)) return;
   powerOffController(bus);
+  if (!checkIdle(bus)) return;
 
   // The controller loses its RAM and registers here, and that costs nothing:
   // both selector planes are rebuilt from the host-side glass model on every
   // activation, so waking is one reset pulse plus initController(), about 40 ms,
   // and only ever after the user has already stopped turning pages.
   bus.cmd(0x10);
-  bus.data(0x03);  // SSD1677 deep-sleep key; 0x01 does not enter sleep.
+#if FREEINK_SSD1677_TEXT_ROUTING
+  bus.data(combinedAa::calibration().sleepKey);
+#else
+  bus.data(0x03);  // Paper Mono deep-sleep key.
+#endif
   delay(2);
   _initialized = false;
   _controllerPowered = false;
@@ -1208,9 +1280,15 @@ void PaperMonoDriver::deepSleep(EpdBus& bus) {
   // on-glass image can no longer be trusted.
   if (_initialized) {
     bus.waitBusy("PaperMono idle");
+    if (!checkIdle(bus)) return;
     powerOffController(bus);
+    if (!checkIdle(bus)) return;
     bus.cmd(0x10);
+#if FREEINK_SSD1677_TEXT_ROUTING
+    bus.data(combinedAa::calibration().sleepKey);
+#else
     bus.data(0x03);
+#endif
     delay(100);
   }
   _initialized = false;

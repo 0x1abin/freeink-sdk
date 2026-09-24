@@ -409,8 +409,8 @@ class FreeInkDisplay {
   // Block until a pending async refresh completes (no-op when none is).
   // Every blocking panel operation calls this before touching the bus.
   void syncPendingAsync();
-#if FREEINK_STICKY_COMBINED_AA
-  void selectStickyDriver(bool textOnlyAntiAliasing);
+#if FREEINK_SSD1677_TEXT_ROUTING
+  void selectTextAaDriver(bool textOnlyAntiAliasing);
 #endif
   // Shared body of displayBufferAsync() / triggerDisplayAsync(): fire the
   // update and return while the waveform runs (_asyncPending set).
@@ -429,9 +429,10 @@ class FreeInkDisplay {
 
   EpdBus _bus;
   PanelDriver* _driver = nullptr;
-#if FREEINK_STICKY_COMBINED_AA
-  bool _stickyCombinedAvailable = false;
-  bool _stickyTextPending = false;
+#if FREEINK_SSD1677_TEXT_ROUTING
+  PanelDriver* _originalDriver = nullptr;
+  bool _textCombinedAvailable = false;
+  bool _textAaPending = false;
 #endif
 
   // Async refresh state: pending flag + (single-buffer mode) a lazily
