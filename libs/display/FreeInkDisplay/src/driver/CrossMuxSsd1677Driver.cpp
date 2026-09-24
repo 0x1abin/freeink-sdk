@@ -238,6 +238,8 @@ void CrossMuxSsd1677Driver::begin(EpdBus& bus) {
   _pendingPowerOff = false;
   _pendingPowerSequence = 0;
   bus.reset();
+  bus.waitBusy("SSD1677 hardware reset");
+  if (bus.isBusy()) return;
   initController(bus);
 }
 

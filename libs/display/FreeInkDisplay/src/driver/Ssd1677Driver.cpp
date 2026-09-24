@@ -173,6 +173,8 @@ PanelGeometry Ssd1677Driver::geometry() const { return {_w, _h, _wb, _bufferSize
 
 void Ssd1677Driver::begin(EpdBus& bus) {
   bus.reset();
+  bus.waitBusy("SSD1677 hardware reset");
+  if (bus.isBusy()) return;
   initController(bus);
 }
 
@@ -410,6 +412,11 @@ bool Ssd1677Driver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t* 
 void Ssd1677Driver::displayFinish(EpdBus& bus, const uint8_t* fb) {
   (void)fb;  // X4 post-waveform needs nothing from the host frame
   bus.waitRefreshComplete("refresh");
+  if (bus.isBusy()) {
+    _pendingPowerOff = false;
+    _needsInitialFull = true;
+    return;
+  }
   if (_pendingPowerOff) {
     _pendingPowerOff = false;
     powerOffController(bus);

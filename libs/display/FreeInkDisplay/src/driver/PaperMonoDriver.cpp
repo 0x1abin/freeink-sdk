@@ -199,11 +199,11 @@ bool PaperMonoDriver::allocateBuffers() {
 }
 
 void PaperMonoDriver::begin(EpdBus& bus) {
-  if (!allocateBuffers() || !checkIdle(bus)) return;
+  if (!allocateBuffers()) return;
   _ioFailed = false;
-  bus.reset();
-  initController(bus);
-  if (!checkIdle(bus)) return;
+  _initialized = false;
+  requestResync(0);
+  if (!ensureControllerReady(bus)) return;
   _needsFull = true;
   // The first paints after boot (splash, then whatever replaces it — the one
   // that must erase the dwelled logo) each get extra drive passes so pre-boot
@@ -389,6 +389,17 @@ bool PaperMonoDriver::checkIdle(EpdBus& bus) {
   _windowBaselineValid = false;
   _displayCommitted = false;
   return false;
+}
+
+bool PaperMonoDriver::ensureControllerReady(EpdBus& bus) {
+  if (_initialized && !_ioFailed) return checkIdle(bus);
+  _initialized = false;
+  _ioFailed = false;
+  bus.reset();
+  bus.waitBusy("PaperMono hardware reset");
+  if (!checkIdle(bus)) return false;
+  initController(bus);
+  return checkIdle(bus) && _initialized;
 }
 
 void PaperMonoDriver::activate(EpdBus& bus, uint8_t control) {
@@ -636,12 +647,7 @@ uint16_t PaperMonoDriver::makeTriLut(uint8_t out[111], bool bgTopUp) const {
 // definite. `forceAll` does the same for every pixel when the glass history is
 // unknown or the caller explicitly requests a full resync.
 bool PaperMonoDriver::runOtpUpdate(EpdBus& bus, const uint8_t* bwTarget, bool forceAll) {
-  if (!bwTarget || !allocateBuffers() || !checkIdle(bus)) return false;
-  if (!_initialized) {
-    bus.reset();
-    initController(bus);
-    if (!checkIdle(bus)) return false;
-  }
+  if (!bwTarget || !allocateBuffers() || !ensureControllerReady(bus)) return false;
 
   // Only "did anything change at all" gates the update; the exact bit count is
   // a log statistic. __builtin_popcount does not inline on Xtensa — it compiles
@@ -753,12 +759,7 @@ bool PaperMonoDriver::runUpdate(EpdBus& bus, const uint8_t* bwTarget, bool useGr
     if (otpRan) _displayCommitted = true;
     return otpRan;
   }
-  if (!bwTarget || !allocateBuffers() || !checkIdle(bus)) return false;
-  if (!_initialized) {
-    bus.reset();
-    initController(bus);
-    if (!checkIdle(bus)) return false;
-  }
+  if (!bwTarget || !allocateBuffers() || !ensureControllerReady(bus)) return false;
 
   // q24 means non-white and q26 means black, so level = q24 + q26 gives
   // W=0, G=1, B=2. A corrective update maps every pixel to target-coded entry
@@ -914,18 +915,11 @@ bool PaperMonoDriver::commitPending(EpdBus& bus, bool useGray) {
 void PaperMonoDriver::display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) {
   (void)prev;
   (void)turnOff;
-  if (!fb || !checkIdle(bus)) return;
-  if (_ioFailed) _initialized = false;
-  _ioFailed = false;
+  if (!fb || !ensureControllerReady(bus)) return;
   // Not initialised no longer implies an unknown glass state: controllerIdle()
   // parks the controller in deep sleep between pages. The paths that really do
   // invalidate the image -- begin(), deepSleep(), requestResync() -- raise
   // _needsFull themselves.
-  if (!_initialized) {
-    bus.reset();
-    initController(bus);
-    if (!checkIdle(bus)) return;
-  }
   if (!allocateBuffers()) return;
 
   const bool corrective =
@@ -947,11 +941,7 @@ void PaperMonoDriver::displayWindow(EpdBus& bus, const uint8_t* fb, const uint8_
                                     uint16_t w, uint16_t h, bool turnOff) {
   (void)prev;
   if (!fb || w == 0 || h == 0 || x + w > WIDTH || y + h > HEIGHT || x % 8 != 0 || w % 8 != 0) return;
-  if (!_initialized) {
-    bus.reset();
-    initController(bus);
-    if (!checkIdle(bus)) return;
-  }
+  if (!ensureControllerReady(bus)) return;
   if (!allocateBuffers()) return;
 
   const bool rotate180 = !FREEINK_SSD1677_TEXT_ROUTING && BoardConfig::ACTIVE.orientation.mirrorX &&

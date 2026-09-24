@@ -39,9 +39,10 @@ class TextRoutingTest(unittest.TestCase):
             shutil.copytree(HERE / "pro_stubs", root, dirs_exist_ok=True)
             shutil.copy2(HERE / "pro_stubs/EpdBus.h", root / "src/bus/EpdBus.h")
             bus = root / "src/bus/EpdBus.h"
-            text = bus.read_text().replace("  unsigned waits=0;", "  unsigned waits=0, activation=0, failAt=0; bool busy=false;")
-            text = text.replace("writes.push_back({c,{}});", "assert(!busy); writes.push_back({c,{}}); if (c==0x20) { busy=true; ++activation; }")
-            text = text.replace("++waits;", "++waits; busy=failAt && activation==failAt;")
+            text = bus.read_text().replace("  unsigned waits=0;", "  unsigned waits=0, activation=0, failAt=0, resets=0; bool busy=false, sleepBusyUntilReset=false, resetKeepsBusy=false;")
+            text = text.replace("writes.push_back({c,{}});", "assert(!busy); writes.push_back({c,{}}); if (c==0x20) { busy=true; ++activation; } if (c==0x10 && sleepBusyUntilReset) busy=true;")
+            text = text.replace("void reset(uint16_t=0) {}", "void reset(uint16_t=0) { ++resets; if (!resetKeepsBusy) busy=false; }")
+            text = text.replace("++waits;", "++waits; if (!sleepBusyUntilReset || !busy || writes.empty() || writes.back().command != 0x10) busy=failAt && activation==failAt;")
             text = text.replace("return false;", "return busy;")
             bus.write_text(text)
             shutil.copy2(HERE / "ssd1677_stubs/esp_heap_caps.h", root / "esp_heap_caps.h")

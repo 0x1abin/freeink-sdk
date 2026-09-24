@@ -43,6 +43,16 @@ int main(int argc, char** argv) {
     assert(pixels(d._bus) > 0);
   } else {
     assert(liveAllocations == 8);
+    auto& bus = d._bus;
+    d.getFrameBuffer()[0] = 0x7f;
+    d.displayBuffer(Mode::FAST_REFRESH, false);
+    bus.sleepBusyUntilReset = true;
+    d.controllerIdle();
+    assert(bus.busy);
+    const auto resetBeforeWake = bus.resets;
+    d.getFrameBuffer()[1] = 0x7f;
+    d.displayBuffer(Mode::FAST_REFRESH, false);
+    assert(bus.resets > resetBeforeWake && d.displayCommitted());
   }
 }
 #else
@@ -155,6 +165,86 @@ int main(int argc, char** argv) {
     assert(bus.writes[i].bytes == expected.writes[i].bytes);
   }
   assert(d._driver == original);
+
+  // A normal pending async waveform must finish before the next page checks BUSY.
+  if (original->supportsAsyncDisplay()) {
+    bus.clear();
+    d.displayBufferAsync(Mode::FAST_REFRESH);
+#if FREEINK_DEVICE_STICKY
+    assert(d._refreshPending);
+#endif
+    if (d._refreshPending) {
+      assert(bus.busy);
+      const auto firstActivation = bus.activation;
+      d.displayBufferAsync(Mode::FAST_REFRESH);
+      assert(bus.activation > firstActivation && d._refreshPending);
+      d.finishDisplayAsync();
+      assert(!bus.busy && !d._refreshPending);
+    }
+  }
+#if FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_X4CLASSIC
+  // A timed-out async refresh cannot run the deferred power-off SPI sequence.
+  bus.clear();
+  d.triggerDisplayAsync(Mode::FAST_REFRESH, true);
+  assert(d._refreshPending);
+  bus.failAt = bus.activation;
+  const auto timedOutWrites = bus.writes.size();
+  d.finishDisplayAsync();
+  assert(bus.busy && bus.writes.size() == timedOutWrites);
+  bus.failAt = 0;
+  bus.busy = false;
+#endif
+
+  // Deep sleep may hold BUSY until hardware reset; both routing directions must recover.
+  bus.sleepBusyUntilReset = true;
+  const auto firstReset = bus.resets;
+  stage(Mode::FAST_REFRESH);
+  assert(d._driver == &combined && d.combinesGrayscaleBase() && bus.resets > firstReset);
+  d.displayGrayBuffer(false);
+  d.cleanupGrayscaleBuffers(bw.data());
+  const auto secondReset = bus.resets;
+  d.selectTextAaDriver(false);
+  assert(d._driver == original && !bus.busy && bus.resets > secondReset);
+  bus.sleepBusyUntilReset = false;
+
+  // Idle sleep retains the selected text driver but invalidates its controller registers.
+  stage(Mode::FAST_REFRESH);
+  d.displayGrayBuffer(false);
+  d.cleanupGrayscaleBuffers(bw.data());
+  bus.sleepBusyUntilReset = true;
+  assert(!combined._needsFull);
+  d.controllerIdle();
+  assert(bus.busy && !d._textDriverReady);
+  const auto idleReset = bus.resets;
+  stage(Mode::FAST_REFRESH);
+  assert(bus.resets > idleReset && d.combinesGrayscaleBase());
+  assert(!combined._needsFull);
+  d.displayGrayBuffer(false);
+  d.cleanupGrayscaleBuffers(bw.data());
+  bus.sleepBusyUntilReset = false;
+  d.selectTextAaDriver(false);
+
+  // If reset cannot release BUSY, do not send controller commands or claim a text transaction.
+  bus.sleepBusyUntilReset = true;
+  bus.resetKeepsBusy = true;
+  d.displayGrayscaleBase(Mode::FAST_REFRESH, false, RefreshContext::TextOnlyAntiAliasing);
+  assert(bus.busy && !d._textDriverReady && !d.combinesGrayscaleBase());
+  assert(bus.writes.back().command == 0x10);
+  bus.resetKeepsBusy = false;
+  stage(Mode::FAST_REFRESH);
+  assert(d._driver == &combined && d.combinesGrayscaleBase());
+  d.displayGrayBuffer(false);
+  d.cleanupGrayscaleBuffers(bw.data());
+  d.selectTextAaDriver(false);
+  bus.sleepBusyUntilReset = false;
+
+  // An actual BUSY timeout must not make the original grayscale cleanup write RAM.
+  bus.busy = true;
+  const auto stoppedOriginal = bus.writes.size();
+  d.cleanupGrayscaleBuffers(bw.data());
+  assert(bus.writes.size() == stoppedOriginal && !d._textDriverReady);
+  bus.busy = false;
+
   stage(Mode::FAST_REFRESH);
   d.displayGrayBuffer(true);
   d.cleanupGrayscaleBuffers(bw.data());

@@ -410,7 +410,8 @@ class FreeInkDisplay {
   // Every blocking panel operation calls this before touching the bus.
   void syncPendingAsync();
 #if FREEINK_SSD1677_TEXT_ROUTING
-  void selectTextAaDriver(bool textOnlyAntiAliasing);
+  bool selectTextAaDriver(bool textOnlyAntiAliasing);
+  void invalidateTextRoute();
 #endif
   // Shared body of displayBufferAsync() / triggerDisplayAsync(): fire the
   // update and return while the waveform runs (_asyncPending set).
@@ -433,6 +434,7 @@ class FreeInkDisplay {
   PanelDriver* _originalDriver = nullptr;
   bool _textCombinedAvailable = false;
   bool _textAaPending = false;
+  bool _textDriverReady = false;
 #endif
 
   // Async refresh state: pending flag + (single-buffer mode) a lazily

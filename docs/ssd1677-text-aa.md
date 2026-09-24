@@ -16,8 +16,9 @@ Images and unmarked callers keep their original driver, LUT and two distinct
 intermediate gray planes. Text/image switches wait for outstanding work,
 invalidate the baseline and perform the board's normal correction. Repeated
 text pages share one pixel activation; repeated image pages retain their
-original refresh sequence. Paper Mono retains its existing behavior, with
-an SSD1677 fallback if its eight PSRAM allocations fail.
+original refresh sequence. A controller parked by idle sleep is reset before
+BUSY is checked and the next page touches RAM. Paper Mono retains its existing
+behavior, with an SSD1677 fallback if its eight PSRAM allocations fail.
 
 `src/lut/Ssd1677CombinedAa.h` holds separate calibration entries. Sticky's
 validated timing is unchanged; other boards start at nominal 5ms frames and

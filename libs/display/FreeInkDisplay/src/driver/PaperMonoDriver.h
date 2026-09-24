@@ -45,6 +45,8 @@ class PaperMonoDriver final : public PanelDriver {
   PanelGeometry geometry() const override;
 
   void begin(EpdBus& bus) override;
+  // Idle sleep keeps the glass baseline; wake without begin()'s full resync.
+  bool ensureControllerReady(EpdBus& bus);
   void deepSleep(EpdBus& bus) override;
   void display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) override;
   void displayWindow(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, uint16_t x, uint16_t y, uint16_t w,
