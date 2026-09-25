@@ -173,6 +173,8 @@ PanelGeometry Ssd1677Driver::geometry() const { return {_w, _h, _wb, _bufferSize
 
 void Ssd1677Driver::begin(EpdBus& bus) {
   bus.reset();
+  bus.waitBusy("SSD1677 hardware reset");
+  if (bus.isBusy()) return;
   initController(bus);
 }
 
@@ -185,6 +187,7 @@ void Ssd1677Driver::initController(EpdBus& bus) {
   // so waitBusy() alone is not a substitute for this delay.
   delay(10);
   bus.waitBusy(" CMD_SOFT_RESET");
+  if (bus.isBusy()) return;
 
   bus.cmd(CMD_TEMP_SENSOR_CONTROL);
   bus.data(TEMP_SENSOR_INTERNAL);
@@ -210,10 +213,12 @@ void Ssd1677Driver::initController(EpdBus& bus) {
   bus.cmd(CMD_AUTO_WRITE_BW_RAM);
   bus.data(0xF7);
   bus.waitBusy(" CMD_AUTO_WRITE_BW_RAM");
+  if (bus.isBusy()) return;
 
   bus.cmd(CMD_AUTO_WRITE_RED_RAM);
   bus.data(0xF7);
   bus.waitBusy(" CMD_AUTO_WRITE_RED_RAM");
+  if (bus.isBusy()) return;
 
   _isScreenOn = false;
   // Override boards can't use _isScreenOn to detect a cold start (their fast
@@ -304,6 +309,10 @@ void Ssd1677Driver::refresh(EpdBus& bus, RefreshMode mode, bool turnOff, bool as
     bus.data(seqOverride);
     bus.cmd(CMD_MASTER_ACTIVATION);
     if (!async) bus.waitRefreshComplete("refresh");
+    if (!async && bus.isBusy()) {
+      _needsInitialFull = true;
+      return;
+    }
     // Only sequences carrying the low two disable bits physically power down.
     // X4 Pro DU (0xFC) does not, so a turnOff request must run the documented
     // 0x3C=0x80, 0x22=0x03, 0x20 sequence after the waveform completes instead
@@ -382,6 +391,7 @@ void Ssd1677Driver::powerOffController(EpdBus& bus) {
   // interval, wait out the remainder before changing the state flag.
   delay(200);
   bus.waitBusy(" display power-down");
+  if (bus.isBusy()) return;
   _isScreenOn = false;
 }
 
@@ -402,6 +412,11 @@ bool Ssd1677Driver::displayStart(EpdBus& bus, const uint8_t* fb, const uint8_t* 
 void Ssd1677Driver::displayFinish(EpdBus& bus, const uint8_t* fb) {
   (void)fb;  // X4 post-waveform needs nothing from the host frame
   bus.waitRefreshComplete("refresh");
+  if (bus.isBusy()) {
+    _pendingPowerOff = false;
+    _needsInitialFull = true;
+    return;
+  }
   if (_pendingPowerOff) {
     _pendingPowerOff = false;
     powerOffController(bus);
@@ -475,6 +490,10 @@ void Ssd1677Driver::displayImpl(EpdBus& bus, const uint8_t* fb, const uint8_t* p
   }
 
   refresh(bus, mode, turnOff, async);
+  if (!async && bus.isBusy()) {
+    _needsInitialFull = true;
+    return;
+  }
 
   // Stock X4 syncs both controller RAM planes after activation. Do the same in
   // single-buffer mode so the next differential update starts from a matched
@@ -690,6 +709,7 @@ void Ssd1677Driver::deepSleep(EpdBus& bus) {
   // driven with the full-refresh waveform through deep sleep, then power down
   // analog/clock. Stock does not touch CTRL1 here.
   powerOffController(bus);
+  if (bus.isBusy()) return;
   // Stock parity: deep sleep mode 2 (0x03) discards controller RAM. Nothing may
   // treat RAM as a valid diff baseline after wake — initController() re-arms
   // _needsInitialFull, so the first paint is an absolute clean anyway.

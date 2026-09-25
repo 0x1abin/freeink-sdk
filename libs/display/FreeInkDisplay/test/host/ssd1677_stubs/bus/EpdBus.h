@@ -23,11 +23,15 @@ class EpdBus {
       ++activation;
     }
   }
+  void data(uint8_t b) { events.back().bytes.push_back(b); }
+  void data(const uint8_t* p, uint16_t n) { events.back().bytes.insert(events.back().bytes.end(), p, p + n); }
+  void cmdData(uint8_t c, const uint8_t* p, uint16_t n) {
+    cmd(c);
+    data(p, n);
+  }
   void beginTxn() {}
   void endTxn() {}
   void rawWriteBytes(const uint8_t* p, uint16_t n) { data(p, n); }
-  void data(uint8_t b) { events.back().bytes.push_back(b); }
-  void data(const uint8_t* p, uint16_t n) { events.back().bytes.insert(events.back().bytes.end(), p, p + n); }
   void waitBusy(const char*) {
     busy = stuck || (failAt != 0 && activation == failAt);
     events.push_back({-1, {}});

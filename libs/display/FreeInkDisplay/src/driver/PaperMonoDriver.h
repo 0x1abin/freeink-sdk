@@ -37,11 +37,16 @@ struct PaperMonoGrayParams {
 
 class PaperMonoDriver final : public PanelDriver {
  public:
+  // Eight 48 KB planes are reused for the driver's lifetime, exclusively in PSRAM.
+  void setOriginalDriver(PanelDriver* driver) { _originalDriver = driver; }
+  bool prepareBuffers() { return allocateBuffers(); }
   uint32_t spiHz() const override;
   BusyPolarity busyPolarity() const override { return BusyPolarity::ActiveHigh; }
   PanelGeometry geometry() const override;
 
   void begin(EpdBus& bus) override;
+  // Idle sleep keeps the glass baseline; wake without begin()'s full resync.
+  bool ensureControllerReady(EpdBus& bus);
   void deepSleep(EpdBus& bus) override;
   void display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) override;
   void displayWindow(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, uint16_t x, uint16_t y, uint16_t w,
@@ -100,6 +105,10 @@ class PaperMonoDriver final : public PanelDriver {
     uint8_t postCleanCycles = 0;  // retired; nonzero only for lab experiments
   };
 
+  PanelDriver* _originalDriver = nullptr;
+  RefreshMode _pendingMode = RefreshMode::Fast;
+  bool _ioFailed = false;
+  bool checkIdle(EpdBus& bus);
   bool allocateBuffers();
   void initController(EpdBus& bus);
   // Re-runs the just-finished drive (planes rewritten, then re-trigger) while

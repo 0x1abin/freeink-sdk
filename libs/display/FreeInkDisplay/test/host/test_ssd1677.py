@@ -9,7 +9,7 @@ HERE = pathlib.Path(__file__).resolve().parent
 DISPLAY = HERE.parents[1]
 
 
-def run_trace(source=None, includes=()):
+def run_trace(source=None, includes=(), defines=(), sources=()):
     with tempfile.TemporaryDirectory() as directory:
         tmp = pathlib.Path(directory)
         for name in ("driver", "lut"):
@@ -23,8 +23,11 @@ def run_trace(source=None, includes=()):
                    str(DISPLAY.parents[1] / "hardware/BoardConfig/include")]
         for directory in includes:
             command += ["-I", str(directory)]
+        command += ["-D" + define for define in defines]
         binary = tmp / "trace"
-        command += [str(source or HERE / "test_ssd1677.cpp"), "-o", str(binary)]
+        command += [str(source or HERE / "test_ssd1677.cpp")]
+        command += [str(tmp / path) for path in sources]
+        command += ["-o", str(binary)]
         subprocess.run(command, check=True)
         subprocess.run([str(binary)], check=True)
 

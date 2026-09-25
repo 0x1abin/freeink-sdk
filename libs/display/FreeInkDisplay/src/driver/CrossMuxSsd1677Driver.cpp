@@ -238,6 +238,8 @@ void CrossMuxSsd1677Driver::begin(EpdBus& bus) {
   _pendingPowerOff = false;
   _pendingPowerSequence = 0;
   bus.reset();
+  bus.waitBusy("SSD1677 hardware reset");
+  if (bus.isBusy()) return;
   initController(bus);
 }
 
@@ -250,6 +252,7 @@ void CrossMuxSsd1677Driver::initController(EpdBus& bus) {
   // so waitBusy() alone is not a substitute for this delay.
   delay(10);
   bus.waitBusy(" CMD_SOFT_RESET");
+  if (bus.isBusy()) return;
 
   bus.cmd(CMD_TEMP_SENSOR_CONTROL);
   bus.data(TEMP_SENSOR_INTERNAL);
@@ -275,10 +278,12 @@ void CrossMuxSsd1677Driver::initController(EpdBus& bus) {
   bus.cmd(CMD_AUTO_WRITE_BW_RAM);
   bus.data(0xF7);
   bus.waitBusy(" CMD_AUTO_WRITE_BW_RAM");
+  if (bus.isBusy()) return;
 
   bus.cmd(CMD_AUTO_WRITE_RED_RAM);
   bus.data(0xF7);
   bus.waitBusy(" CMD_AUTO_WRITE_RED_RAM");
+  if (bus.isBusy()) return;
 
   _isScreenOn = false;
   _grayState = GrayState::None;
@@ -387,6 +392,10 @@ void CrossMuxSsd1677Driver::refresh(EpdBus& bus, RefreshMode mode, bool turnOff,
     bus.data(seqOverride);
     bus.cmd(CMD_MASTER_ACTIVATION);
     if (!async) bus.waitRefreshComplete("refresh");
+    if (!async && bus.isBusy()) {
+      _needsInitialFull = true;
+      return;
+    }
     // Only sequences carrying the low two disable bits physically power down.
     // X4 Pro DU (0xFC) does not, so a turnOff request must run the documented
     // 0x3C=0x80, 0x22=0x03, 0x20 sequence after the waveform completes instead
@@ -478,6 +487,7 @@ void CrossMuxSsd1677Driver::powerOffController(EpdBus& bus) {
   // interval, wait out the remainder before changing the state flag.
   delay(200);
   bus.waitBusy(" display power-down");
+  if (bus.isBusy()) return;
   if (!completeRefresh(bus)) return;
   _isScreenOn = false;
 }
@@ -651,6 +661,10 @@ bool CrossMuxSsd1677Driver::displayImpl(EpdBus& bus, const uint8_t* fb, const ui
   }
 
   refresh(bus, mode, turnOff, async);
+  if (!async && bus.isBusy()) {
+    _needsInitialFull = true;
+    return false;
+  }
   if (_cfg.cleanPolicy != CrossMuxSsd1677CleanPolicy::Legacy && !async) {
     if (!completeRefresh(bus)) return false;
     _needsInitialFull = false;
@@ -901,7 +915,7 @@ void CrossMuxSsd1677Driver::deepSleep(EpdBus& bus) {
   // driven with the full-refresh waveform through deep sleep, then power down
   // analog/clock. Stock does not touch CTRL1 here.
   powerOffController(bus);
-  if (!completeRefresh(bus)) return;
+  if (bus.isBusy() || !completeRefresh(bus)) return;
   // Stock parity: deep sleep mode 2 (0x03) discards controller RAM. Nothing may
   // treat RAM as a valid diff baseline after wake — initController() re-arms
   // _needsInitialFull, so the first paint is an absolute clean anyway.
