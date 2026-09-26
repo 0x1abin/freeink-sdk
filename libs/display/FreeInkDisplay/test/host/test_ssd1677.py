@@ -36,6 +36,9 @@ class Ssd1677Test(unittest.TestCase):
     def test_command_sequences(self):
         run_trace()
 
+    def test_reader_transitions(self):
+        run_trace(defines=("FREEINK_SSD1677_READER_TRANSITIONS=1",))
+
 
 if __name__ == "__main__":
     unittest.main()

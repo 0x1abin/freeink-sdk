@@ -153,6 +153,10 @@ class FreeInkDisplay {
   // planes join it in one waveform (Paper Mono) - see PanelDriver.
   bool combinesGrayscaleBase() const;
   bool supportsTextOnlyCombinedBase() const;
+  // Metalio lab build only. Drain pending refreshes before querying the handoff.
+  bool supportsReaderTransitions() const;
+  bool supportsContinuousImageReading() const;
+  bool canUseTextTransition() const;
   // Restore controller RAM and frameBuffer to the given BW baseline after
   // grayscale. Available in both buffer modes (CrossPoint's dual-buffer HAL
   // wraps it directly).

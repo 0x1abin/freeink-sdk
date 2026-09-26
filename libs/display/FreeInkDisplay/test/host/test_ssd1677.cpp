@@ -131,8 +131,11 @@ void testDriverSequences() {
   for (auto& e : b.events)
     if (e.cmd == 0x24 || e.cmd == 0x26) planes.push_back(e);
   assert(planes.size() == 7);
-  assert(planes[0].cmd == 0x26 && planes[0].bytes == std::vector<uint8_t>(32, 0xff));
-  assert(planes[1].cmd == 0x24 && planes[1].bytes == std::vector<uint8_t>(32, 0));
+  // Even the white-clear build must keep ordinary text/manual/recovery black.
+  constexpr uint8_t oldEndpoint = 0xFF;
+  constexpr uint8_t cleanEndpoint = 0x00;
+  assert(planes[0].cmd == 0x26 && planes[0].bytes == std::vector<uint8_t>(32, oldEndpoint));
+  assert(planes[1].cmd == 0x24 && planes[1].bytes == std::vector<uint8_t>(32, cleanEndpoint));
   assert(planes[2].bytes == planes[1].bytes && planes[3].bytes == planes[1].bytes);
   assert(planes[4].bytes == std::vector<uint8_t>(fb.begin(), fb.end()));
   assert(planes[5].bytes == planes[4].bytes && planes[6].bytes == planes[4].bytes);
@@ -261,6 +264,47 @@ void testDriverSequences() {
   assert(fb == original);
 }
 
+void testImageTransitionPolicy() {
+  std::array<uint8_t, 32> fb;
+  fb.fill(0xA5);
+  CrossMuxSsd1677Driver d(crossmuxSsd1677MetalioConfig());
+  EpdBus b;
+  d.begin(b);
+  assert(d.opticalState() == OpticalState::Unknown);
+  b.clear();
+  d.displayWithContext(b, fb.data(), nullptr, Mode::Half, false, RefreshContext::ImageReading);
+  expect(b, {0xFC, 0xFC});
+  const auto firstBw = std::find_if(b.events.begin(), b.events.end(), [](const auto& e) { return e.cmd == 0x24; });
+#if defined(FREEINK_SSD1677_READER_TRANSITIONS) && FREEINK_SSD1677_READER_TRANSITIONS
+  assert(firstBw->bytes == std::vector<uint8_t>(32, 0xFF));
+#else
+  assert(firstBw->bytes == std::vector<uint8_t>(32, 0x00));
+#endif
+  assert(d.opticalState() == OpticalState::Bw);
+  d.displayGray(b, fb.data(), false, nullptr, false);
+  d.cleanupGrayscaleBuffers(b, fb.data());
+  assert(d.opticalState() == OpticalState::Gray);  // RED sync never erases physical gray.
+  b.clear();
+  d.displayWithContext(b, fb.data(), nullptr, Mode::Fast, false, RefreshContext::ImageReading);
+#if defined(FREEINK_SSD1677_READER_TRANSITIONS) && FREEINK_SSD1677_READER_TRANSITIONS
+  expect(b, {0xFC});
+  assert(d.opticalState() == OpticalState::Gray);
+#else
+  expect(b, {0xFC, 0xFC});
+#endif
+  d.requestResync(0);
+  assert(d.opticalState() == OpticalState::Unknown);
+  b.clear();
+  d.displayWithContext(b, fb.data(), nullptr, Mode::Fast, false, RefreshContext::ImageReading);
+  expect(b, {0xFC, 0xFC});
+  d.deepSleep(b);
+  d.begin(b);  // A new controller session cannot inherit the prior optical estimate.
+  assert(d.opticalState() == OpticalState::Unknown);
+}
+
 #ifndef CROSSMUX_READER_REFRESH_TEST
-int main() { testDriverSequences(); }
+int main() {
+  testDriverSequences();
+  testImageTransitionPolicy();
+}
 #endif

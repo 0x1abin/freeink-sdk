@@ -621,6 +621,8 @@ void FreeInkDisplay::invalidateTextRoute() {
 
 bool FreeInkDisplay::selectTextAaDriver(bool textOnlyAntiAliasing) {
   syncPendingAsync();  // A normal in-flight waveform is not a BUSY failure.
+  paperMonoDriver().setTransitionSource(OpticalState::Unknown);
+  auto source = textOnlyAntiAliasing && canUseTextTransition() ? _driver->opticalState() : OpticalState::Unknown;
   const bool combined = textOnlyAntiAliasing && _textCombinedAvailable;
   PanelDriver* next = combined ? static_cast<PanelDriver*>(&paperMonoDriver()) : _originalDriver;
   if (!next) return false;
@@ -643,6 +645,8 @@ bool FreeInkDisplay::selectTextAaDriver(bool textOnlyAntiAliasing) {
     // Neither driver may diff against the other's controller RAM or glass model.
     _driver->abortPostRefresh();
     _driver->deepSleep(_bus);
+    // A failed power-down invalidates the source even if the following reset recovers BUSY.
+    if (_driver->opticalState() == OpticalState::Unknown) source = OpticalState::Unknown;
   }
   // Deep sleep can hold BUSY until the next hardware reset. begin() resets
   // first, then checks BUSY before sending any controller command.
@@ -656,6 +660,7 @@ bool FreeInkDisplay::selectTextAaDriver(bool textOnlyAntiAliasing) {
   _textDriverReady = true;
   _driver->setBackgroundHint(_inverted);
   _driver->requestResync(0);
+  if (combined) paperMonoDriver().setTransitionSource(source);
   _shadowValid = false;
   _redRamSynced = false;
   esp_rom_printf("SSD1677 display path: %s\n", combined ? "text AA" : "original grayscale");
@@ -1124,6 +1129,31 @@ bool FreeInkDisplay::supportsTextOnlyCombinedBase() const {
   return _textCombinedAvailable && !_inverted;
 #else
   return combinesGrayscaleBase();
+#endif
+}
+
+bool FreeInkDisplay::supportsReaderTransitions() const {
+#if FREEINK_SSD1677_TEXT_ROUTING && FREEINK_SSD1677_READER_TRANSITIONS
+  return _textCombinedAvailable && !_inverted && !_inversionDirty;
+#else
+  return false;
+#endif
+}
+
+bool FreeInkDisplay::supportsContinuousImageReading() const {
+#if FREEINK_DEVICE_METALIO_EINK4
+  return supportsReaderTransitions();
+#else
+  return false;
+#endif
+}
+
+bool FreeInkDisplay::canUseTextTransition() const {
+#if FREEINK_SSD1677_TEXT_ROUTING
+  return supportsReaderTransitions() && _textDriverReady && !_refreshPending && !_bus.isBusy() &&
+         _driver == _originalDriver && _driver && _driver->opticalState() != OpticalState::Unknown;
+#else
+  return false;
 #endif
 }
 

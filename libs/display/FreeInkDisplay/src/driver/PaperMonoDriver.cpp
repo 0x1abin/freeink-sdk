@@ -384,6 +384,7 @@ bool PaperMonoDriver::checkIdle(EpdBus& bus) {
   if (!bus.isBusy()) return true;
   if (!_ioFailed) esp_rom_printf("SSD1677 combined AA: BUSY timeout; resync required\n");
   _ioFailed = true;
+  _transitionSource = OpticalState::Unknown;
   _needsFull = true;
   _lastBwValid = false;
   _windowBaselineValid = false;
@@ -404,6 +405,9 @@ bool PaperMonoDriver::ensureControllerReady(EpdBus& bus) {
 
 void PaperMonoDriver::activate(EpdBus& bus, uint8_t control) {
   if (!checkIdle(bus)) return;
+#if defined(SSD1677_PROBE_DEBUG) && SSD1677_PROBE_DEBUG
+  const auto started = millis();
+#endif
   // An activation may swap or consume the controller plane roles. A future
   // window update must not trust them until they are explicitly re-seeded.
   _windowBaselineValid = false;
@@ -411,6 +415,10 @@ void PaperMonoDriver::activate(EpdBus& bus, uint8_t control) {
   bus.data(control);
   bus.cmd(0x20);
   bus.waitRefreshComplete("PaperMono refresh");
+#if defined(SSD1677_PROBE_DEBUG) && SSD1677_PROBE_DEBUG
+  esp_rom_printf("[SSD1677] text activation ctrl2=0x%02x pixel=%u elapsed=%lums busy=%u\n", control,
+                 unsigned((control & 4) != 0), millis() - started, unsigned(bus.isBusy()));
+#endif
   checkIdle(bus);
 }
 
@@ -883,6 +891,8 @@ void PaperMonoDriver::stashTarget(const uint8_t* fb, RefreshMode mode) {
 
 bool PaperMonoDriver::commitPending(EpdBus& bus, bool useGray) {
   if (!_pendingTri) return false;
+  const auto transitionSource = _transitionSource;
+  _transitionSource = OpticalState::Unknown;
   if (_pendingGeneration != _renderGeneration) {
     _pendingTri = false;
     _pendingCorrective = false;
@@ -892,13 +902,30 @@ bool PaperMonoDriver::commitPending(EpdBus& bus, bool useGray) {
   _pendingTri = false;
   const bool corrective = _pendingCorrective;
 #if FREEINK_SSD1677_TEXT_ROUTING
-  if (corrective && useGray) {
+  bool singlePassTransition = false;
+#if FREEINK_SSD1677_READER_TRANSITIONS
+  // A trusted handoff replaces the prepass with a full-target AA sweep; it does
+  // not pretend that synchronized RED RAM erased the previous gray image.
+  // Optical validation must establish whether this sweep alone removes residue.
+  singlePassTransition = transitionSource != OpticalState::Unknown && _pendingMode == RefreshMode::Fast && useGray;
+#if defined(SSD1677_PROBE_DEBUG) && SSD1677_PROBE_DEBUG
+  if (singlePassTransition) {
+    esp_rom_printf("[SSD1677] text transition source=%s: full-target AA, no OTP prepass\n",
+                   transitionSource == OpticalState::Bw ? "bw" : "gray");
+  }
+#endif
+#else
+  (void)transitionSource;
+#endif
+  if (corrective && useGray && !singlePassTransition) {
     runOtpUpdate(bus, _pendingBw, true);
     if (!checkIdle(bus)) {
       clearGrayStaging();
       return false;
     }
   }
+#else
+  (void)transitionSource;
 #endif
   const bool ran = runUpdate(bus, _pendingBw, useGray, corrective);
   if (ran) _needsFull = false;
@@ -1038,6 +1065,7 @@ void PaperMonoDriver::beginDisplayWork() {
   if (++_renderGeneration == 0) ++_renderGeneration;
   // A logical render owns all three staged planes. Discard anything left by a
   // canceled/OOM render before allowing the next page to contribute strips.
+  if (_pendingTri) _transitionSource = OpticalState::Unknown;
   _pendingTri = false;
   _pendingCorrective = false;
   clearGrayStaging();
@@ -1120,6 +1148,7 @@ void PaperMonoDriver::displayGray(EpdBus& bus, const uint8_t* fb, bool turnOff, 
     // panel still shows the previous page, which is a valid state, and the
     // replacement page is already on its way. Nothing was submitted, so there
     // is no partial frame to repair.
+    _transitionSource = OpticalState::Unknown;
     _pendingTri = false;
     _pendingCorrective = false;
     clearGrayStaging();
@@ -1179,10 +1208,12 @@ void PaperMonoDriver::displayGrayCalibration(EpdBus& bus, const uint8_t* fb, uin
 
 void PaperMonoDriver::cleanupGrayscaleBuffers(EpdBus& bus, const uint8_t* bw) {
   if (!_pendingTri) {
+    _transitionSource = OpticalState::Unknown;
     clearGrayStaging();
     return;
   }
   if (displayWorkCancelled()) {
+    _transitionSource = OpticalState::Unknown;
     _pendingTri = false;
     _pendingCorrective = false;
     clearGrayStaging();
@@ -1245,6 +1276,7 @@ void PaperMonoDriver::requestResync(uint8_t settlePasses) {
 }
 
 void PaperMonoDriver::resetGray() {
+  _transitionSource = OpticalState::Unknown;
   _panelHasGray = false;
   clearGrayStaging();
   _pendingTri = false;
