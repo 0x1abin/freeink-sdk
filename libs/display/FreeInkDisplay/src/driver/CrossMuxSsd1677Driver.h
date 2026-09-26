@@ -83,6 +83,7 @@ class CrossMuxSsd1677Driver : public PanelDriver {
 
   void begin(EpdBus& bus) override;
   void deepSleep(EpdBus& bus) override;
+  OpticalState opticalState() const override;
 
   void display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) override;
   void displayWithContext(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff,
@@ -101,7 +102,11 @@ class CrossMuxSsd1677Driver : public PanelDriver {
   void displayWindow(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, uint16_t x, uint16_t y, uint16_t w,
                      uint16_t h, bool turnOff) override;
 
-  void requestResync(uint8_t) override { _needsGrayClear = true; _absoluteInput = false; }
+  void requestResync(uint8_t) override {
+    _needsGrayClear = true;
+    _absoluteInput = false;
+    _opticalState = _pendingOpticalState = OpticalState::Unknown;
+  }
   void beginGrayscale(EpdBus& bus, const uint8_t* fb, GrayscaleMode mode, RefreshMode fallback, bool turnOff) override;
 
   void seedPreviousFrame(EpdBus& bus, const uint8_t* buf) override;
@@ -128,6 +133,8 @@ class CrossMuxSsd1677Driver : public PanelDriver {
   void setBackgroundHint(bool darkBackground) override { _darkBackground = darkBackground; }
 
  private:
+  OpticalState _opticalState = OpticalState::Unknown;
+  OpticalState _pendingOpticalState = OpticalState::Unknown;
   bool _needsGrayClear = false;
   bool _absoluteInput = false;
   void writeGrayRam(EpdBus& bus, uint8_t command, const uint8_t* data, uint16_t len);
@@ -150,7 +157,7 @@ class CrossMuxSsd1677Driver : public PanelDriver {
   RefreshAction resolveRefresh(RefreshMode mode, bool turnOff, RefreshContext context);
   bool completeRefresh(EpdBus& bus);
   bool needsGrayClean() const;
-  void displayBlackPulse(EpdBus& bus, const uint8_t* fb, bool turnOff);
+  void displayBlackPulse(EpdBus& bus, const uint8_t* fb, bool turnOff, RefreshContext context);
 
   const CrossMuxSsd1677Config& _cfg;
 

@@ -55,6 +55,40 @@ int main(int argc, char** argv) {
     assert(bus.resets > resetBeforeWake && d.displayCommitted());
   }
 }
+#elif !FREEINK_SSD1677_TEXT_ROUTING
+int main(int argc, char** argv) {
+  assert(argc == 2);
+#if FREEINK_DEVICE_X4CLASSIC
+  BoardConfig::ACTIVE.board = BoardConfig::Board::XteinkX4Classic;
+#endif
+  const bool uc = std::strncmp(argv[1], "uc", 2) == 0;
+  if (uc)
+    BoardConfig::ACTIVE.displayController = std::strcmp(argv[1], "uc8179") == 0
+                                                ? BoardConfig::DisplayController::UC8179
+                                                : BoardConfig::DisplayController::UC8279;
+  FreeInkDisplay d(0, 0, 0, 0, 0, 0);
+  d.begin();
+  assert(!d.supportsTextOnlyCombinedBase() && !d.supportsReaderTransitions());
+  assert(paperMonoDriver()._pendingBw == nullptr);
+  if (uc) return 0;  // UC8279 owns its existing grayscale buffers.
+  assert(allocationCalls == 0 && liveAllocations == 0);
+  std::array<uint8_t, 48000> plane{};
+  auto& bus = d._bus;
+  bus.clear();
+  d.displayGrayscaleBase(Mode::HALF_REFRESH, false, RefreshContext::TextOnlyAntiAliasing);
+  assert(pixels(bus) == 1 && last(bus, 0x22) == Bytes{0xD7});
+  d.copyGrayscaleBuffers(plane.data(), plane.data());
+  d.displayGrayBuffer(false);
+  assert(pixels(bus) == 2 && last(bus, 0x22) == Bytes{0xCC});
+  const auto textLut = last(bus, 0x32);
+  d.cleanupGrayscaleBuffers(plane.data());
+  bus.clear();
+  d.displayGrayscaleBase(Mode::HALF_REFRESH, false, RefreshContext::ImageReading);
+  d.copyGrayscaleBuffers(plane.data(), plane.data());
+  d.displayGrayBuffer(false);
+  assert(pixels(bus) == 2 && last(bus, 0x32) == textLut);
+  assert(allocationCalls == 0);
+}
 #else
 int main(int argc, char** argv) {
   assert(argc == 2);
@@ -84,6 +118,7 @@ int main(int argc, char** argv) {
   d.begin();
   if (uc || allocationFailAt) {
     assert(!d.supportsTextOnlyCombinedBase());
+    assert(!d.supportsReaderTransitions() && !d.canUseTextTransition());
     assert(paperMonoDriver()._pendingBw == nullptr);
     if (!uc) assert(liveAllocations == 0);
     assert(d._driver == d._originalDriver);
@@ -285,6 +320,149 @@ int main(int argc, char** argv) {
     assert(d.displayCommitted() && pixels(bus) >= 2);
     d.cleanupGrayscaleBuffers(bw.data());
   }
+#if FREEINK_DEVICE_METALIO_EINK4 || FREEINK_DEVICE_STICKY || FREEINK_DEVICE_MURPHY_M4 || \
+    (FREEINK_DEVICE_WAVESHARE_EPAPER_397 && FREEINK_SSD1677_READER_TRANSITIONS)
+#if FREEINK_SSD1677_READER_TRANSITIONS
+  constexpr bool experiment = true;
+#else
+  constexpr bool experiment = false;
+#endif
+#if FREEINK_DEVICE_METALIO_EINK4
+  const int correctivePixels = 3;
+#else
+  const int correctivePixels = 2;
+#endif
+  assert(d.supportsReaderTransitions() == experiment);
+  assert(d.supportsContinuousImageReading() ==
+         (experiment && BoardConfig::ACTIVE.board == BoardConfig::Board::MetalioEink4));
+  const auto transition = [&](Mode::RefreshMode mode = Mode::FAST_REFRESH) {
+    std::memcpy(d.getFrameBuffer(), bw.data(), bw.size());
+    d.displayGrayscaleBase(mode, false, RefreshContext::TextOnlyAntiAliasingTransition);
+    d.copyGrayscaleBuffers(lsb.data(), msb.data());
+  };
+  for (const bool image : {false, true}) {
+    d.displayBuffer(image ? Mode::HALF_REFRESH : Mode::FULL_REFRESH, false,
+                    image ? RefreshContext::ImageReading : RefreshContext::Normal);
+    if (image) {
+      d.copyGrayscaleBuffers(lsb.data(), msb.data());
+      d.displayGrayBuffer(false);
+      d.cleanupGrayscaleBuffers(bw.data());
+    }
+    assert(d.canUseTextTransition() == experiment);
+    bus.clear();
+    transition();
+    assert(pixels(bus) == 0);  // All planes are staged before the first pixel activation.
+    d.displayGrayBuffer(false);
+    assert(pixels(bus) == (experiment ? 1 : correctivePixels));
+    assert(last(bus, 0x32) == initialLut);  // Existing waveform, no changed-only tuning.
+    assert(d.displayCommitted() && !combined._needsFull);
+    d.cleanupGrayscaleBuffers(bw.data());
+    assert(!d.canUseTextTransition());
+    bus.clear();
+    bw[100] ^= 0x80;
+    stage(Mode::FAST_REFRESH);
+    d.displayGrayBuffer(false);
+    assert(pixels(bus) == 1);
+    d.cleanupGrayscaleBuffers(bw.data());
+    bus.clear();
+    stage(Mode::HALF_REFRESH);  // Deferred periodic/manual clean still runs in full.
+    d.displayGrayBuffer(false);
+    assert(pixels(bus) == correctivePixels);
+    d.cleanupGrayscaleBuffers(bw.data());
+  }
+  // RAM synchronization preserves optical gray; resync and original-driver
+  // failures revoke it, even after the external BUSY signal is released.
+  d.displayBuffer(Mode::FULL_REFRESH);
+  d.copyGrayscaleBuffers(lsb.data(), msb.data());
+  bus.failAt = bus.activation + 1;
+  d.displayGrayBuffer(false);
+  assert(!d.canUseTextTransition());
+  assert(d._driver->opticalState() == OpticalState::Unknown);
+  const auto originalFailedWrites = bus.writes.size();
+  d.cleanupGrayscaleBuffers(bw.data());
+  assert(bus.writes.size() == originalFailedWrites);
+  bus.failAt = 0;
+  bus.busy = false;
+  assert(!d.canUseTextTransition());
+  d.displayBuffer(Mode::FULL_REFRESH);
+  assert(d.canUseTextTransition() == experiment);
+  d.requestResync();
+  assert(!d.canUseTextTransition());
+  d.displayBuffer(Mode::FULL_REFRESH);
+  d.displayBufferAsync(Mode::FAST_REFRESH);
+  if (d._refreshPending) {
+    assert(!d.canUseTextTransition());
+    d.finishDisplayAsync();
+    assert(d.canUseTextTransition() == experiment);
+  }
+  // Explicit HALF/FULL cannot be weakened, even with an incorrectly supplied transition context.
+  for (const auto mode : {Mode::HALF_REFRESH, Mode::FULL_REFRESH}) {
+    d.displayBuffer(Mode::FULL_REFRESH);
+    bus.clear();
+    transition(mode);
+    d.displayGrayBuffer(false);
+    assert(pixels(bus) == (mode == Mode::FULL_REFRESH ? 2 : correctivePixels));
+    d.cleanupGrayscaleBuffers(bw.data());
+  }
+  d.displayBuffer(Mode::FULL_REFRESH);
+#if FREEINK_DEVICE_STICKY || FREEINK_DEVICE_WAVESHARE_EPAPER_397
+  // These vendor BW sequences power off; their gray sequences keep rails on.
+  d.copyGrayscaleBuffers(lsb.data(), msb.data());
+  d.displayGrayBuffer(false);
+  d.cleanupGrayscaleBuffers(bw.data());
+#else
+  d.displayBuffer(Mode::FAST_REFRESH, false);
+#endif
+  bus.clear();
+  bus.resetClearsFailure = true;
+  bus.failAt = bus.activation + 1;  // Fail outgoing original-driver power-off, before text begin().
+  transition();
+  d.displayGrayBuffer(false);
+  assert(pixels(bus) == correctivePixels);  // Successful reset must not resurrect a failed handoff's permission.
+  d.cleanupGrayscaleBuffers(bw.data());
+  bus.resetClearsFailure = false;
+  bus.failAt = 0;
+
+  d.displayBuffer(Mode::FULL_REFRESH);
+  bus.clear();
+  transition();
+  d.abortPostRefresh();
+  d.beginDisplayWork();  // Same cancellation sequence as HalDisplay::cancelGrayscale().
+  d.cleanupGrayscaleBuffers(bw.data());
+  assert(pixels(bus) == 0);
+  assert(combined._transitionSource == OpticalState::Unknown);
+  transition();  // A canceled handoff must not leak its permission to a later frame.
+  d.displayGrayBuffer(false);
+  assert(pixels(bus) == correctivePixels);
+  d.cleanupGrayscaleBuffers(bw.data());
+
+  d.displayBuffer(Mode::FULL_REFRESH);
+  bus.clear();
+  transition();
+  bus.failAt = bus.activation + 1;
+  d.displayGrayBuffer(false);
+  assert(!d.displayCommitted());
+  const auto failedWrites = bus.writes.size();
+  d.cleanupGrayscaleBuffers(bw.data());
+  assert(bus.writes.size() == failedWrites);
+  bus.failAt = 0;
+  bus.busy = false;
+  bus.clear();
+  transition();
+  d.displayGrayBuffer(false);
+  assert(pixels(bus) == correctivePixels);  // Fault recovery uses the original endpoint clean.
+  d.cleanupGrayscaleBuffers(bw.data());
+
+  d.deepSleep();
+  assert(!d.canUseTextTransition());
+  bus.clear();
+  transition();
+  d.displayGrayBuffer(false);
+  assert(pixels(bus) == correctivePixels);  // Unknown glass after power/sleep cannot take the shortcut.
+  d.cleanupGrayscaleBuffers(bw.data());
+  d.setInverted(true);
+  assert(!d.supportsReaderTransitions() && !d.canUseTextTransition());
+#endif
   assert(allocationCalls == 8);
 }
 

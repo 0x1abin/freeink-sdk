@@ -22,6 +22,8 @@ namespace freeink {
 
 enum class RefreshMode : uint8_t { Full, Half, Fast };
 enum class GrayPlane : uint8_t { Lsb, Msb };
+// Successful display history, not a RAM-content query or an optical measurement.
+enum class OpticalState : uint8_t { Unknown, Bw, Gray };
 
 struct PanelGeometry {
   uint16_t width;
@@ -49,6 +51,7 @@ class PanelDriver {
   // --- lifecycle ---
   virtual void begin(EpdBus& bus) = 0;
   virtual void deepSleep(EpdBus& bus) = 0;
+  virtual OpticalState opticalState() const { return OpticalState::Unknown; }
 
   // --- core paint path (load RAM + refresh) ---
   virtual void display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) = 0;

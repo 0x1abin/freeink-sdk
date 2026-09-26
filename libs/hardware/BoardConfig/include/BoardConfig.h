@@ -197,7 +197,7 @@
 #endif
 // Optional three-tone text AA. Board/controller and PSRAM are checked again at boot.
 #ifndef FREEINK_SSD1677_COMBINED_AA
-#define FREEINK_SSD1677_COMBINED_AA 1
+#define FREEINK_SSD1677_COMBINED_AA (!(FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_X4CLASSIC))
 #endif
 #if FREEINK_SSD1677_COMBINED_AA && CONFIG_IDF_TARGET_ESP32S3 &&                                               \
     (FREEINK_DEVICE_STICKY || FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_X4CLASSIC || FREEINK_DEVICE_MURPHY_M4 || \
@@ -205,6 +205,12 @@
 #define FREEINK_SSD1677_TEXT_ROUTING 1
 #else
 #define FREEINK_SSD1677_TEXT_ROUTING 0
+#endif
+// Trusted text handoffs are default only on the selected platforms.
+#ifndef FREEINK_SSD1677_READER_TRANSITIONS
+#define FREEINK_SSD1677_READER_TRANSITIONS                                                   \
+  (FREEINK_SSD1677_TEXT_ROUTING && (FREEINK_DEVICE_METALIO_EINK4 || FREEINK_DEVICE_STICKY || \
+                                    FREEINK_DEVICE_MURPHY_M4 || FREEINK_DEVICE_WAVESHARE_EPAPER_397))
 #endif
 #if FREEINK_DEVICE_PAPERMONO || FREEINK_SSD1677_TEXT_ROUTING
 #define FREEINK_DRIVER_PAPER_MONO 1

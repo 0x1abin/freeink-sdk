@@ -39,6 +39,7 @@ class PaperMonoDriver final : public PanelDriver {
  public:
   // Eight 48 KB planes are reused for the driver's lifetime, exclusively in PSRAM.
   void setOriginalDriver(PanelDriver* driver) { _originalDriver = driver; }
+  void setTransitionSource(OpticalState source) { _transitionSource = source; }
   bool prepareBuffers() { return allocateBuffers(); }
   uint32_t spiHz() const override;
   BusyPolarity busyPolarity() const override { return BusyPolarity::ActiveHigh; }
@@ -153,6 +154,7 @@ class PaperMonoDriver final : public PanelDriver {
   bool _grayMsbReady = false;
   bool _pendingTri = false;
   bool _pendingCorrective = false;
+  OpticalState _transitionSource = OpticalState::Unknown;
   bool _displayCommitted = false;
   bool _controllerPowered = false;
   bool _windowBaselineValid = false;

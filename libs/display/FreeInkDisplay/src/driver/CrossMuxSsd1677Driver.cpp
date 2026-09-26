@@ -235,6 +235,7 @@ uint32_t CrossMuxSsd1677Driver::spiHz() const {
 PanelGeometry CrossMuxSsd1677Driver::geometry() const { return {_w, _h, _wb, _bufferSize}; }
 
 void CrossMuxSsd1677Driver::begin(EpdBus& bus) {
+  _opticalState = OpticalState::Unknown;
   _pendingPowerOff = false;
   _pendingPowerSequence = 0;
   bus.reset();
@@ -393,6 +394,7 @@ void CrossMuxSsd1677Driver::refresh(EpdBus& bus, RefreshMode mode, bool turnOff,
     bus.cmd(CMD_MASTER_ACTIVATION);
     if (!async) bus.waitRefreshComplete("refresh");
     if (!async && bus.isBusy()) {
+      _opticalState = OpticalState::Unknown;
       _needsInitialFull = true;
       return;
     }
@@ -487,8 +489,7 @@ void CrossMuxSsd1677Driver::powerOffController(EpdBus& bus) {
   // interval, wait out the remainder before changing the state flag.
   delay(200);
   bus.waitBusy(" display power-down");
-  if (bus.isBusy()) return;
-  if (!completeRefresh(bus)) return;
+  if (!completeRefresh(bus) || bus.isBusy()) return;
   _isScreenOn = false;
 }
 
@@ -528,15 +529,21 @@ void CrossMuxSsd1677Driver::displayFinish(EpdBus& bus, const uint8_t* fb) {
     _pendingPowerOff = false;
     powerOffController(bus);
   }
+  if (!bus.isBusy()) _opticalState = _pendingOpticalState;
 }
 
 bool CrossMuxSsd1677Driver::needsGrayClean() const { return _grayState != GrayState::None; }
 
+OpticalState CrossMuxSsd1677Driver::opticalState() const { return _opticalState; }
+
 CrossMuxSsd1677Driver::RefreshAction CrossMuxSsd1677Driver::resolveRefresh(RefreshMode mode, bool turnOff, RefreshContext context) {
   if (_cfg.cleanPolicy == CrossMuxSsd1677CleanPolicy::BlackPulse) {
     if (mode == RefreshMode::Full) return RefreshAction::Full;
-    const bool reusable = mode == RefreshMode::Fast && context == RefreshContext::ContinuousReading &&
-                          _grayState == GrayState::BaselineSynced;
+    bool reading = context == RefreshContext::ContinuousReading;
+#if FREEINK_SSD1677_READER_TRANSITIONS
+    reading = reading || context == RefreshContext::ImageReading;
+#endif
+    const bool reusable = mode == RefreshMode::Fast && reading && _grayState == GrayState::BaselineSynced;
     if (_needsInitialFull || _needsGrayClear || mode == RefreshMode::Half || (needsGrayClean() && !reusable)) {
       return RefreshAction::BlackPulse;
     }
@@ -574,9 +581,12 @@ CrossMuxSsd1677Driver::RefreshAction CrossMuxSsd1677Driver::resolveRefresh(Refre
 // State changes follow BUSY completion. On failure the next update must clean,
 // and shutdown must still attempt to park a possibly powered controller.
 bool CrossMuxSsd1677Driver::completeRefresh(EpdBus& bus) {
+#if !FREEINK_SSD1677_READER_TRANSITIONS
   if (_cfg.cleanPolicy == CrossMuxSsd1677CleanPolicy::Legacy) return true;
+#endif
   if (bus.isBusy()) {
     esp_rom_printf("[SSD1677] refresh timed out; baseline remains unknown\n");
+    _opticalState = OpticalState::Unknown;
     _needsInitialFull = true;
     _pendingPowerOff = false;
     _pendingPowerSequence = 0;
@@ -591,20 +601,31 @@ bool CrossMuxSsd1677Driver::completeRefresh(EpdBus& bus) {
   return true;
 }
 
-void CrossMuxSsd1677Driver::displayBlackPulse(EpdBus& bus, const uint8_t* fb, bool turnOff) {
+void CrossMuxSsd1677Driver::displayBlackPulse(EpdBus& bus, const uint8_t* fb, bool turnOff, RefreshContext context) {
   // The physical old frame can be unknown after reset or grayscale. Drive all
-  // pixels white->black first; no stale RED or host-side previous frame is used.
+  // pixels to a known endpoint first; no stale RED or host-side previous frame is used.
   // fillPlane streams a bounded chunk and never alters the caller's framebuffer.
+#if FREEINK_DEVICE_METALIO_EINK4 && FREEINK_SSD1677_READER_TRANSITIONS
+  const uint8_t cleanEndpoint = context == RefreshContext::ImageReading ? 0xFF : 0x00;
+  const uint8_t oldEndpoint = static_cast<uint8_t>(~cleanEndpoint);
+#else
+  (void)context;
+  constexpr uint8_t oldEndpoint = 0xFF;
+  constexpr uint8_t cleanEndpoint = 0x00;
+#endif
+#if FREEINK_SSD1677_READER_TRANSITIONS
+  esp_rom_printf("[SSD1677] endpoint clean: %s, planned_pixel_activations=2\n", cleanEndpoint ? "white" : "black");
+#endif
   setRamArea(bus, 0, 0, _w, _h);
-  bus.fillPlane(CMD_WRITE_RAM_RED, 0xFF, _h, _wb);
+  bus.fillPlane(CMD_WRITE_RAM_RED, oldEndpoint, _h, _wb);
   setRamArea(bus, 0, 0, _w, _h);
-  bus.fillPlane(CMD_WRITE_RAM_BW, 0x00, _h, _wb);
+  bus.fillPlane(CMD_WRITE_RAM_BW, cleanEndpoint, _h, _wb);
   refresh(bus, RefreshMode::Fast, false);
   if (!completeRefresh(bus)) return;
   setRamArea(bus, 0, 0, _w, _h);
-  bus.fillPlane(CMD_WRITE_RAM_BW, 0x00, _h, _wb);
+  bus.fillPlane(CMD_WRITE_RAM_BW, cleanEndpoint, _h, _wb);
   setRamArea(bus, 0, 0, _w, _h);
-  bus.fillPlane(CMD_WRITE_RAM_RED, 0x00, _h, _wb);
+  bus.fillPlane(CMD_WRITE_RAM_RED, cleanEndpoint, _h, _wb);
 
   setRamArea(bus, 0, 0, _w, _h);
   writeRam(bus, CMD_WRITE_RAM_BW, fb, _bufferSize);
@@ -616,6 +637,7 @@ void CrossMuxSsd1677Driver::displayBlackPulse(EpdBus& bus, const uint8_t* fb, bo
   _needsInitialFull = false;
   _grayState = GrayState::None;
   _needsGrayClear = false;
+  _opticalState = OpticalState::Bw;
   if (_pendingPowerOff) {
     _pendingPowerOff = false;
     powerOffController(bus);
@@ -625,10 +647,17 @@ void CrossMuxSsd1677Driver::displayBlackPulse(EpdBus& bus, const uint8_t* fb, bo
 bool CrossMuxSsd1677Driver::displayImpl(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff,
                                 bool async, RefreshContext context) {
   if (!completeRefresh(bus)) return false;
+  const auto previousOpticalState = _opticalState;
+  _opticalState = OpticalState::Unknown;
   const auto action = resolveRefresh(mode, turnOff, context);
+#if FREEINK_SSD1677_READER_TRANSITIONS
+  esp_rom_printf("[SSD1677] refresh context=%u mode=%u action=%u initial=%u gray=%u resync=%u\n", unsigned(context),
+                 unsigned(mode), unsigned(action), unsigned(_needsInitialFull), unsigned(_grayState),
+                 unsigned(_needsGrayClear));
+#endif
   switch (action) {
     case RefreshAction::BlackPulse:
-      displayBlackPulse(bus, fb, turnOff);
+      displayBlackPulse(bus, fb, turnOff, context);
       return false;
     case RefreshAction::Full:
       mode = RefreshMode::Full;
@@ -660,8 +689,11 @@ bool CrossMuxSsd1677Driver::displayImpl(EpdBus& bus, const uint8_t* fb, const ui
     }
   }
 
+  _pendingOpticalState =
+      mode == RefreshMode::Fast && previousOpticalState == OpticalState::Gray ? OpticalState::Gray : OpticalState::Bw;
   refresh(bus, mode, turnOff, async);
   if (!async && bus.isBusy()) {
+    _opticalState = OpticalState::Unknown;
     _needsInitialFull = true;
     return false;
   }
@@ -687,6 +719,7 @@ bool CrossMuxSsd1677Driver::displayImpl(EpdBus& bus, const uint8_t* fb, const ui
     _pendingPowerOff = false;
     powerOffController(bus);
   }
+  if (!async && !bus.isBusy()) _opticalState = _pendingOpticalState;
   return async;
 }
 
@@ -815,6 +848,7 @@ void CrossMuxSsd1677Driver::writeGrayscalePlaneStrip(EpdBus& bus, GrayPlane plan
 
 void CrossMuxSsd1677Driver::displayGray(EpdBus& bus, const uint8_t* fb, bool turnOff, const unsigned char* lut,
                                 bool factoryMode) {
+  _opticalState = OpticalState::Unknown;
   if (!completeRefresh(bus)) return;
   (void)fb;
 
@@ -855,6 +889,12 @@ void CrossMuxSsd1677Driver::displayGray(EpdBus& bus, const uint8_t* fb, bool tur
   if (!completeRefresh(bus)) return;
   setCustomLut(bus, false, nullptr);
   _absoluteInput = false;
+  if (bus.isBusy()) {
+    _opticalState = OpticalState::Unknown;
+    _needsInitialFull = true;
+  } else {
+    _opticalState = OpticalState::Gray;
+  }
 }
 
 void CrossMuxSsd1677Driver::cleanupGrayscaleBuffers(EpdBus& bus, const uint8_t* bw) {

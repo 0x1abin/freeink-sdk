@@ -172,6 +172,7 @@ uint32_t Ssd1677Driver::spiHz() const {
 PanelGeometry Ssd1677Driver::geometry() const { return {_w, _h, _wb, _bufferSize}; }
 
 void Ssd1677Driver::begin(EpdBus& bus) {
+  _opticalState = OpticalState::Unknown;
   bus.reset();
   bus.waitBusy("SSD1677 hardware reset");
   if (bus.isBusy()) return;
@@ -310,6 +311,7 @@ void Ssd1677Driver::refresh(EpdBus& bus, RefreshMode mode, bool turnOff, bool as
     bus.cmd(CMD_MASTER_ACTIVATION);
     if (!async) bus.waitRefreshComplete("refresh");
     if (!async && bus.isBusy()) {
+      _opticalState = OpticalState::Unknown;
       _needsInitialFull = true;
       return;
     }
@@ -391,7 +393,11 @@ void Ssd1677Driver::powerOffController(EpdBus& bus) {
   // interval, wait out the remainder before changing the state flag.
   delay(200);
   bus.waitBusy(" display power-down");
-  if (bus.isBusy()) return;
+  if (bus.isBusy()) {
+    _opticalState = OpticalState::Unknown;
+    _needsInitialFull = true;
+    return;
+  }
   _isScreenOn = false;
 }
 
@@ -414,6 +420,7 @@ void Ssd1677Driver::displayFinish(EpdBus& bus, const uint8_t* fb) {
   bus.waitRefreshComplete("refresh");
   if (bus.isBusy()) {
     _pendingPowerOff = false;
+    _opticalState = OpticalState::Unknown;
     _needsInitialFull = true;
     return;
   }
@@ -421,10 +428,13 @@ void Ssd1677Driver::displayFinish(EpdBus& bus, const uint8_t* fb) {
     _pendingPowerOff = false;
     powerOffController(bus);
   }
+  if (!bus.isBusy()) _opticalState = _pendingOpticalState;
 }
 
 void Ssd1677Driver::displayImpl(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff,
                                 bool async) {
+  const auto previousOpticalState = _opticalState;
+  _opticalState = OpticalState::Unknown;
   if (_needsGrayClear) {
     if (mode == RefreshMode::Fast) mode = _cfg.halfSeqOverride ? RefreshMode::Half : RefreshMode::Full;
     _needsGrayClear = false;
@@ -489,8 +499,11 @@ void Ssd1677Driver::displayImpl(EpdBus& bus, const uint8_t* fb, const uint8_t* p
     }
   }
 
+  _pendingOpticalState =
+      mode == RefreshMode::Fast && previousOpticalState == OpticalState::Gray ? OpticalState::Gray : OpticalState::Bw;
   refresh(bus, mode, turnOff, async);
   if (!async && bus.isBusy()) {
+    _opticalState = OpticalState::Unknown;
     _needsInitialFull = true;
     return;
   }
@@ -509,6 +522,7 @@ void Ssd1677Driver::displayImpl(EpdBus& bus, const uint8_t* fb, const uint8_t* p
     _pendingPowerOff = false;
     powerOffController(bus);
   }
+  if (!async && !bus.isBusy()) _opticalState = _pendingOpticalState;
 }
 
 void Ssd1677Driver::displayWindow(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, uint16_t x, uint16_t y,
@@ -552,6 +566,11 @@ void Ssd1677Driver::displayWindow(EpdBus& bus, const uint8_t* fb, const uint8_t*
   }
 
   refresh(bus, RefreshMode::Fast, turnOff);
+  if (bus.isBusy()) {
+    _opticalState = OpticalState::Unknown;
+    _needsInitialFull = true;
+    return;
+  }
 
   if (prev == nullptr) {
     setRamArea(bus, x, y, w, h);
@@ -620,6 +639,7 @@ void Ssd1677Driver::writeGrayscalePlaneStrip(EpdBus& bus, GrayPlane plane, const
 
 void Ssd1677Driver::displayGray(EpdBus& bus, const uint8_t* fb, bool turnOff, const unsigned char* lut,
                                 bool factoryMode) {
+  _opticalState = OpticalState::Unknown;
   (void)fb;
 
   // Differential mode marks grayscale content on the panel (the next BW update
@@ -644,6 +664,12 @@ void Ssd1677Driver::displayGray(EpdBus& bus, const uint8_t* fb, bool turnOff, co
     bus.cmd(CMD_MASTER_ACTIVATION);
     bus.waitRefreshComplete("factory_gray");
     _isScreenOn = true;
+    if (bus.isBusy()) {
+      _needsInitialFull = true;
+      _customLutActive = false;
+      _absoluteInput = false;
+      return;
+    }
     if (turnOff) powerOffController(bus);
     _needsGrayClear = true;  // restoring RAM alone cannot restore B/W ink
   } else {
@@ -651,11 +677,23 @@ void Ssd1677Driver::displayGray(EpdBus& bus, const uint8_t* fb, bool turnOff, co
     // on, i.e. the X4's fast path). refresh() then runs the 0xCC external-LUT
     // sequence (its enable bits are a no-op on already-up rails).
     if (_cfg.grayPowerUpFirst) powerOn(bus);
+    if (bus.isBusy()) {
+      _needsInitialFull = true;
+      _customLutActive = false;
+      _absoluteInput = false;
+      return;
+    }
     refresh(bus, RefreshMode::Fast, turnOff);
   }
 
   setCustomLut(bus, false, nullptr);
   _absoluteInput = false;
+  if (bus.isBusy()) {
+    _opticalState = OpticalState::Unknown;
+    _needsInitialFull = true;
+  } else {
+    _opticalState = OpticalState::Gray;
+  }
 }
 
 void Ssd1677Driver::cleanupGrayscaleBuffers(EpdBus& bus, const uint8_t* bw) {
