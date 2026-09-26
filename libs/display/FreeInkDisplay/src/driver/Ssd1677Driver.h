@@ -128,6 +128,7 @@ class Ssd1677Driver : public PanelDriver {
   // Documented SSD1677 analog/oscillator shutdown. Used after a 0xFC update
   // when turnOff was requested and by deepSleep().
   void powerOffController(EpdBus& bus);
+  bool completeRefresh(EpdBus& bus);
   void displayImpl(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff, bool async);
 
   const Ssd1677Config& _cfg;

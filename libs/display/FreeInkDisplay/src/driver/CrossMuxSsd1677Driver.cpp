@@ -235,7 +235,7 @@ uint32_t CrossMuxSsd1677Driver::spiHz() const {
 PanelGeometry CrossMuxSsd1677Driver::geometry() const { return {_w, _h, _wb, _bufferSize}; }
 
 void CrossMuxSsd1677Driver::begin(EpdBus& bus) {
-  _opticalState = OpticalState::Unknown;
+  _opticalState = _pendingOpticalState = OpticalState::Unknown;
   _pendingPowerOff = false;
   _pendingPowerSequence = 0;
   bus.reset();
@@ -393,11 +393,7 @@ void CrossMuxSsd1677Driver::refresh(EpdBus& bus, RefreshMode mode, bool turnOff,
     bus.data(seqOverride);
     bus.cmd(CMD_MASTER_ACTIVATION);
     if (!async) bus.waitRefreshComplete("refresh");
-    if (!async && bus.isBusy()) {
-      _opticalState = OpticalState::Unknown;
-      _needsInitialFull = true;
-      return;
-    }
+    if (!async && !completeRefresh(bus)) return;
     // Only sequences carrying the low two disable bits physically power down.
     // X4 Pro DU (0xFC) does not, so a turnOff request must run the documented
     // 0x3C=0x80, 0x22=0x03, 0x20 sequence after the waveform completes instead
@@ -479,7 +475,7 @@ void CrossMuxSsd1677Driver::powerOn(EpdBus& bus) {
 }
 
 void CrossMuxSsd1677Driver::powerOffController(EpdBus& bus) {
-  if (!_isScreenOn) return;
+  if (!completeRefresh(bus) || !_isScreenOn) return;
   bus.cmd(CMD_BORDER_WAVEFORM);
   bus.data(_cfg.borderWaveformPowerOff ? _cfg.borderWaveformPowerOff : _cfg.borderWaveformInit);
   bus.cmd(CMD_DISPLAY_UPDATE_CTRL2);
@@ -489,7 +485,7 @@ void CrossMuxSsd1677Driver::powerOffController(EpdBus& bus) {
   // interval, wait out the remainder before changing the state flag.
   delay(200);
   bus.waitBusy(" display power-down");
-  if (!completeRefresh(bus) || bus.isBusy()) return;
+  if (!completeRefresh(bus)) return;
   _isScreenOn = false;
 }
 
@@ -581,16 +577,14 @@ CrossMuxSsd1677Driver::RefreshAction CrossMuxSsd1677Driver::resolveRefresh(Refre
 // State changes follow BUSY completion. On failure the next update must clean,
 // and shutdown must still attempt to park a possibly powered controller.
 bool CrossMuxSsd1677Driver::completeRefresh(EpdBus& bus) {
-#if !FREEINK_SSD1677_READER_TRANSITIONS
-  if (_cfg.cleanPolicy == CrossMuxSsd1677CleanPolicy::Legacy) return true;
-#endif
   if (bus.isBusy()) {
     esp_rom_printf("[SSD1677] refresh timed out; baseline remains unknown\n");
-    _opticalState = OpticalState::Unknown;
+    _opticalState = _pendingOpticalState = OpticalState::Unknown;
     _needsInitialFull = true;
     _pendingPowerOff = false;
     _pendingPowerSequence = 0;
     _customLutActive = false;
+    _absoluteInput = false;
     _isScreenOn = true;
     return false;
   }
@@ -692,13 +686,8 @@ bool CrossMuxSsd1677Driver::displayImpl(EpdBus& bus, const uint8_t* fb, const ui
   _pendingOpticalState =
       mode == RefreshMode::Fast && previousOpticalState == OpticalState::Gray ? OpticalState::Gray : OpticalState::Bw;
   refresh(bus, mode, turnOff, async);
-  if (!async && bus.isBusy()) {
-    _opticalState = OpticalState::Unknown;
-    _needsInitialFull = true;
-    return false;
-  }
+  if (!async && !completeRefresh(bus)) return false;
   if (_cfg.cleanPolicy != CrossMuxSsd1677CleanPolicy::Legacy && !async) {
-    if (!completeRefresh(bus)) return false;
     _needsInitialFull = false;
     if (action != RefreshAction::Fast) _grayState = GrayState::None;
   }
@@ -875,6 +864,7 @@ void CrossMuxSsd1677Driver::displayGray(EpdBus& bus, const uint8_t* fb, bool tur
     bus.cmd(CMD_MASTER_ACTIVATION);
     bus.waitRefreshComplete("factory_gray");
     _isScreenOn = true;
+    if (!completeRefresh(bus)) return;
     if (turnOff) powerOffController(bus);
     _needsGrayClear = true;  // restoring RAM alone cannot restore B/W ink
   } else {
@@ -889,12 +879,7 @@ void CrossMuxSsd1677Driver::displayGray(EpdBus& bus, const uint8_t* fb, bool tur
   if (!completeRefresh(bus)) return;
   setCustomLut(bus, false, nullptr);
   _absoluteInput = false;
-  if (bus.isBusy()) {
-    _opticalState = OpticalState::Unknown;
-    _needsInitialFull = true;
-  } else {
-    _opticalState = OpticalState::Gray;
-  }
+  _opticalState = OpticalState::Gray;
 }
 
 void CrossMuxSsd1677Driver::cleanupGrayscaleBuffers(EpdBus& bus, const uint8_t* bw) {
@@ -955,7 +940,7 @@ void CrossMuxSsd1677Driver::deepSleep(EpdBus& bus) {
   // driven with the full-refresh waveform through deep sleep, then power down
   // analog/clock. Stock does not touch CTRL1 here.
   powerOffController(bus);
-  if (bus.isBusy() || !completeRefresh(bus)) return;
+  if (!completeRefresh(bus)) return;
   // Stock parity: deep sleep mode 2 (0x03) discards controller RAM. Nothing may
   // treat RAM as a valid diff baseline after wake — initController() re-arms
   // _needsInitialFull, so the first paint is an absolute clean anyway.

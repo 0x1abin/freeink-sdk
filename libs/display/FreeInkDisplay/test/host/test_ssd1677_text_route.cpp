@@ -321,7 +321,7 @@ int main(int argc, char** argv) {
     d.cleanupGrayscaleBuffers(bw.data());
   }
 #if FREEINK_DEVICE_METALIO_EINK4 || FREEINK_DEVICE_STICKY || FREEINK_DEVICE_MURPHY_M4 || \
-    (FREEINK_DEVICE_WAVESHARE_EPAPER_397 && FREEINK_SSD1677_READER_TRANSITIONS)
+    FREEINK_DEVICE_WAVESHARE_EPAPER_397
 #if FREEINK_SSD1677_READER_TRANSITIONS
   constexpr bool experiment = true;
 #else
@@ -388,6 +388,17 @@ int main(int argc, char** argv) {
   assert(d.canUseTextTransition() == experiment);
   d.requestResync();
   assert(!d.canUseTextTransition());
+  d.displayBuffer(Mode::FULL_REFRESH);
+  d.displayBufferAsync(Mode::FAST_REFRESH);
+  if (d._refreshPending) {
+    bus.failAt = bus.activation;
+    d.finishDisplayAsync();
+    assert(original->opticalState() == OpticalState::Unknown);
+    bus.failAt = 0;
+    bus.busy = false;
+    original->displayFinish(bus, bw.data());
+    assert(original->opticalState() == OpticalState::Unknown);  // Late completion cannot revive a failed frame.
+  }
   d.displayBuffer(Mode::FULL_REFRESH);
   d.displayBufferAsync(Mode::FAST_REFRESH);
   if (d._refreshPending) {

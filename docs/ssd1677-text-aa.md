@@ -32,8 +32,9 @@ cleaning. Native RAM direction follows the board, not Paper Mono's mount.
 ## Trusted reader transitions
 
 `FREEINK_SSD1677_READER_TRANSITIONS` defaults on only for Metalio, Sticky,
-Murphy M4 and Waveshare 3.97 when combined text routing is enabled. Set it to 0 to keep combined AA
-but restore prepass transitions; set `FREEINK_SSD1677_COMBINED_AA=0` to use the
+Murphy M4 and Waveshare 3.97 when combined text routing is enabled. Set it to 0
+to keep combined AA but restore prepass transitions; set
+`FREEINK_SSD1677_COMBINED_AA=0` to use the
 original driver throughout. Other boards keep their existing transition policy.
 The old Metalio experiment flags are no longer used.
 
@@ -41,7 +42,8 @@ The old Metalio experiment flags are no longer used.
 `canUseTextTransition()` requires successful original-driver B/W or gray optical
 history, settled BUSY and normal polarity; drain pending work before querying.
 The SDK captures permission before the driver handoff and checks it again after
-power-down; callers submit the existing text-AA context, not a separate permission. Only a FAST transition with complete AA planes omits the OTP prepass.
+power-down; callers submit the existing text-AA context. Only a FAST transition
+with complete AA planes omits the OTP prepass.
 It runs the existing **full-target corrective AA waveform**; LUT bytes, ordinary
 text drive and framebuffer allocations are unchanged. A failed power-down,
 unknown history, resync, missing planes or canceled transaction cannot reuse the
@@ -54,10 +56,16 @@ failed refresh. Async history becomes valid only at completion. Driver handoff
 may carry optical history across controller sleep; a new facade session may not.
 Murphy M4 retains each batch's original temperature parameters.
 
+Each original driver's completion check handles BUSY failure in one place and
+discards both current and deferred optical history. A late completion cannot
+revive a failed frame. This protection also applies when transitions are disabled.
+Per-activation instrumentation is restricted to `SSD1677_PROBE_DEBUG` builds.
+
 `supportsContinuousImageReading()` is separate and true only for enabled
 Metalio. Image bases there consume the reader's existing cadence and use a white
 endpoint when cleanup is required; text/menu endpoints remain black. Sticky,
-Murphy M4 and Waveshare 3.97 keep their original image cadence, LUT and cleanup sequences.
+Murphy M4 and Waveshare 3.97 keep their original image cadence, LUT and cleanup
+sequences.
 
 EPUB/TXT entry counter zero starts a new configured reading cycle after a
 trusted entry. Counter one is real cleanup debt and is deferred only to the next
