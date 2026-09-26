@@ -405,7 +405,7 @@ bool PaperMonoDriver::ensureControllerReady(EpdBus& bus) {
 
 void PaperMonoDriver::activate(EpdBus& bus, uint8_t control) {
   if (!checkIdle(bus)) return;
-#if FREEINK_SSD1677_READER_TRANSITIONS
+#if defined(SSD1677_PROBE_DEBUG) && SSD1677_PROBE_DEBUG
   const auto started = millis();
 #endif
   // An activation may swap or consume the controller plane roles. A future
@@ -415,7 +415,7 @@ void PaperMonoDriver::activate(EpdBus& bus, uint8_t control) {
   bus.data(control);
   bus.cmd(0x20);
   bus.waitRefreshComplete("PaperMono refresh");
-#if FREEINK_SSD1677_READER_TRANSITIONS
+#if defined(SSD1677_PROBE_DEBUG) && SSD1677_PROBE_DEBUG
   esp_rom_printf("[SSD1677] text activation ctrl2=0x%02x pixel=%u elapsed=%lums busy=%u\n", control,
                  unsigned((control & 4) != 0), millis() - started, unsigned(bus.isBusy()));
 #endif
@@ -908,10 +908,12 @@ bool PaperMonoDriver::commitPending(EpdBus& bus, bool useGray) {
   // not pretend that synchronized RED RAM erased the previous gray image.
   // Optical validation must establish whether this sweep alone removes residue.
   singlePassTransition = transitionSource != OpticalState::Unknown && _pendingMode == RefreshMode::Fast && useGray;
+#if defined(SSD1677_PROBE_DEBUG) && SSD1677_PROBE_DEBUG
   if (singlePassTransition) {
     esp_rom_printf("[SSD1677] text transition source=%s: full-target AA, no OTP prepass\n",
                    transitionSource == OpticalState::Bw ? "bw" : "gray");
   }
+#endif
 #else
   (void)transitionSource;
 #endif

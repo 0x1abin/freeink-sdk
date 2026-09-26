@@ -8,7 +8,6 @@ ESP32-S3, the detected SSD1677 controller, 800x480 geometry and successful PSRAM
 allocation. UC controllers and ESP32-C3 retain their previous paths.
 
 Only a grayscale base requested with `RefreshContext::TextOnlyAntiAliasing`
-or `TextOnlyAntiAliasingTransition`
 selects the PaperMono-derived three-tone engine. `supportsTextOnlyCombinedBase()`
 reports availability before staging; `combinesGrayscaleBase()` reports the
 active text transaction. The Overlay encoding and existing strip interface
@@ -41,8 +40,8 @@ The old Metalio experiment flags are no longer used.
 `supportsReaderTransitions()` reports the capability through the facade/HAL.
 `canUseTextTransition()` requires successful original-driver B/W or gray optical
 history, settled BUSY and normal polarity; drain pending work before querying.
-The permission is captured before the driver handoff and checked again after
-power-down. Only a FAST transition with complete AA planes omits the OTP prepass.
+The SDK captures permission before the driver handoff and checks it again after
+power-down; callers submit the existing text-AA context, not a separate permission. Only a FAST transition with complete AA planes omits the OTP prepass.
 It runs the existing **full-target corrective AA waveform**; LUT bytes, ordinary
 text drive and framebuffer allocations are unchanged. A failed power-down,
 unknown history, resync, missing planes or canceled transaction cannot reuse the

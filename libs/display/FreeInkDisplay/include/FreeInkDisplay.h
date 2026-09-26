@@ -414,7 +414,7 @@ class FreeInkDisplay {
   // Every blocking panel operation calls this before touching the bus.
   void syncPendingAsync();
 #if FREEINK_SSD1677_TEXT_ROUTING
-  bool selectTextAaDriver(bool textOnlyAntiAliasing, bool allowTransition = false);
+  bool selectTextAaDriver(bool textOnlyAntiAliasing);
   void invalidateTextRoute();
 #endif
   // Shared body of displayBufferAsync() / triggerDisplayAsync(): fire the

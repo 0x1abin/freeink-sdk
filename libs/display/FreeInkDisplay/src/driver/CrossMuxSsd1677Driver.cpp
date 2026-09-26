@@ -613,7 +613,7 @@ void CrossMuxSsd1677Driver::displayBlackPulse(EpdBus& bus, const uint8_t* fb, bo
   constexpr uint8_t oldEndpoint = 0xFF;
   constexpr uint8_t cleanEndpoint = 0x00;
 #endif
-#if FREEINK_SSD1677_READER_TRANSITIONS
+#if defined(SSD1677_PROBE_DEBUG) && SSD1677_PROBE_DEBUG
   esp_rom_printf("[SSD1677] endpoint clean: %s, planned_pixel_activations=2\n", cleanEndpoint ? "white" : "black");
 #endif
   setRamArea(bus, 0, 0, _w, _h);
@@ -650,7 +650,7 @@ bool CrossMuxSsd1677Driver::displayImpl(EpdBus& bus, const uint8_t* fb, const ui
   const auto previousOpticalState = _opticalState;
   _opticalState = OpticalState::Unknown;
   const auto action = resolveRefresh(mode, turnOff, context);
-#if FREEINK_SSD1677_READER_TRANSITIONS
+#if defined(SSD1677_PROBE_DEBUG) && SSD1677_PROBE_DEBUG
   esp_rom_printf("[SSD1677] refresh context=%u mode=%u action=%u initial=%u gray=%u resync=%u\n", unsigned(context),
                  unsigned(mode), unsigned(action), unsigned(_needsInitialFull), unsigned(_grayState),
                  unsigned(_needsGrayClear));

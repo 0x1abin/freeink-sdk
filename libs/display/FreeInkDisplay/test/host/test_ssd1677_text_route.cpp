@@ -337,7 +337,7 @@ int main(int argc, char** argv) {
          (experiment && BoardConfig::ACTIVE.board == BoardConfig::Board::MetalioEink4));
   const auto transition = [&](Mode::RefreshMode mode = Mode::FAST_REFRESH) {
     std::memcpy(d.getFrameBuffer(), bw.data(), bw.size());
-    d.displayGrayscaleBase(mode, false, RefreshContext::TextOnlyAntiAliasingTransition);
+    d.displayGrayscaleBase(mode, false, RefreshContext::TextOnlyAntiAliasing);
     d.copyGrayscaleBuffers(lsb.data(), msb.data());
   };
   for (const bool image : {false, true}) {

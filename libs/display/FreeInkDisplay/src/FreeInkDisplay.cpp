@@ -619,10 +619,10 @@ void FreeInkDisplay::invalidateTextRoute() {
   _redRamSynced = false;
 }
 
-bool FreeInkDisplay::selectTextAaDriver(bool textOnlyAntiAliasing, bool allowTransition) {
+bool FreeInkDisplay::selectTextAaDriver(bool textOnlyAntiAliasing) {
   syncPendingAsync();  // A normal in-flight waveform is not a BUSY failure.
   paperMonoDriver().setTransitionSource(OpticalState::Unknown);
-  auto source = allowTransition && canUseTextTransition() ? _driver->opticalState() : OpticalState::Unknown;
+  auto source = textOnlyAntiAliasing && canUseTextTransition() ? _driver->opticalState() : OpticalState::Unknown;
   const bool combined = textOnlyAntiAliasing && _textCombinedAvailable;
   PanelDriver* next = combined ? static_cast<PanelDriver*>(&paperMonoDriver()) : _originalDriver;
   if (!next) return false;
@@ -1004,12 +1004,10 @@ bool FreeInkDisplay::displayGrayscaleBase(GrayscaleMode mode, RefreshMode fallba
                                           RefreshContext context) {
   cancelGrayscalePass();
 #if FREEINK_SSD1677_TEXT_ROUTING
-  const bool transition = context == RefreshContext::TextOnlyAntiAliasingTransition;
-  const bool textAa = mode == GrayscaleMode::Overlay &&
-                      (context == RefreshContext::TextOnlyAntiAliasing || transition) && _textCombinedAvailable &&
-                      !_inverted && !_inversionDirty;
+  const bool textAa = mode == GrayscaleMode::Overlay && context == RefreshContext::TextOnlyAntiAliasing &&
+                      _textCombinedAvailable && !_inverted && !_inversionDirty;
   _textAaPending = false;
-  if (!selectTextAaDriver(textAa, transition)) return false;
+  if (!selectTextAaDriver(textAa)) return false;
   _textAaPending = textAa;
 #endif
   const auto caps = grayscaleCapabilities(mode);
@@ -1038,10 +1036,9 @@ void FreeInkDisplay::displayGrayscaleBase(RefreshMode fallback, bool turnOffScre
   }
   syncPendingAsync();
 #if FREEINK_SSD1677_TEXT_ROUTING
-  const bool transition = context == RefreshContext::TextOnlyAntiAliasingTransition;
-  const bool textAa = (context == RefreshContext::TextOnlyAntiAliasing || transition) && _textCombinedAvailable;
+  const bool textAa = context == RefreshContext::TextOnlyAntiAliasing && _textCombinedAvailable;
   _textAaPending = false;
-  if (!selectTextAaDriver(textAa, transition)) return;
+  if (!selectTextAaDriver(textAa)) return;
   _textAaPending = textAa;
 #endif
   _shadowValid = false;
