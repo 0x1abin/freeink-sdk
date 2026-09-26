@@ -228,8 +228,23 @@ void Uc8279cA4Driver::displayGray(EpdBus& bus, const uint8_t* fb, const bool tur
   // never substitute the last rendered bit-plane as a black/white frame.
   if (!_grayLsb || !_grayMsb) return;
 
-  hardwareReset(bus);
-  initController(bus, true);
+  // Flicker/speed fix. The reader renders consecutive AA pages with NO B/W frame
+  // in between: with text AA on, EpubReaderActivity routes the base through
+  // displayGrayscaleBase() and only on the periodic clean cadence, so
+  // displayGray() is the sole thing that touches the panel on an ordinary page
+  // turn. Re-running the reset + full init here therefore re-powered and
+  // re-initialised the panel on EVERY page turn while changing nothing: both DTM
+  // planes are wholly rewritten below and loadGrayLut() re-sends the waveform.
+  //
+  // The reset and the init sequence are only needed when we actually have to
+  // change drive modes (entering grayscale from a B/W frame) or bring the panel
+  // back up after a turnOff. This mirrors the X4 / UC8179 siblings, whose AA
+  // path also leaves the panel powered and gates its transition on having run a
+  // grayscale refresh before (Uc8279X4Driver::_grayRefreshedOnce).
+  if (!_grayControllerMode || !_screenOn) {
+    hardwareReset(bus);
+    initController(bus, true);
+  }
   // Store MSB in DTM1 and LSB in DTM2, bottom-up, then append the same 48 white
   // gate-padding rows used by the normal framebuffer path.
   writeFrame(bus, CMD_DTM1, _grayMsb);
