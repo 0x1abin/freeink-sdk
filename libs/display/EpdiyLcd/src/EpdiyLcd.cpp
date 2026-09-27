@@ -298,45 +298,80 @@ void epdiyLcdDrawGray(const uint8_t* lsb, const uint8_t* msb, EpdiyLcdRefresh mo
   if (!g_started || g_fb4 == nullptr || g_cfg == nullptr) return;
   if (g_base == nullptr || lsb == nullptr || msb == nullptr) return;
 
-  // 先用底图重建整页，再把两个选择平面选中的像素改成中间灰：平面背景为 0，
-  // 只有真正的灰标记位被置起，所以 (l|m)==0 的字节原样保留。
-  // / Rebuild the whole page from the base first, then turn the pixels the two
-  // selector planes pick into mid gray. The planes are 0 in the background and only
-  // real gray marks are set, so a byte with (l|m)==0 is left untouched.
-  fillFrom1bpp(g_base);
+  // 局部平均重建：1bpp 页面里本来就编码了灰阶——文字靠覆盖率阈值，图片靠抖动图案。
+  // 对 3x3 邻域求墨占比，就能把抖动图案还原成连续灰阶，同时把文字边缘磨成中间灰，
+  // 一个机制同时管住抗锯齿和图片。两个选择平面给出宿主明确的每像素意图，用它主导、
+  // 邻域微调；没有标记的像素（纯黑/纯白/抖动图案）完全交给邻域。
+  //
+  // / Local-average reconstruction. The 1 bpp page already encodes tone: text through
+  // its thresholded coverage, images through their dither pattern. Averaging ink over
+  // a 3x3 neighbourhood recovers dithered images as continuous tone and softens text
+  // edges -- one mechanism for both anti-aliasing and images. The two selector planes
+  // carry the host's explicit per-pixel intent, which leads with the neighbourhood as
+  // a refinement; unmarked pixels (solid black/white, dither) come from the
+  // neighbourhood alone.
+  //
+  // 极性：epdiy 的 4bpp 是 0x0 = 黑、0xF = 白（epdiy.h:93），所以输出的 level 由
+  // "墨占比"反着算。原先这里按 0=白/15=黑 写的，把 light/dark 两档接反了。
+  // / Polarity: epdiy's 4 bpp is 0x0 = black, 0xF = white (epdiy.h:93), so the output
+  // level is derived from the ink fraction inverted. The previous code assumed
+  // 0 = white / 15 = black and had the two mid tones swapped.
 
-  // 中间灰的级数跟着极性走：level 0 是白、15 是黑，所以"偏白"的那一档取小值。
-  // 对齐 LgfxEpdDriver 的画布值 kGrayLight=0xAA / kGrayDark=0x55。
-  // / The mid-gray levels follow the polarity: level 0 is white and 15 is black, so
-  // the lighter slot takes the smaller value. Matches the LgfxEpdDriver canvas
-  // values kGrayLight=0xAA / kGrayDark=0x55.
-  const uint8_t levelLight = g_blackIsOne ? 5 : 10;
-  const uint8_t levelDark = g_blackIsOne ? 10 : 5;
+  // 定点：f 是"墨占比"，0 = 全白、255 = 全黑。
+  // / Fixed point: f is the ink fraction, 0 = all white, 255 = all black.
+  constexpr int kInkDark = 178;    // 2-bit 值 1（深灰）≈ 0.70 墨
+  constexpr int kInkLight = 89;    // 2-bit 值 2（浅灰）≈ 0.35 墨
+  constexpr int kIntentWeight = 166;  // 平面意图占 0.65，邻域占 0.35
 
-  const uint16_t w = static_cast<uint16_t>(epd_width());
-  const uint16_t h = static_cast<uint16_t>(epd_height());
-  const size_t stride = w / 8;
-  for (uint16_t y = 0; y < h; ++y) {
+  const int w = static_cast<int>(epd_width());
+  const int h = static_cast<int>(epd_height());
+  const int stride = w / 8;
+  // 底图按 g_blackIsOne 判墨：置位是黑，还是清零是黑。
+  // / Base ink test follows g_blackIsOne: is a set bit ink, or a clear one?
+
+  for (int y = 0; y < h; ++y) {
     const uint8_t* lrow = lsb + static_cast<size_t>(y) * stride;
     const uint8_t* mrow = msb + static_cast<size_t>(y) * stride;
     uint8_t* drow = g_fb4 + static_cast<size_t>(y) * (w / 2);
-    for (size_t bx = 0; bx < stride; ++bx) {
-      const uint8_t l = lrow[bx], m = mrow[bx];
-      if ((l | m) == 0) continue;
-      for (uint8_t bit = 0; bit < 8; ++bit) {
-        const uint8_t mask = static_cast<uint8_t>(0x80u >> bit);
-        const bool lb = (l & mask) != 0, mb = (m & mask) != 0;
-        if (!lb && !mb) continue;
-        const uint8_t level = (mb && !lb) ? levelLight : levelDark;
-        const size_t x = bx * 8 + bit;
-        uint8_t* cell = drow + (x >> 1);
-        // epdiy 是每字节两个像素：偶数列在低半字节，奇数列在高半字节。
-        // / epdiy packs two pixels per byte: even column low nibble, odd high.
-        if ((x & 1) != 0) {
-          *cell = static_cast<uint8_t>((*cell & 0x0Fu) | static_cast<uint8_t>(level << 4));
-        } else {
-          *cell = static_cast<uint8_t>((*cell & 0xF0u) | level);
+
+    for (int x = 0; x < w; ++x) {
+      // --- 3x3 墨占比 ------------------------------------------------------
+      int ink = 0, n = 0;
+      for (int dy = -1; dy <= 1; ++dy) {
+        const int yy = y + dy;
+        if (yy < 0 || yy >= h) continue;
+        const uint8_t* brow = g_base + static_cast<size_t>(yy) * stride;
+        for (int dx = -1; dx <= 1; ++dx) {
+          const int xx = x + dx;
+          if (xx < 0 || xx >= w) continue;
+          const bool bit = (brow[xx >> 3] & (0x80u >> (xx & 7))) != 0;
+          if (g_blackIsOne ? bit : !bit) ++ink;
+          ++n;
         }
+      }
+      int f = n > 0 ? (ink * 255) / n : 0;
+
+      // --- 宿主的每像素意图 ------------------------------------------------
+      const uint8_t mask = static_cast<uint8_t>(0x80u >> (x & 7));
+      const bool lb = (lrow[x >> 3] & mask) != 0;
+      const bool mb = (mrow[x >> 3] & mask) != 0;
+      if (lb || mb) {
+        const int intent = lb ? kInkDark : kInkLight;
+        f = (kIntentWeight * intent + (255 - kIntentWeight) * f) / 255;
+      }
+
+      // --- 墨占比 -> level（0 = 黑，15 = 白）-------------------------------
+      int level = ((255 - f) * 15 + 127) / 255;
+      if (level < 0) level = 0;
+      if (level > 15) level = 15;
+
+      // epdiy 每字节两个像素：偶数列低半字节、奇数列高半字节。
+      // / epdiy packs two pixels per byte: even column low nibble, odd high.
+      uint8_t* cell = drow + (x >> 1);
+      if ((x & 1) != 0) {
+        *cell = static_cast<uint8_t>((*cell & 0x0Fu) | static_cast<uint8_t>(level << 4));
+      } else {
+        *cell = static_cast<uint8_t>((*cell & 0xF0u) | static_cast<uint8_t>(level));
       }
     }
   }
