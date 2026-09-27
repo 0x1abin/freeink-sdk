@@ -298,59 +298,95 @@ void epdiyLcdDrawGray(const uint8_t* lsb, const uint8_t* msb, EpdiyLcdRefresh mo
   if (!g_started || g_fb4 == nullptr || g_cfg == nullptr) return;
   if (g_base == nullptr || lsb == nullptr || msb == nullptr) return;
 
-  // 并口 16 级屏直接吃宿主的 2-bit 覆盖率，不走"先阈值化成 1bpp、再从邻域重建灰阶"
-  // 那一套：底图给出黑/白，两个选择平面给出两档中间灰，四档均匀铺在 0..15 上。
+  // 两件事各司其职，不要再拿一个替代另一个：
   //
-  // / A 16-level parallel panel takes the host's 2-bit coverage directly. There is
-  // deliberately no threshold-then-reconstruct step: the base page supplies
-  // black/white and the two selector planes supply the two mid tones, four steps
-  // spread over 0..15.
+  //   1) 覆盖率给"这一像素属于哪一档"——底图给黑白，两个选择平面给两档中间灰。
+  //      这是宿主真正的 2-bit 抗锯齿数据，并口 16 级屏直接吃下去即可。
+  //   2) 邻域只做**有界微调**。4 档表达不了一条斜边，所以纯覆盖率渲染必然出锯齿；
+  //      而上一版让邻域**替代**覆盖率，又整体糊掉。把邻域限制在 ±kMaxNudge 级之内，
+  //      斜边就得到 4 档之间的过渡（圆润），笔画却不会被抬亮（不糊）。
   //
-  // 极性：本文件不做极性推理，直接沿用 kBlackIsOne 的实测结论（这台玻璃 level 0 是白）。
-  // 平面含义来自 GfxRenderer::mapTwoBitPixel（非 EEGO 分支）：LSB 位置位 ⇔ 2-bit 值 1，
-  // MSB 位置位 ⇔ 值 1 或 2。
-  // / Polarity: this file does no polarity reasoning -- it follows the measured
-  // kBlackIsOne result (level 0 is white on this glass). Plane meaning comes from
-  // GfxRenderer::mapTwoBitPixel (non-EEGO branch): LSB set iff 2-bit value 1, MSB set
-  // iff value 1 or 2.
-  // 这台玻璃上 level 0 = 白、15 = 黑（见 EpdiyLcdDriver.cpp 顶部 kBlackIsOne 的实测
-  // 记录：facade 的「置位 = 白」被翻成 level 0，而 level 0 呈现为白，两者抵消）。
-  // 2-bit 值 1 是深灰，取大值；值 2 是浅灰，取小值。
-  // / On this glass level 0 = white and 15 = black (see the kBlackIsOne record at
-  // the top of EpdiyLcdDriver.cpp: the facade's "set bit = white" becomes level 0 and
-  // level 0 renders white, the two conventions cancelling). 2-bit value 1 is dark grey
-  // and takes the larger level; value 2 is light grey and takes the smaller.
+  // / Two jobs, and neither may replace the other. Coverage decides which step a pixel
+  // belongs to: the base page gives black/white and the two selector planes give the
+  // two mid tones -- the host's real 2-bit anti-aliasing data, which a 16-level
+  // parallel panel takes directly. The neighbourhood only applies a BOUNDED nudge:
+  // four steps cannot describe a diagonal, so coverage alone always shows jaggies,
+  // while an earlier revision let the neighbourhood REPLACE coverage and blurred
+  // everything. Capping it at +/-kMaxNudge levels gives diagonals their in-between
+  // tones without lightening strokes.
+  //
+  // 极性：本文件不做极性推理，沿用 kBlackIsOne 的实测结论——这台玻璃 level 0 是白、
+  // 15 是黑（见 EpdiyLcdDriver.cpp 顶部记录）。facade 的约定是"位置一 = 白"，所以
+  // 底图里**位清零 = 墨**。平面含义来自 GfxRenderer::mapTwoBitPixel（非 EEGO 分支）：
+  // LSB 置位 ⇔ 2-bit 值 1（深灰），MSB 置位 ⇔ 值 1 或 2。
+  // / Polarity follows the measured kBlackIsOne result recorded at the top of
+  // EpdiyLcdDriver.cpp (level 0 is white on this glass). The facade sets the bit for
+  // white, so a CLEAR bit is ink. Plane meaning comes from mapTwoBitPixel.
   constexpr uint8_t kDarkGray = 10;   // 2-bit 值 1 / 2-bit value 1
   constexpr uint8_t kLightGray = 5;   // 2-bit 值 2 / 2-bit value 2
+  constexpr int kInkLevel = 15;       // 墨 = 黑 / ink is black
+  constexpr int kPaperLevel = 0;      // 纸 = 白 / paper is white
+  // 邻域权重与微调上限：这两个就是"圆润 vs 毛刺/模糊"的总旋钮。
+  // / The two knobs that trade rounding against jaggies and blur.
+  constexpr int kCentreWeight = 8;
+  constexpr int kMaxNudge = 4;
 
-  // 底图铺满整页，未标记的像素（纯黑/纯白）保持原样。
-  // / Lay the base page down first; unmarked pixels stay black or white.
-  fillFrom1bpp(g_base);
+  const int w = static_cast<int>(epd_width());
+  const int h = static_cast<int>(epd_height());
+  const int stride = w / 8;
 
-  const uint16_t w = static_cast<uint16_t>(epd_width());
-  const uint16_t h = static_cast<uint16_t>(epd_height());
-  const size_t stride = w / 8;
-  for (uint16_t y = 0; y < h; ++y) {
+  for (int y = 0; y < h; ++y) {
     const uint8_t* lrow = lsb + static_cast<size_t>(y) * stride;
     const uint8_t* mrow = msb + static_cast<size_t>(y) * stride;
     uint8_t* drow = g_fb4 + static_cast<size_t>(y) * (w / 2);
-    for (size_t bx = 0; bx < stride; ++bx) {
-      const uint8_t l = lrow[bx], m = mrow[bx];
-      if ((l | m) == 0) continue;
-      for (uint8_t bit = 0; bit < 8; ++bit) {
-        const uint8_t mask = static_cast<uint8_t>(0x80u >> bit);
-        const bool lb = (l & mask) != 0, mb = (m & mask) != 0;
-        if (!lb && !mb) continue;
-        const uint8_t level = (mb && !lb) ? kLightGray : kDarkGray;
-        const size_t x = bx * 8 + bit;
-        uint8_t* cell = drow + (x >> 1);
-        // epdiy 每字节两个像素：偶数列低半字节、奇数列高半字节。
-        // / epdiy packs two pixels per byte: even column low nibble, odd high.
-        if ((x & 1) != 0) {
-          *cell = static_cast<uint8_t>((*cell & 0x0Fu) | static_cast<uint8_t>(level << 4));
-        } else {
-          *cell = static_cast<uint8_t>((*cell & 0xF0u) | level);
+
+    for (int x = 0; x < w; ++x) {
+      const uint8_t mask = static_cast<uint8_t>(0x80u >> (x & 7));
+      const bool lb = (lrow[x >> 3] & mask) != 0;
+      const bool mb = (mrow[x >> 3] & mask) != 0;
+      const bool baseInk = (g_base[static_cast<size_t>(y) * stride + (x >> 3)] & mask) == 0;
+
+      // --- 1) 覆盖率决定的档位 ---------------------------------------------
+      int level;
+      if (mb && !lb) {
+        level = kLightGray;  // 2-bit 值 2
+      } else if (lb) {
+        level = kDarkGray;  // 2-bit 值 1
+      } else {
+        level = baseInk ? kInkLevel : kPaperLevel;
+      }
+
+      // --- 2) 邻域的有界微调 -----------------------------------------------
+      int ink = 0, wsum = 0;
+      for (int dy = -1; dy <= 1; ++dy) {
+        const int yy = y + dy;
+        if (yy < 0 || yy >= h) continue;
+        const uint8_t* brow = g_base + static_cast<size_t>(yy) * stride;
+        for (int dx = -1; dx <= 1; ++dx) {
+          const int xx = x + dx;
+          if (xx < 0 || xx >= w) continue;
+          const int wgt = (dx == 0 && dy == 0) ? kCentreWeight : 1;
+          if ((brow[xx >> 3] & (0x80u >> (xx & 7))) == 0) ink += wgt;  // 位清零 = 墨
+          wsum += wgt;
         }
+      }
+      // 邻域单独会给出的档位，再把这个偏离夹在 ±kMaxNudge 之内。
+      // / The level the neighbourhood alone would pick, with its deviation clamped.
+      const int nbLevel = (ink * kInkLevel + (wsum - ink) * kPaperLevel + wsum / 2) / wsum;
+      int delta = nbLevel - level;
+      if (delta > kMaxNudge) delta = kMaxNudge;
+      if (delta < -kMaxNudge) delta = -kMaxNudge;
+      level += delta;
+      if (level < 0) level = 0;
+      if (level > 15) level = 15;
+
+      // epdiy 每字节两个像素：偶数列低半字节、奇数列高半字节。
+      // / epdiy packs two pixels per byte: even column low nibble, odd high.
+      uint8_t* cell = drow + (x >> 1);
+      if ((x & 1) != 0) {
+        *cell = static_cast<uint8_t>((*cell & 0x0Fu) | static_cast<uint8_t>(level << 4));
+      } else {
+        *cell = static_cast<uint8_t>((*cell & 0xF0u) | static_cast<uint8_t>(level));
       }
     }
   }
