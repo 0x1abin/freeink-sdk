@@ -306,24 +306,22 @@ void epdiyLcdDrawGray(const uint8_t* lsb, const uint8_t* msb, EpdiyLcdRefresh mo
   // black/white and the two selector planes supply the two mid tones, four steps
   // spread over 0..15.
   //
-  // 极性由两处事实钉住，不靠文档推理：
-  //   * epdiy 的 4bpp 是 0x0 = 黑、0xF = 白（epdiy.h:93）；这台玻璃上 BW 页面正确，
-  //     所以 0 = 黑、15 = 白成立。
-  //   * 调用方的 1bpp 约定是"位清零 = 墨"（GfxRenderer::drawPixel，GfxRenderer.cpp:635-640）。
+  // 极性：本文件不做极性推理，直接沿用 kBlackIsOne 的实测结论（这台玻璃 level 0 是白）。
   // 平面含义来自 GfxRenderer::mapTwoBitPixel（非 EEGO 分支）：LSB 位置位 ⇔ 2-bit 值 1，
-  // MSB 位置位 ⇔ 值 1 或 2。所以 lb&&mb 是值 1（深灰，取小 level），mb&&!lb 是值 2
-  // （浅灰，取大 level）。旧实现把这两档接反了。
-  //
-  // / The polarity is pinned by two facts rather than argued from a header: epdiy's
-  // 4 bpp is 0x0 = black / 0xF = white (epdiy.h:93) and the B/W page is correct on
-  // this glass; and the caller's 1 bpp is "clear bit = ink"
-  // (GfxRenderer::drawPixel, GfxRenderer.cpp:635-640). Plane meaning comes from
-  // GfxRenderer::mapTwoBitPixel (non-EEGO branch): LSB set iff 2-bit value 1, MSB
-  // set iff 1 or 2. So lb&&mb is value 1 (dark grey, smaller level) and mb&&!lb is
-  // value 2 (light grey, larger level). The previous implementation had the two
-  // swapped.
-  constexpr uint8_t kDarkGray = 5;    // 2-bit 值 1 / 2-bit value 1
-  constexpr uint8_t kLightGray = 10;  // 2-bit 值 2 / 2-bit value 2
+  // MSB 位置位 ⇔ 值 1 或 2。
+  // / Polarity: this file does no polarity reasoning -- it follows the measured
+  // kBlackIsOne result (level 0 is white on this glass). Plane meaning comes from
+  // GfxRenderer::mapTwoBitPixel (non-EEGO branch): LSB set iff 2-bit value 1, MSB set
+  // iff value 1 or 2.
+  // 这台玻璃上 level 0 = 白、15 = 黑（见 EpdiyLcdDriver.cpp 顶部 kBlackIsOne 的实测
+  // 记录：facade 的「置位 = 白」被翻成 level 0，而 level 0 呈现为白，两者抵消）。
+  // 2-bit 值 1 是深灰，取大值；值 2 是浅灰，取小值。
+  // / On this glass level 0 = white and 15 = black (see the kBlackIsOne record at
+  // the top of EpdiyLcdDriver.cpp: the facade's "set bit = white" becomes level 0 and
+  // level 0 renders white, the two conventions cancelling). 2-bit value 1 is dark grey
+  // and takes the larger level; value 2 is light grey and takes the smaller.
+  constexpr uint8_t kDarkGray = 10;   // 2-bit 值 1 / 2-bit value 1
+  constexpr uint8_t kLightGray = 5;   // 2-bit 值 2 / 2-bit value 2
 
   // 底图铺满整页，未标记的像素（纯黑/纯白）保持原样。
   // / Lay the base page down first; unmarked pixels stay black or white.

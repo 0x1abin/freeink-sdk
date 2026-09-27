@@ -45,6 +45,19 @@ class EpdiyLcdDriver : public PanelDriver {
   bool usesExternalBus() const override { return true; }
   PanelGeometry geometry() const override;
 
+  // MUST be declared. Every other driver in the tree reports its grayscale
+  // encoding here; leaving this at the base-class default made the driver report
+  // GrayscaleEncoding::Unsupported, and FreeInkDisplay::grayscaleCapabilities()
+  // (FreeInkDisplay.cpp:682-688) filters on exactly that -- so the facade reported
+  // "this panel has no grayscale" for a panel whose LSB/MSB + displayGray path is
+  // fully implemented. Anything that selects its strategy from the descriptor
+  // (strip uploads, combined base, async base) therefore bypassed this board.
+  //
+  // OverlayMasks is the truth: plane background 0 = black/white taken from the
+  // B/W base, LSB set = dark, MSB set = light. base stays Separate because the host
+  // pushes the B/W frame through display() before the grey commit overlays it.
+  GrayscaleCapabilities grayscaleCapabilities(GrayscaleMode mode = GrayscaleMode::Overlay) const override;
+
   void begin(EpdBus& bus) override;
   void deepSleep(EpdBus& bus) override;
   void display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) override;

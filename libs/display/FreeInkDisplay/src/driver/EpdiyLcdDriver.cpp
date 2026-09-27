@@ -68,6 +68,15 @@ PanelGeometry EpdiyLcdDriver::geometry() const {
   return {w, h, wb, static_cast<uint32_t>(wb) * h};
 }
 
+GrayscaleCapabilities EpdiyLcdDriver::grayscaleCapabilities(GrayscaleMode mode) const {
+  (void)mode;
+  // OverlayMasks: plane background 0 = black/white (taken from the B/W base the
+  // host pushes first), LSB set = dark, MSB set = light. base is Separate because
+  // display() pushes the B/W frame before the grey commit overlays it; stripUploads
+  // stays false so the host uses the whole-plane LSB/MSB path this driver implements.
+  return {GrayscaleEncoding::OverlayMasks, GrayscaleBase::Separate, false, false, false};
+}
+
 void EpdiyLcdDriver::begin(EpdBus& bus) {
   (void)bus;
   _ready = epdiyLcdBegin(_cfg, BoardConfig::ACTIVE.displayWidth, BoardConfig::ACTIVE.displayHeight, kBlackIsOne);
