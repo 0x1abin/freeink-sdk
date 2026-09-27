@@ -935,7 +935,17 @@ void FreeInkDisplay::displayGrayBuffer(bool turnOffScreen, const unsigned char* 
 #endif
   // Inverted mode deliberately renders a crisp BW page. Writing normal
   // grayscale planes afterward would partially undo the output inversion.
+#if FREEINK_DEVICE_READPICO
+  // TEMP diagnostic: the two early returns below silently drop the grey commit,
+  // which shows on the glass as a page with no mid tones at all. Log which one
+  // fired so the intermittent case can be identified from a serial capture.
+  if (_inverted) {
+    esp_rom_printf("[GRAY] commit SKIPPED: facade _inverted\n");
+    return;
+  }
+#else
   if (_inverted) return;
+#endif
   syncPendingAsync();
 #if FREEINK_SSD1677_TEXT_ROUTING
   if (factoryMode) _textAaPending = false;
@@ -944,7 +954,14 @@ void FreeInkDisplay::displayGrayBuffer(bool turnOffScreen, const unsigned char* 
 #endif
   _shadowValid = false;
   _redRamSynced = false;  // grayscale leaves RED holding a gray plane, not the BW baseline
+#if FREEINK_DEVICE_READPICO
+  if (_grayPassFailed) {
+    esp_rom_printf("[GRAY] commit SKIPPED: _grayPassFailed\n");
+    return;
+  }
+#else
   if (_grayPassFailed) return;
+#endif
   if (_grayscaleMode != GrayscaleMode::Overlay) {
     if (_grayRows[0] != getDisplayHeight() || _grayRows[1] != getDisplayHeight() || lut != nullptr) {
       cancelGrayscalePass();
