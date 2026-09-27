@@ -13,6 +13,9 @@
 //     ignored. Used by X3 and LilyGo T5 S3. Config comes from
 //     BoardConfig::ACTIVE.batteryGauge, and gauge-vs-ADC is chosen at *runtime*
 //     (gaugeAddr != 0), so X3 (gauge) and X4 (ADC) work from one C3 binary.
+//     GaugeType::Cw32L010Pmu is a third variant of this backend: the CW32L010 PMU
+//     on Read Pico is not a register map, so it arrives through the board-installed
+//     PmuBatteryHook below instead of any register read.
 class BatteryMonitor {
 public:
     static constexpr int8_t PIN_NONE = -1;
@@ -82,6 +85,23 @@ public:
     // hovers on a boundary keeps reporting `previousPercent` instead of
     // oscillating. Pass the last value this returned; pass > 100 for no history.
     static uint16_t percentageFromMillivolts(uint16_t millivolts, uint16_t previousPercent);
+
+    // --- PMU battery source (BoardConfig::GaugeType::Cw32L010Pmu) --------------
+    // Boards whose battery telemetry is not a gauge register map but a device
+    // protocol register this hook; the board support library owns the transfer
+    // (BoardReadPico::pmuBattery on Read Pico) so this class stays
+    // device-agnostic — the same split as Rtc::setPmuTimeHooks.
+    //
+    //   * batteryMv: pack voltage in mV.
+    //   * socPermille: state of charge, 0..1000; the device's "unknown" sentinel
+    //     is reported as 0 (the callers then derive the level from batteryMv).
+    //   * chargeState: the device's own charge-state code — 0 unknown,
+    //     1 not charging, 2 charging, 3 full, 4 fault.
+    // Returns false when the device is absent, the frame fails its checksum, or
+    // it flags the value invalid. A false return is never turned into a
+    // fabricated level: the field is reported unknown instead.
+    using PmuBatteryHook = bool (*)(uint16_t& batteryMv, uint16_t& socPermille, uint8_t& chargeState);
+    static void setPmuBatteryHook(PmuBatteryHook hook);
 
 private:
     bool hasAdcBackend() const;

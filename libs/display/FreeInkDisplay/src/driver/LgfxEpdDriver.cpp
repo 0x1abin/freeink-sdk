@@ -3,6 +3,7 @@
 #include <BoardConfig.h>
 
 #include <cstring>
+#include <new>  // std::nothrow
 
 #if FREEINK_DRIVER_LGFX_EPD
 #include <M5GFX.h>  // pulls LovyanGFX; added to lib_deps only on the LilyGo env
@@ -56,6 +57,14 @@ class FreeInkLgfxEpd : public lgfx::LGFX_Device {
     auto bc = _bus.config();
     bc.bus_speed = c.busHz;
     for (int i = 0; i < 8; ++i) bc.pin_data[i] = c.dataPins[i];
+    // Bus_EPD::init() walks `bus_config.data_gpio_nums[i]` for i < bus_width and
+    // hands the count to esp_lcd_new_i80_bus, so a 16-bit panel needs both the
+    // high half of pin_data and the width. The i80 peripheral only supports 8 or
+    // 16, and an unsupported value makes init() fail silently (a dead panel), so
+    // anything else falls back to 8. pin_data[8..15] stay at Bus_EPD's own -1
+    // default when busWidth == 8, for the existing boards.
+    const uint8_t busWidth = (c.busWidth == 16) ? 16 : 8;
+    for (int i = 8; i < busWidth; ++i) bc.pin_data[i] = c.dataPinsHigh[i - 8];
     bc.pin_pwr = c.pinPwr;
     bc.pin_sph = c.pinSph;
     bc.pin_spv = c.pinSpv;
@@ -63,7 +72,7 @@ class FreeInkLgfxEpd : public lgfx::LGFX_Device {
     bc.pin_le = c.pinLe;
     bc.pin_cl = c.pinCl;
     bc.pin_ckv = c.pinCkv;
-    bc.bus_width = 8;
+    bc.bus_width = busWidth;
     _bus.config(bc);
 
     _panel.setBus(&_bus);
@@ -129,14 +138,35 @@ void allocCanvas(uint16_t w, uint16_t h) {
   g_h = h;
   g_wb = w / 8;
   if (!g_canvas) {
-    g_canvas = new lgfx::LGFX_Sprite(&g_dev);
-    g_canvas->setPsram(true);
-    g_canvas->setColorDepth(lgfx::color_depth_t::grayscale_8bit);
-    g_canvas->createSprite(w, h);
+    // Not a bare `new`: this SDK is built with -fno-exceptions, so a failing `new`
+    // calls abort() rather than returning nullptr and the board would reset with
+    // no diagnostic at all. Nothrow gives us a value we can actually test. This
+    // canvas is the single largest allocation on the Lgfx path (w*h at 8 bpp, in
+    // PSRAM), so an OOM is a real possibility on a board whose PSRAM already
+    // carries the panel step framebuffer and _buf.
+    g_canvas = new (std::nothrow) lgfx::LGFX_Sprite(&g_dev);
+    if (!g_canvas) {
+      Serial.printf("[LgfxEpd] canvas alloc failed (%ux%u); grayscale unavailable\n", w, h);
+    } else {
+      g_canvas->setPsram(true);
+      g_canvas->setColorDepth(lgfx::color_depth_t::grayscale_8bit);
+      g_canvas->createSprite(w, h);
+      if (!g_canvas->getBuffer()) {
+        // createSprite() failed, so the sprite owns no pixels. Drop it rather than
+        // keep a non-null canvas whose buffer is null: the callers below guard on
+        // `!g_canvas` and would otherwise dereference a null buffer.
+        delete g_canvas;
+        g_canvas = nullptr;
+        Serial.printf("[LgfxEpd] canvas sprite buffer alloc failed (%ux%u)\n", w, h);
+      }
+    }
   }
   const size_t planeBytes = static_cast<size_t>(g_wb) * h;
   if (!g_lsb) g_lsb = static_cast<uint8_t*>(heap_caps_malloc(planeBytes, MALLOC_CAP_SPIRAM));
   if (!g_msb) g_msb = static_cast<uint8_t*>(heap_caps_malloc(planeBytes, MALLOC_CAP_SPIRAM));
+  if (!g_lsb || !g_msb) {
+    Serial.printf("[LgfxEpd] grayscale plane alloc failed (%u B each)\n", static_cast<unsigned>(planeBytes));
+  }
 }
 
 // Expand a 1-bpp B/W frame (bit set = white) into the 8-bit gray canvas.
