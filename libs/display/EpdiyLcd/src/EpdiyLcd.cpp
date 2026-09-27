@@ -322,10 +322,21 @@ void epdiyLcdDrawGray(const uint8_t* lsb, const uint8_t* msb, EpdiyLcdRefresh mo
   // / Polarity follows the measured kBlackIsOne result recorded at the top of
   // EpdiyLcdDriver.cpp (level 0 is white on this glass). The facade sets the bit for
   // white, so a CLEAR bit is ink. Plane meaning comes from mapTwoBitPixel.
-  constexpr uint8_t kDarkGray = 10;   // 2-bit 值 1 / 2-bit value 1
-  constexpr uint8_t kLightGray = 5;   // 2-bit 值 2 / 2-bit value 2
-  constexpr int kInkLevel = 15;       // 墨 = 黑 / ink is black
-  constexpr int kPaperLevel = 0;      // 纸 = 白 / paper is white
+  // 极性由展开表的实际逻辑钉住（EpdiyLcd.cpp 的 buildExpandTable，blackIsOne=true 取
+  // g_expand[0]，即 oneIsBlack=0 -> black = bit ^ 1 -> 位=1 落到 15），与 epdiy.h:93 的
+  // 0x0 = 黑 / 0xF = 白 一致。facade 的约定是"位置一 = 白"，所以底图里位清零 = 墨、
+  // 位置一 = 纸。**注意 EpdiyLcdDriver.cpp 顶部那段注释说"level 0 呈现为白"，与表
+  // 的实际行为相反，不要照它推。**
+  // / Polarity is pinned by what buildExpandTable() actually does (with blackIsOne = true
+  // EpdiyLcd uses g_expand[0], i.e. oneIsBlack = 0 -> black = bit ^ 1 -> a set bit lands
+  // on 15), matching epdiy.h:93 (0x0 = black, 0xF = white). The facade sets the bit for
+  // white, so a clear bit is ink and a set bit is paper. NOTE: the comment at the top of
+  // EpdiyLcdDriver.cpp claims level 0 renders white, which contradicts the table -- do
+  // not reason from it.
+  constexpr uint8_t kDarkGray = 5;    // 2-bit 值 1（深灰）/ 2-bit value 1 (dark)
+  constexpr uint8_t kLightGray = 10;  // 2-bit 值 2（浅灰）/ 2-bit value 2 (light)
+  constexpr int kInkLevel = 0;        // 墨 = 黑 / ink is black
+  constexpr int kPaperLevel = 15;     // 纸 = 白 / paper is white
   // 邻域权重与微调上限：这两个就是"圆润 vs 毛刺/模糊"的总旋钮。
   // / The two knobs that trade rounding against jaggies and blur.
   constexpr int kCentreWeight = 8;
