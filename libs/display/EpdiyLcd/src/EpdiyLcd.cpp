@@ -337,6 +337,14 @@ void epdiyLcdDrawGray(const uint8_t* lsb, const uint8_t* msb, EpdiyLcdRefresh mo
   constexpr int kInkDark = 178;    // 2-bit 值 1（深灰）≈ 0.70 墨
   constexpr int kInkLight = 89;    // 2-bit 值 2（浅灰）≈ 0.35 墨
   constexpr int kIntentWeight = 166;  // 平面意图占 0.65，邻域占 0.35
+  // 中心权重：无权重盒式平均会造出 3 像素宽的灰过渡，字干只有 1-2 像素时整笔就被
+  // 糊掉。中心给 8、八邻各给 1（总权重 16），过渡收窄到 1 像素，笔画内部与背景
+  // 仍是纯黑纯白。调大更锐，调小更柔。
+  // / Centre weight: an unweighted box filter produces a 3-px-wide grey ramp, which
+  // smears a 1-2 px stem into mush. Centre 8, each of the eight neighbours 1 (total
+  // 16) narrows the ramp to one pixel and keeps stroke interiors and background fully
+  // black/white. Raise for crisper, lower for softer.
+  constexpr int kCentreWeight = 8;
   // 两个极值来自判墨方向，不由常量硬编码 / The two extremes follow from g_blackIsOne.
   const int inkLevel = g_blackIsOne ? 0 : 15;
   const int paperLevel = 15 - inkLevel;
@@ -352,7 +360,9 @@ void epdiyLcdDrawGray(const uint8_t* lsb, const uint8_t* msb, EpdiyLcdRefresh mo
 
     for (int x = 0; x < w; ++x) {
       // --- 3x3 墨占比 ------------------------------------------------------
-      int ink = 0, n = 0;
+      // 中心加权的 3x3：权重和决定过渡宽度，而不是邻域大小。
+      // / Centre-weighted 3x3: the weights, not the window size, set the ramp width.
+      int ink = 0, wsum = 0;
       for (int dy = -1; dy <= 1; ++dy) {
         const int yy = y + dy;
         if (yy < 0 || yy >= h) continue;
@@ -360,12 +370,13 @@ void epdiyLcdDrawGray(const uint8_t* lsb, const uint8_t* msb, EpdiyLcdRefresh mo
         for (int dx = -1; dx <= 1; ++dx) {
           const int xx = x + dx;
           if (xx < 0 || xx >= w) continue;
+          const int wgt = (dx == 0 && dy == 0) ? kCentreWeight : 1;
           const bool bit = (brow[xx >> 3] & (0x80u >> (xx & 7))) != 0;
-          if (!bit) ++ink;  // 位清零 = 墨 / clear bit = ink
-          ++n;
+          if (!bit) ink += wgt;  // 位清零 = 墨 / clear bit = ink
+          wsum += wgt;
         }
       }
-      int f = n > 0 ? (ink * 255) / n : 0;
+      int f = wsum > 0 ? (ink * 255) / wsum : 0;
 
       // --- 宿主的每像素意图 ------------------------------------------------
       const uint8_t mask = static_cast<uint8_t>(0x80u >> (x & 7));
