@@ -175,7 +175,28 @@ void EpdiyLcdDriver::displayGray(EpdBus& bus, const uint8_t* fb, bool turnOff, c
   // EpdiyLcd kept the base image during display().
   (void)fb;
 
-  epdiyLcdDrawGray(_lsb, _msb, _lastBaseMode, turnOff);
+  // 灰度提交必须用能出灰阶的波形。MODE_DU（Fast）是快速差分模式，只有黑白 —— 复用它
+  // 等于把整页的中间灰整批丢掉，屏幕上只剩纯黑和纯白。实测症状正是「大部分页面只剩
+  // 纯黑，偶尔几页正常」：那几页的底图恰好走了 Half/Full（GL16），其余走 FAST_REFRESH。
+  //
+  // 底图是 DU 时这里升到 Half。代价是这一次提交会按 GL16 把整屏重新驱动一遍（略有
+  // 闪动），但宿主既然已经要求了灰度提交，GL16 才是正确的档位；沿用 DU 换来的那点
+  // 速度，代价是抗锯齿彻底失效。
+  //
+  // / A grey commit must use a grey-capable waveform. MODE_DU (Fast) is a fast
+  // differential mode with black and white only, so reusing it discards every mid tone
+  // on the page and leaves pure black on white. That is exactly the reported pattern
+  // ("mostly pure black, the odd page fine"): those pages' base happened to go through
+  // Half/Full (GL16) while the rest used FAST_REFRESH. When the base was DU this steps
+  // up to Half; the commit then re-drives the panel through GL16 (a slight flash), but
+  // GL16 is the correct profile once the host has asked for grey. Keeping DU trades
+  // anti-aliasing away for a little speed.
+  const EpdiyLcdRefresh grayMode =
+      _lastBaseMode == EpdiyLcdRefresh::Fast ? EpdiyLcdRefresh::Half : _lastBaseMode;
+#if FREEINK_DEVICE_READPICO
+  esp_rom_printf("[GRAY] base=%d -> gray=%d\n", static_cast<int>(_lastBaseMode), static_cast<int>(grayMode));
+#endif
+  epdiyLcdDrawGray(_lsb, _msb, grayMode, turnOff);
 }
 
 PanelDriver& epdiyLcdDriver() {
