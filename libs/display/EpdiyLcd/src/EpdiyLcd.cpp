@@ -311,23 +311,39 @@ void epdiyLcdDrawGray(const uint8_t* lsb, const uint8_t* msb, EpdiyLcdRefresh mo
   // a refinement; unmarked pixels (solid black/white, dither) come from the
   // neighbourhood alone.
   //
-  // 极性：epdiy 的 4bpp 是 0x0 = 黑、0xF = 白（epdiy.h:93），所以输出的 level 由
-  // "墨占比"反着算。原先这里按 0=白/15=黑 写的，把 light/dark 两档接反了。
-  // / Polarity: epdiy's 4 bpp is 0x0 = black, 0xF = white (epdiy.h:93), so the output
-  // level is derived from the ink fraction inverted. The previous code assumed
-  // 0 = white / 15 = black and had the two mid tones swapped.
+  // 极性锚在展开表上，不靠文档推理：`g_expand[g_blackIsOne ? 0 : 1]` 把"位=1"送到
+  // level 15，而调用方的 1bpp 约定是「位清零 = 墨、位置一 = 纸」
+  // （GfxRenderer::drawPixel，GfxRenderer.cpp:635-640：置位走 |=，即白）。BW 页面在真机上
+  // 正确，所以这张玻璃上 level 15 = 白、0 = 黑，与 epdiy.h:93 一致。下面两个极值直接由
+  // g_blackIsOne 推出，灰度提交因此不可能和它所叠加的页面唱反调。
+  // / Polarity is anchored to the expansion table rather than argued from a header:
+  // `g_expand[g_blackIsOne ? 0 : 1]` sends bit=1 to level 15, and the caller's 1 bpp
+  // convention is "clear bit = ink, set bit = paper" (GfxRenderer::drawPixel,
+  // GfxRenderer.cpp:635-640 -- the set path is |=, i.e. white). The B/W page is correct
+  // on hardware, so on this glass level 15 = white and 0 = black, matching epdiy.h:93.
+  // The extremes below come from g_blackIsOne, so the grey commit cannot disagree with
+  // the page it overlays.
+  //
+  // 旧实现的两处错误，记下来避免再犯 / Two past mistakes, recorded so they are not
+  // repeated:
+  //   * 把"位=1"当成墨，于是整个灰阶提交与底图整体反相。
+  //     / treating bit=1 as ink, which inverted the whole grey commit against the base;
+  //   * light/dark 两档接反（2-bit 值 1 是深灰，却给了更亮的 level）。
+  //     / swapping the light/dark slots (2-bit value 1 is dark grey but got the
+  //       brighter level).
 
   // 定点：f 是"墨占比"，0 = 全白、255 = 全黑。
   // / Fixed point: f is the ink fraction, 0 = all white, 255 = all black.
   constexpr int kInkDark = 178;    // 2-bit 值 1（深灰）≈ 0.70 墨
   constexpr int kInkLight = 89;    // 2-bit 值 2（浅灰）≈ 0.35 墨
   constexpr int kIntentWeight = 166;  // 平面意图占 0.65，邻域占 0.35
+  // 两个极值来自判墨方向，不由常量硬编码 / The two extremes follow from g_blackIsOne.
+  const int inkLevel = g_blackIsOne ? 0 : 15;
+  const int paperLevel = 15 - inkLevel;
 
   const int w = static_cast<int>(epd_width());
   const int h = static_cast<int>(epd_height());
   const int stride = w / 8;
-  // 底图按 g_blackIsOne 判墨：置位是黑，还是清零是黑。
-  // / Base ink test follows g_blackIsOne: is a set bit ink, or a clear one?
 
   for (int y = 0; y < h; ++y) {
     const uint8_t* lrow = lsb + static_cast<size_t>(y) * stride;
@@ -345,7 +361,7 @@ void epdiyLcdDrawGray(const uint8_t* lsb, const uint8_t* msb, EpdiyLcdRefresh mo
           const int xx = x + dx;
           if (xx < 0 || xx >= w) continue;
           const bool bit = (brow[xx >> 3] & (0x80u >> (xx & 7))) != 0;
-          if (g_blackIsOne ? bit : !bit) ++ink;
+          if (!bit) ++ink;  // 位清零 = 墨 / clear bit = ink
           ++n;
         }
       }
@@ -361,7 +377,7 @@ void epdiyLcdDrawGray(const uint8_t* lsb, const uint8_t* msb, EpdiyLcdRefresh mo
       }
 
       // --- 墨占比 -> level（0 = 黑，15 = 白）-------------------------------
-      int level = ((255 - f) * 15 + 127) / 255;
+      int level = (f * inkLevel + (255 - f) * paperLevel + 127) / 255;
       if (level < 0) level = 0;
       if (level > 15) level = 15;
 
