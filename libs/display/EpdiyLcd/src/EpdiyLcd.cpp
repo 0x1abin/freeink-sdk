@@ -298,111 +298,61 @@ void epdiyLcdDrawGray(const uint8_t* lsb, const uint8_t* msb, EpdiyLcdRefresh mo
   if (!g_started || g_fb4 == nullptr || g_cfg == nullptr) return;
   if (g_base == nullptr || lsb == nullptr || msb == nullptr) return;
 
-  // 局部平均重建：1bpp 页面里本来就编码了灰阶——文字靠覆盖率阈值，图片靠抖动图案。
-  // 对 3x3 邻域求墨占比，就能把抖动图案还原成连续灰阶，同时把文字边缘磨成中间灰，
-  // 一个机制同时管住抗锯齿和图片。两个选择平面给出宿主明确的每像素意图，用它主导、
-  // 邻域微调；没有标记的像素（纯黑/纯白/抖动图案）完全交给邻域。
+  // 并口 16 级屏直接吃宿主的 2-bit 覆盖率，不走"先阈值化成 1bpp、再从邻域重建灰阶"
+  // 那一套：底图给出黑/白，两个选择平面给出两档中间灰，四档均匀铺在 0..15 上。
   //
-  // / Local-average reconstruction. The 1 bpp page already encodes tone: text through
-  // its thresholded coverage, images through their dither pattern. Averaging ink over
-  // a 3x3 neighbourhood recovers dithered images as continuous tone and softens text
-  // edges -- one mechanism for both anti-aliasing and images. The two selector planes
-  // carry the host's explicit per-pixel intent, which leads with the neighbourhood as
-  // a refinement; unmarked pixels (solid black/white, dither) come from the
-  // neighbourhood alone.
+  // / A 16-level parallel panel takes the host's 2-bit coverage directly. There is
+  // deliberately no threshold-then-reconstruct step: the base page supplies
+  // black/white and the two selector planes supply the two mid tones, four steps
+  // spread over 0..15.
   //
-  // 极性锚在展开表上，不靠文档推理：`g_expand[g_blackIsOne ? 0 : 1]` 把"位=1"送到
-  // level 15，而调用方的 1bpp 约定是「位清零 = 墨、位置一 = 纸」
-  // （GfxRenderer::drawPixel，GfxRenderer.cpp:635-640：置位走 |=，即白）。BW 页面在真机上
-  // 正确，所以这张玻璃上 level 15 = 白、0 = 黑，与 epdiy.h:93 一致。下面两个极值直接由
-  // g_blackIsOne 推出，灰度提交因此不可能和它所叠加的页面唱反调。
-  // / Polarity is anchored to the expansion table rather than argued from a header:
-  // `g_expand[g_blackIsOne ? 0 : 1]` sends bit=1 to level 15, and the caller's 1 bpp
-  // convention is "clear bit = ink, set bit = paper" (GfxRenderer::drawPixel,
-  // GfxRenderer.cpp:635-640 -- the set path is |=, i.e. white). The B/W page is correct
-  // on hardware, so on this glass level 15 = white and 0 = black, matching epdiy.h:93.
-  // The extremes below come from g_blackIsOne, so the grey commit cannot disagree with
-  // the page it overlays.
+  // 极性由两处事实钉住，不靠文档推理：
+  //   * epdiy 的 4bpp 是 0x0 = 黑、0xF = 白（epdiy.h:93）；这台玻璃上 BW 页面正确，
+  //     所以 0 = 黑、15 = 白成立。
+  //   * 调用方的 1bpp 约定是"位清零 = 墨"（GfxRenderer::drawPixel，GfxRenderer.cpp:635-640）。
+  // 平面含义来自 GfxRenderer::mapTwoBitPixel（非 EEGO 分支）：LSB 位置位 ⇔ 2-bit 值 1，
+  // MSB 位置位 ⇔ 值 1 或 2。所以 lb&&mb 是值 1（深灰，取小 level），mb&&!lb 是值 2
+  // （浅灰，取大 level）。旧实现把这两档接反了。
   //
-  // 旧实现的两处错误，记下来避免再犯 / Two past mistakes, recorded so they are not
-  // repeated:
-  //   * 把"位=1"当成墨，于是整个灰阶提交与底图整体反相。
-  //     / treating bit=1 as ink, which inverted the whole grey commit against the base;
-  //   * light/dark 两档接反（2-bit 值 1 是深灰，却给了更亮的 level）。
-  //     / swapping the light/dark slots (2-bit value 1 is dark grey but got the
-  //       brighter level).
+  // / The polarity is pinned by two facts rather than argued from a header: epdiy's
+  // 4 bpp is 0x0 = black / 0xF = white (epdiy.h:93) and the B/W page is correct on
+  // this glass; and the caller's 1 bpp is "clear bit = ink"
+  // (GfxRenderer::drawPixel, GfxRenderer.cpp:635-640). Plane meaning comes from
+  // GfxRenderer::mapTwoBitPixel (non-EEGO branch): LSB set iff 2-bit value 1, MSB
+  // set iff 1 or 2. So lb&&mb is value 1 (dark grey, smaller level) and mb&&!lb is
+  // value 2 (light grey, larger level). The previous implementation had the two
+  // swapped.
+  constexpr uint8_t kDarkGray = 5;    // 2-bit 值 1 / 2-bit value 1
+  constexpr uint8_t kLightGray = 10;  // 2-bit 值 2 / 2-bit value 2
 
-  // 定点：f 是"墨占比"，0 = 全白、255 = 全黑。
-  // / Fixed point: f is the ink fraction, 0 = all white, 255 = all black.
-  constexpr int kInkDark = 178;    // 2-bit 值 1（深灰）≈ 0.70 墨
-  constexpr int kInkLight = 89;    // 2-bit 值 2（浅灰）≈ 0.35 墨
-  constexpr int kIntentWeight = 166;  // 平面意图占 0.65，邻域占 0.35
-  // 中心权重：无权重盒式平均会造出 3 像素宽的灰过渡，字干只有 1-2 像素时整笔就被
-  // 糊掉。中心给 24、八邻各给 1（总权重 32），过渡只有 1 像素且中心压倒性主导，
-  // 笔画内部与背景基本保持纯黑纯白。实测 8 偏柔、16 仍嫌糊，24 是当前取值 —— 这块
-  // 板 PPI 很高，单靠二值渲染就已经很锐利，抗锯齿只该作为极轻的修饰存在。
-  // / Centre weight: an unweighted box filter produces a 3-px-wide grey ramp, which
-  // smears a 1-2 px stem into mush. Centre 24, each of the eight neighbours 1 (total
-  // 32) keeps the ramp one pixel wide with the centre overwhelmingly dominant, so
-  // stroke interiors and background stay essentially black/white. 8 read soft and 16
-  // still looked blurred on hardware; 24 is the current value. This panel has a high
-  // enough pixel density that plain binary rendering is already crisp, so anti-aliasing
-  // should only ever be a very light touch.
-  constexpr int kCentreWeight = 24;
-  // 两个极值来自判墨方向，不由常量硬编码 / The two extremes follow from g_blackIsOne.
-  const int inkLevel = g_blackIsOne ? 0 : 15;
-  const int paperLevel = 15 - inkLevel;
+  // 底图铺满整页，未标记的像素（纯黑/纯白）保持原样。
+  // / Lay the base page down first; unmarked pixels stay black or white.
+  fillFrom1bpp(g_base);
 
-  const int w = static_cast<int>(epd_width());
-  const int h = static_cast<int>(epd_height());
-  const int stride = w / 8;
-
-  for (int y = 0; y < h; ++y) {
+  const uint16_t w = static_cast<uint16_t>(epd_width());
+  const uint16_t h = static_cast<uint16_t>(epd_height());
+  const size_t stride = w / 8;
+  for (uint16_t y = 0; y < h; ++y) {
     const uint8_t* lrow = lsb + static_cast<size_t>(y) * stride;
     const uint8_t* mrow = msb + static_cast<size_t>(y) * stride;
     uint8_t* drow = g_fb4 + static_cast<size_t>(y) * (w / 2);
-
-    for (int x = 0; x < w; ++x) {
-      // --- 3x3 墨占比 ------------------------------------------------------
-      // 中心加权的 3x3：权重和决定过渡宽度，而不是邻域大小。
-      // / Centre-weighted 3x3: the weights, not the window size, set the ramp width.
-      int ink = 0, wsum = 0;
-      for (int dy = -1; dy <= 1; ++dy) {
-        const int yy = y + dy;
-        if (yy < 0 || yy >= h) continue;
-        const uint8_t* brow = g_base + static_cast<size_t>(yy) * stride;
-        for (int dx = -1; dx <= 1; ++dx) {
-          const int xx = x + dx;
-          if (xx < 0 || xx >= w) continue;
-          const int wgt = (dx == 0 && dy == 0) ? kCentreWeight : 1;
-          const bool bit = (brow[xx >> 3] & (0x80u >> (xx & 7))) != 0;
-          if (!bit) ink += wgt;  // 位清零 = 墨 / clear bit = ink
-          wsum += wgt;
+    for (size_t bx = 0; bx < stride; ++bx) {
+      const uint8_t l = lrow[bx], m = mrow[bx];
+      if ((l | m) == 0) continue;
+      for (uint8_t bit = 0; bit < 8; ++bit) {
+        const uint8_t mask = static_cast<uint8_t>(0x80u >> bit);
+        const bool lb = (l & mask) != 0, mb = (m & mask) != 0;
+        if (!lb && !mb) continue;
+        const uint8_t level = (mb && !lb) ? kLightGray : kDarkGray;
+        const size_t x = bx * 8 + bit;
+        uint8_t* cell = drow + (x >> 1);
+        // epdiy 每字节两个像素：偶数列低半字节、奇数列高半字节。
+        // / epdiy packs two pixels per byte: even column low nibble, odd high.
+        if ((x & 1) != 0) {
+          *cell = static_cast<uint8_t>((*cell & 0x0Fu) | static_cast<uint8_t>(level << 4));
+        } else {
+          *cell = static_cast<uint8_t>((*cell & 0xF0u) | level);
         }
-      }
-      int f = wsum > 0 ? (ink * 255) / wsum : 0;
-
-      // --- 宿主的每像素意图 ------------------------------------------------
-      const uint8_t mask = static_cast<uint8_t>(0x80u >> (x & 7));
-      const bool lb = (lrow[x >> 3] & mask) != 0;
-      const bool mb = (mrow[x >> 3] & mask) != 0;
-      if (lb || mb) {
-        const int intent = lb ? kInkDark : kInkLight;
-        f = (kIntentWeight * intent + (255 - kIntentWeight) * f) / 255;
-      }
-
-      // --- 墨占比 -> level（0 = 黑，15 = 白）-------------------------------
-      int level = (f * inkLevel + (255 - f) * paperLevel + 127) / 255;
-      if (level < 0) level = 0;
-      if (level > 15) level = 15;
-
-      // epdiy 每字节两个像素：偶数列低半字节、奇数列高半字节。
-      // / epdiy packs two pixels per byte: even column low nibble, odd high.
-      uint8_t* cell = drow + (x >> 1);
-      if ((x & 1) != 0) {
-        *cell = static_cast<uint8_t>((*cell & 0x0Fu) | static_cast<uint8_t>(level << 4));
-      } else {
-        *cell = static_cast<uint8_t>((*cell & 0xF0u) | static_cast<uint8_t>(level));
       }
     }
   }
