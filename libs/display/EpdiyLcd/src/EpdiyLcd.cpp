@@ -338,14 +338,17 @@ void epdiyLcdDrawGray(const uint8_t* lsb, const uint8_t* msb, EpdiyLcdRefresh mo
   constexpr int kInkLight = 89;    // 2-bit 值 2（浅灰）≈ 0.35 墨
   constexpr int kIntentWeight = 166;  // 平面意图占 0.65，邻域占 0.35
   // 中心权重：无权重盒式平均会造出 3 像素宽的灰过渡，字干只有 1-2 像素时整笔就被
-  // 糊掉。中心给 16、八邻各给 1（总权重 24），过渡只有 1 像素且中心占主导，笔画
-  // 内部与背景保持纯黑纯白。实测 8 仍偏柔，16 是当前的取值；调大更锐，调小更柔。
+  // 糊掉。中心给 24、八邻各给 1（总权重 32），过渡只有 1 像素且中心压倒性主导，
+  // 笔画内部与背景基本保持纯黑纯白。实测 8 偏柔、16 仍嫌糊，24 是当前取值 —— 这块
+  // 板 PPI 很高，单靠二值渲染就已经很锐利，抗锯齿只该作为极轻的修饰存在。
   // / Centre weight: an unweighted box filter produces a 3-px-wide grey ramp, which
-  // smears a 1-2 px stem into mush. Centre 16, each of the eight neighbours 1 (total
-  // 24) keeps the ramp one pixel wide with the centre dominating, so stroke interiors
-  // and background stay fully black/white. 8 still read soft on hardware; 16 is the
-  // current value. Raise for crisper, lower for softer.
-  constexpr int kCentreWeight = 16;
+  // smears a 1-2 px stem into mush. Centre 24, each of the eight neighbours 1 (total
+  // 32) keeps the ramp one pixel wide with the centre overwhelmingly dominant, so
+  // stroke interiors and background stay essentially black/white. 8 read soft and 16
+  // still looked blurred on hardware; 24 is the current value. This panel has a high
+  // enough pixel density that plain binary rendering is already crisp, so anti-aliasing
+  // should only ever be a very light touch.
+  constexpr int kCentreWeight = 24;
   // 两个极值来自判墨方向，不由常量硬编码 / The two extremes follow from g_blackIsOne.
   const int inkLevel = g_blackIsOne ? 0 : 15;
   const int paperLevel = 15 - inkLevel;
