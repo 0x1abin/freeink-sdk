@@ -338,13 +338,14 @@ void epdiyLcdDrawGray(const uint8_t* lsb, const uint8_t* msb, EpdiyLcdRefresh mo
   constexpr int kInkLight = 89;    // 2-bit 值 2（浅灰）≈ 0.35 墨
   constexpr int kIntentWeight = 166;  // 平面意图占 0.65，邻域占 0.35
   // 中心权重：无权重盒式平均会造出 3 像素宽的灰过渡，字干只有 1-2 像素时整笔就被
-  // 糊掉。中心给 8、八邻各给 1（总权重 16），过渡收窄到 1 像素，笔画内部与背景
-  // 仍是纯黑纯白。调大更锐，调小更柔。
+  // 糊掉。中心给 16、八邻各给 1（总权重 24），过渡只有 1 像素且中心占主导，笔画
+  // 内部与背景保持纯黑纯白。实测 8 仍偏柔，16 是当前的取值；调大更锐，调小更柔。
   // / Centre weight: an unweighted box filter produces a 3-px-wide grey ramp, which
-  // smears a 1-2 px stem into mush. Centre 8, each of the eight neighbours 1 (total
-  // 16) narrows the ramp to one pixel and keeps stroke interiors and background fully
-  // black/white. Raise for crisper, lower for softer.
-  constexpr int kCentreWeight = 8;
+  // smears a 1-2 px stem into mush. Centre 16, each of the eight neighbours 1 (total
+  // 24) keeps the ramp one pixel wide with the centre dominating, so stroke interiors
+  // and background stay fully black/white. 8 still read soft on hardware; 16 is the
+  // current value. Raise for crisper, lower for softer.
+  constexpr int kCentreWeight = 16;
   // 两个极值来自判墨方向，不由常量硬编码 / The two extremes follow from g_blackIsOne.
   const int inkLevel = g_blackIsOne ? 0 : 15;
   const int paperLevel = 15 - inkLevel;
