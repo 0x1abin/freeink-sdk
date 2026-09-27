@@ -14,6 +14,7 @@ class EpdBus {
   std::vector<Event> events;
   bool busy = false, stuck = false;
   int activation = 0, failAt = 0;
+  void (*onRefreshComplete)() = nullptr;
   void reset() { busy = false; }
   void cmd(uint8_t c) {
     assert(!busy);
@@ -25,11 +26,21 @@ class EpdBus {
   }
   void data(uint8_t b) { events.back().bytes.push_back(b); }
   void data(const uint8_t* p, uint16_t n) { events.back().bytes.insert(events.back().bytes.end(), p, p + n); }
+  void cmdData(uint8_t c, const uint8_t* p, uint16_t n) {
+    cmd(c);
+    data(p, n);
+  }
+  void beginTxn() {}
+  void endTxn() {}
+  void rawWriteBytes(const uint8_t* p, uint16_t n) { data(p, n); }
   void waitBusy(const char*) {
     busy = stuck || (failAt != 0 && activation == failAt);
     events.push_back({-1, {}});
   }
-  void waitRefreshComplete(const char* s) { waitBusy(s); }
+  void waitRefreshComplete(const char* s) {
+    waitBusy(s);
+    if (onRefreshComplete) onRefreshComplete();
+  }
   bool isBusy() const { return busy; }
   void fillPlane(uint8_t c, uint8_t v, uint16_t h, uint16_t wb) {
     cmd(c);

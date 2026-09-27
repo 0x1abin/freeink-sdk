@@ -40,6 +40,60 @@ inline bool read(uint8_t addr, uint8_t reg, uint8_t* bytes, uint8_t count) {
   return true;
 }
 
+// Exact register setpoints in mV/mA; unsupported ranges or steps are rejected.
+struct ChargerConfig {
+  uint16_t vregMv;
+  uint16_t prechargeMa;
+  uint16_t terminationMa;
+  uint16_t chargeMa;
+  uint16_t inputLimitMa;
+};
+
+enum class ChargerConfigResult { Configured, BusNotReady, InvalidConfig, ProbeFailed, IoError };
+
+namespace detail {
+inline bool updateChargerBits(uint8_t reg, uint8_t mask, uint8_t value) {
+  uint8_t current = 0;
+  if (!read(CHARGER, reg, &current, 1)) return false;
+  Wire.beginTransmission(CHARGER);
+  Wire.write(reg);
+  Wire.write(static_cast<uint8_t>((current & static_cast<uint8_t>(~mask)) | (value & mask)));
+  return Wire.endTransmission() == 0;
+}
+}  // namespace detail
+
+inline ChargerConfigResult configureCharger(const ChargerConfig& config, uint8_t& partInfo) {
+  if (!ready) return ChargerConfigResult::BusNotReady;
+  if (config.vregMv < 3840 || config.vregMv > 4800 || config.vregMv % 10 || config.prechargeMa < 20 ||
+      config.prechargeMa > 620 || config.prechargeMa % 20 || config.terminationMa < 10 || config.terminationMa > 630 ||
+      config.terminationMa % 10 || config.chargeMa < 80 || config.chargeMa > 3040 || config.chargeMa % 80 ||
+      config.inputLimitMa < 100 || config.inputLimitMa > 3000 || config.inputLimitMa % 20)
+    return ChargerConfigResult::InvalidConfig;
+  if (!read(CHARGER, 0x38, &partInfo, 1)) return ChargerConfigResult::ProbeFailed;
+
+  const uint16_t vreg = config.vregMv / 10;
+  const uint8_t precharge = config.prechargeMa / 20;
+  const uint8_t termination = config.terminationMa / 10;
+  const uint8_t charge = config.chargeMa / 80;
+  const uint8_t inputLimit = config.inputLimitMa / 20;
+
+  // Keep charging disabled until every parameter and hardware termination is set.
+  if (!detail::updateChargerBits(0x16, 0x23, 0x00) ||
+      !detail::updateChargerBits(0x10, 0xF0, static_cast<uint8_t>(precharge << 4)) ||
+      !detail::updateChargerBits(0x11, 0x01, precharge >> 4) ||
+      !detail::updateChargerBits(0x12, 0xF8, static_cast<uint8_t>(termination << 3)) ||
+      !detail::updateChargerBits(0x13, 0x01, termination >> 5) ||
+      !detail::updateChargerBits(0x04, 0xF8, static_cast<uint8_t>(vreg << 3)) ||
+      !detail::updateChargerBits(0x05, 0x0F, vreg >> 5) ||
+      !detail::updateChargerBits(0x02, 0xC0, static_cast<uint8_t>(charge << 6)) ||
+      !detail::updateChargerBits(0x03, 0x0F, charge >> 2) ||
+      !detail::updateChargerBits(0x06, 0xF0, static_cast<uint8_t>(inputLimit << 4)) ||
+      !detail::updateChargerBits(0x07, 0x0F, inputLimit >> 4) || !detail::updateChargerBits(0x14, 0x04, 0x04) ||
+      !detail::updateChargerBits(0x16, 0x30, 0x20))
+    return ChargerConfigResult::IoError;
+  return ChargerConfigResult::Configured;
+}
+
 inline bool sleepTouch() {
   Wire.beginTransmission(0x15);
   Wire.write(0xA5);
@@ -98,7 +152,7 @@ inline uint8_t buttons() {
 }
 
 inline bool externalPowerConnected(bool& connected) {
-  // Read-only CX25601N status. Never run the reference charger's voltage/current init.
+  // Read CX25601N status independently of optional boot-time configuration.
   static uint32_t nextRead = 0;
   static bool valid = false;
   static bool cached = false;

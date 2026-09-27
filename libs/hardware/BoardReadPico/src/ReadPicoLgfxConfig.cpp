@@ -330,6 +330,13 @@ const LgfxEpdConfig& readPicoLgfxConfig() {
       kE0470Gc16, kE0470Gc16Step,     // lutText    <- epd_text  = Full/Half refresh
       kE0470Du, kE0470DuStep,         // lutFast    <- epd_fast  = Fast refresh
       nullptr, 0,                     // lutFastest — never selected
+      // cleanBankNeedsFreshBackground = false. Upstream added this member
+      // between the LUT block and the two Read Pico members, so it has to be
+      // given a value here or the braced array below lands on a bool. False is
+      // both the struct default and the right answer for this board: the
+      // shipping build drives the panel through the epdiy LCD backend, and this
+      // Lgfx config is the fallback, not a clean-bank-normalizing setup.
+      false,
       // dataPinsHigh[8] = D8..D15 (GPIO 12..18, 45). A braced array, not a
       // pointer: `nullptr, 0` would not compile.
       {READPICO_EP_D8, READPICO_EP_D9, READPICO_EP_D10, READPICO_EP_D11, READPICO_EP_D12, READPICO_EP_D13,

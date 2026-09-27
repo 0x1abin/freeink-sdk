@@ -1,10 +1,15 @@
+#define FREEINK_DEVICE_METALIO_EINK4 1
 #include <algorithm>
 #include <array>
 
-#include "driver/Ssd1677Driver.cpp"
+#include "driver/CrossMuxSsd1677Driver.cpp"
 using namespace freeink;
+// Keep the existing CrossMux consumer fixture compatible with this isolated driver.
+using Ssd1677Driver = CrossMuxSsd1677Driver;
+const CrossMuxSsd1677Config& ssd1677MetalioConfig() { return crossmuxSsd1677MetalioConfig(); }
+
 using Mode = RefreshMode;
-using Policy = Ssd1677CleanPolicy;
+using Policy = CrossMuxSsd1677CleanPolicy;
 void expect(EpdBus& b, std::initializer_list<uint8_t> seq) { assert(b.sequences() == std::vector<uint8_t>(seq)); }
 void parameters(EpdBus& b) {
   for (auto& e : b.events)
@@ -48,9 +53,9 @@ void testDriverSequences() {
   fb.fill(0xA5);
   const auto original = fb;
   {
-    auto cfg = ssd1677MetalioConfig();
+    auto cfg = crossmuxSsd1677MetalioConfig();
     assert(cfg.cleanPolicy == Policy::BlackPulse);
-    Ssd1677Driver d(cfg);
+    CrossMuxSsd1677Driver d(cfg);
     EpdBus b;
     d.begin(b);
     b.clear();
@@ -114,9 +119,9 @@ void testDriverSequences() {
     expect(b, {0xFC, 0xFC});
     assert(fb == original);
   }
-  auto cfg = ssd1677MetalioConfig();
+  auto cfg = crossmuxSsd1677MetalioConfig();
   assert(cfg.cleanPolicy == Policy::BlackPulse);
-  Ssd1677Driver d(cfg);
+  CrossMuxSsd1677Driver d(cfg);
   EpdBus b;
   d.begin(b);
   b.clear();
@@ -126,8 +131,11 @@ void testDriverSequences() {
   for (auto& e : b.events)
     if (e.cmd == 0x24 || e.cmd == 0x26) planes.push_back(e);
   assert(planes.size() == 7);
-  assert(planes[0].cmd == 0x26 && planes[0].bytes == std::vector<uint8_t>(32, 0xff));
-  assert(planes[1].cmd == 0x24 && planes[1].bytes == std::vector<uint8_t>(32, 0));
+  // Even the white-clear build must keep ordinary text/manual/recovery black.
+  constexpr uint8_t oldEndpoint = 0xFF;
+  constexpr uint8_t cleanEndpoint = 0x00;
+  assert(planes[0].cmd == 0x26 && planes[0].bytes == std::vector<uint8_t>(32, oldEndpoint));
+  assert(planes[1].cmd == 0x24 && planes[1].bytes == std::vector<uint8_t>(32, cleanEndpoint));
   assert(planes[2].bytes == planes[1].bytes && planes[3].bytes == planes[1].bytes);
   assert(planes[4].bytes == std::vector<uint8_t>(fb.begin(), fb.end()));
   assert(planes[5].bytes == planes[4].bytes && planes[6].bytes == planes[4].bytes);
@@ -205,8 +213,8 @@ void testDriverSequences() {
   d.display(b, fb.data(), nullptr, Mode::Fast, false);
   expect(b, {0xFC, 0xFC});
   // Legacy devices retain their wire behavior and RED-only gray cleanup.
-  for (const auto* legacy : {&ssd1677DefaultConfig(), &ssd1677Waveshare397Config()}) {
-    Ssd1677Driver old(*legacy);
+  for (const auto* legacy : {&crossmuxSsd1677DefaultConfig(), &crossmuxSsd1677Waveshare397Config()}) {
+    CrossMuxSsd1677Driver old(*legacy);
     EpdBus bus;
     old.begin(bus);
     bus.clear();
@@ -221,9 +229,82 @@ void testDriverSequences() {
     for (auto& e : bus.events)
       if (e.cmd == 0x21) assert(e.bytes.size() == 1);
   }
+  // Absolute gray cannot inherit the continuous-reading overlay shortcut.
+  for (const auto* cfg : {&crossmuxSsd1677DefaultConfig(), &crossmuxSsd1677MetalioConfig()}) {
+    CrossMuxSsd1677Driver panel(*cfg);
+    EpdBus bus;
+    panel.begin(bus);
+    panel.display(bus, fb.data(), nullptr, Mode::Full, false);
+    panel.displayGray(bus, fb.data(), false, nullptr, true);
+    panel.cleanupGrayscaleBuffers(bus, fb.data());
+    bus.clear();
+    panel.displayWithContext(bus, fb.data(), nullptr, Mode::Fast, false, RefreshContext::ContinuousReading);
+    if (cfg->cleanPolicy == Policy::BlackPulse) {
+      expect(bus, {0xFC, 0xFC});
+    } else {
+      expect(bus, {0xD7});
+    }
+    bus.clear();
+    panel.display(bus, fb.data(), nullptr, Mode::Fast, false);
+    expect(bus, {0xFC});  // Physical clean is consumed once.
+  }
+  for (const auto* cfg : {&crossmuxSsd1677Waveshare397Config(), &crossmuxSsd1677MetalioConfig(), &crossmuxSsd1677MurphyM4Config()}) {
+    CrossMuxSsd1677Driver panel(*cfg);
+    assert(!panel.grayscaleCapabilities(GrayscaleMode::Absolute).supported());
+    assert(panel.grayscaleCapabilities(GrayscaleMode::Overlay).supported());
+  }
+  for (const auto mode : {Mode::Fast, Mode::Half, Mode::Full}) {
+    CrossMuxSsd1677Driver panel;
+    EpdBus bus;
+    panel.begin(bus);
+    bus.clear();
+    panel.display(bus, fb.data(), nullptr, mode, true);
+    expect(bus, {mode == Mode::Full ? uint8_t(0xF7) : uint8_t(0xD7)});
+  }
   assert(fb == original);
 }
 
+void testImageTransitionPolicy() {
+  std::array<uint8_t, 32> fb;
+  fb.fill(0xA5);
+  CrossMuxSsd1677Driver d(crossmuxSsd1677MetalioConfig());
+  EpdBus b;
+  d.begin(b);
+  assert(d.opticalState() == OpticalState::Unknown);
+  b.clear();
+  d.displayWithContext(b, fb.data(), nullptr, Mode::Half, false, RefreshContext::ImageReading);
+  expect(b, {0xFC, 0xFC});
+  const auto firstBw = std::find_if(b.events.begin(), b.events.end(), [](const auto& e) { return e.cmd == 0x24; });
+#if defined(FREEINK_SSD1677_READER_TRANSITIONS) && FREEINK_SSD1677_READER_TRANSITIONS
+  assert(firstBw->bytes == std::vector<uint8_t>(32, 0xFF));
+#else
+  assert(firstBw->bytes == std::vector<uint8_t>(32, 0x00));
+#endif
+  assert(d.opticalState() == OpticalState::Bw);
+  d.displayGray(b, fb.data(), false, nullptr, false);
+  d.cleanupGrayscaleBuffers(b, fb.data());
+  assert(d.opticalState() == OpticalState::Gray);  // RED sync never erases physical gray.
+  b.clear();
+  d.displayWithContext(b, fb.data(), nullptr, Mode::Fast, false, RefreshContext::ImageReading);
+#if defined(FREEINK_SSD1677_READER_TRANSITIONS) && FREEINK_SSD1677_READER_TRANSITIONS
+  expect(b, {0xFC});
+  assert(d.opticalState() == OpticalState::Gray);
+#else
+  expect(b, {0xFC, 0xFC});
+#endif
+  d.requestResync(0);
+  assert(d.opticalState() == OpticalState::Unknown);
+  b.clear();
+  d.displayWithContext(b, fb.data(), nullptr, Mode::Fast, false, RefreshContext::ImageReading);
+  expect(b, {0xFC, 0xFC});
+  d.deepSleep(b);
+  d.begin(b);  // A new controller session cannot inherit the prior optical estimate.
+  assert(d.opticalState() == OpticalState::Unknown);
+}
+
 #ifndef CROSSMUX_READER_REFRESH_TEST
-int main() { testDriverSequences(); }
+int main() {
+  testDriverSequences();
+  testImageTransitionPolicy();
+}
 #endif
