@@ -294,6 +294,15 @@ void epdiyLcdDraw(const uint8_t* fb, EpdiyLcdRefresh mode, bool turnOff) {
   pushFrame(mode, turnOff);
 }
 
+void epdiyLcdStashBase(const uint8_t* fb) {
+  if (!g_started || fb == nullptr || g_base == nullptr || g_cfg == nullptr) return;
+  // 只留底图：不展开、不推帧。灰阶提交会用它合成整页，所以整帧只被一种波形驱动一次。
+  // / Stash only: no expansion, no frame push. The grey commit composes the whole page
+  // from it, so the frame is driven once by a single profile.
+  const size_t bytes = static_cast<size_t>(epd_width()) / 8 * static_cast<size_t>(epd_height());
+  memcpy(g_base, fb, bytes);
+}
+
 void epdiyLcdDrawGray(const uint8_t* lsb, const uint8_t* msb, EpdiyLcdRefresh mode, bool turnOff) {
   if (!g_started || g_fb4 == nullptr || g_cfg == nullptr) return;
   if (g_base == nullptr || lsb == nullptr || msb == nullptr) return;

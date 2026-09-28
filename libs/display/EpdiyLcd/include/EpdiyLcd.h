@@ -88,6 +88,13 @@ void epdiyLcdEnd();
 /// the bit convention is the one handed to epdiyLcdBegin.
 void epdiyLcdDraw(const uint8_t* fb, EpdiyLcdRefresh mode, bool turnOff);
 
+/// 只把这一页留作底图，不推屏。给「底图与灰阶合并成一次波形」的宿主用：宿主随后调用
+/// epdiyLcdDrawGray()，由它用这张底图合成整页并只推一次。
+/// / Stash this page as the base WITHOUT presenting it. For hosts that combine the
+/// base and the grey planes into one waveform: they then call epdiyLcdDrawGray(),
+/// which composes the whole page from this base and presents it once.
+void epdiyLcdStashBase(const uint8_t* fb);
+
 /// 推一帧中间灰：以最近一次 epdiyLcdDraw() 的黑白页为底，再用 LSB/MSB 选择平面对
 /// 被选中的像素做中间灰覆盖。
 ///

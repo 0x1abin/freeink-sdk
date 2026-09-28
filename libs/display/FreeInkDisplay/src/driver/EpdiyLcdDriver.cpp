@@ -79,7 +79,9 @@ GrayscaleCapabilities EpdiyLcdDriver::grayscaleCapabilities(GrayscaleMode mode) 
   // host pushes first), LSB set = dark, MSB set = light. base is Separate because
   // display() pushes the B/W frame before the grey commit overlays it; stripUploads
   // stays false so the host uses the whole-plane LSB/MSB path this driver implements.
-  return {GrayscaleEncoding::OverlayMasks, GrayscaleBase::Separate, false, false, false};
+  // Combined: this driver defers the base so the grey commit presents the whole page
+  // once. See displayGrayscaleBaseWithContext() below.
+  return {GrayscaleEncoding::OverlayMasks, GrayscaleBase::Combined, false, false, false};
 }
 
 void EpdiyLcdDriver::begin(EpdBus& bus) {
@@ -197,6 +199,19 @@ void EpdiyLcdDriver::displayGray(EpdBus& bus, const uint8_t* fb, bool turnOff, c
   esp_rom_printf("[GRAY] base=%d -> gray=%d\n", static_cast<int>(_lastBaseMode), static_cast<int>(grayMode));
 #endif
   epdiyLcdDrawGray(_lsb, _msb, grayMode, turnOff);
+}
+
+void EpdiyLcdDriver::displayGrayscaleBaseWithContext(EpdBus& bus, const uint8_t* fb, RefreshMode fallback,
+                                                     bool turnOff, RefreshContext context) {
+  (void)bus;
+  (void)fallback;
+  (void)turnOff;
+  (void)context;
+  if (!_ready) return;
+  // 底图只暂存。宿主接下来会写 LSB/MSB 平面并调 displayGray()，由它合成整页后推一次。
+  // / Defer: the host writes the LSB/MSB planes next and calls displayGray(), which
+  // composes the whole page and presents it once.
+  epdiyLcdStashBase(fb);
 }
 
 PanelDriver& epdiyLcdDriver() {

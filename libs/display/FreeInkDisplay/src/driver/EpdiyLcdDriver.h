@@ -83,6 +83,14 @@ class EpdiyLcdDriver : public PanelDriver {
   void displayGray(EpdBus& bus, const uint8_t* fb, bool turnOff, const unsigned char* lut,
                    bool factoryMode) override;
 
+  // Combined base: the B/W page is only STASHED here, and the grey commit presents
+  // base + mid tones together in one waveform. Pushing the base first would cost a
+  // second full panel refresh per anti-aliased page (and drive the frame through two
+  // different profiles).
+  // / Combined base: see above.
+  void displayGrayscaleBaseWithContext(EpdBus& bus, const uint8_t* fb, RefreshMode fallback, bool turnOff,
+                                       RefreshContext context) override;
+
  private:
   const EpdiyLcdConfig& _cfg;
   bool _ready = false;
