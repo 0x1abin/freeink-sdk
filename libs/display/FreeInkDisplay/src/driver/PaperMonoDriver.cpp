@@ -120,9 +120,9 @@ constexpr uint8_t popcount8(uint8_t value) {
 //   [100..104] frame-rate nibbles, two groups per byte
 //   [105..109] VGH, VSH1, VSH2, VSL, VCOM (registers 0x03/0x04/0x2C)
 struct WaveLut {
-  uint8_t b[111];
+  uint8_t* b;
 
-  void clear() { memset(b, 0, sizeof(b)); }
+  void clear() { memset(b, 0, 111); }
 
   void setVs(uint8_t entry, uint8_t group, uint8_t phase, uint8_t vs) {
     uint8_t& target = b[entry * 10 + group];
@@ -522,7 +522,7 @@ void PaperMonoDriver::loadCustomLut(EpdBus& bus, const uint8_t lut[111]) {
 // lands at ~40% of the weak-rail swing -- clearly separated from both
 // endpoints instead of the previous near-black.
 uint16_t PaperMonoDriver::makeTriLut(uint8_t out[111], bool bgTopUp) const {
-  WaveLut lut;
+  WaveLut lut{out};
   lut.clear();
 
   const uint8_t kick = _tri.preUp;
@@ -607,7 +607,6 @@ uint16_t PaperMonoDriver::makeTriLut(uint8_t out[111], bool bgTopUp) const {
   }
 
   lut.finish();
-  memcpy(out, lut.b, 111);
   return frames;
 }
 
@@ -734,7 +733,7 @@ uint16_t PaperMonoDriver::makeTextTurnLut(uint8_t out[111]) const {
   const uint16_t blackEnd = blackStart + panel.black;
   uint16_t bounds[] = {0, whiteStart, whiteEnd, grayWhite, grayEnd, blackStart, blackEnd};
   sortAscending(bounds, 7);
-  WaveLut lut;
+  WaveLut lut{out};
   lut.clear();
   uint8_t group = 0;
   uint16_t previous = 0;
@@ -747,7 +746,6 @@ uint16_t PaperMonoDriver::makeTextTurnLut(uint8_t out[111]) const {
     previous = current;
   }
   lut.finish();
-  memcpy(out, lut.b, sizeof(lut.b));
   return std::max(grayEnd, std::max(whiteEnd, blackEnd));
 }
 
@@ -832,8 +830,8 @@ bool PaperMonoDriver::runUpdate(EpdBus& bus, const uint8_t* bwTarget, bool useGr
 
 #ifdef ENABLE_SERIAL_LOG
   Serial.printf("[%lu] SSD1677 AA: textTurn=%u frames=%u changed=%lu full=%u elapsed=%lums\n", millis(),
-                static_cast<unsigned>(textTurn), static_cast<unsigned>(firstFrames), static_cast<unsigned long>(changed),
-                static_cast<unsigned>(corrective), millis() - started);
+                static_cast<unsigned>(textTurn), static_cast<unsigned>(firstFrames),
+                static_cast<unsigned long>(changed), static_cast<unsigned>(corrective), millis() - started);
 #else
   (void)firstFrames;
   (void)started;
