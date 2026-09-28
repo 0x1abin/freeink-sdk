@@ -10,6 +10,7 @@
 #include "FreeInkDisplay.h"
 #include "src/driver/PaperMonoDriver.h"
 #undef private
+#include "src/lut/Ssd1677CombinedAa.h"
 
 using namespace freeink;
 using Mode = FreeInkDisplay;
@@ -145,6 +146,52 @@ int main(int argc, char** argv) {
   const auto scan = last(bus, 0x01);
   d.cleanupGrayscaleBuffers(bw.data());
   bus.clear();
+#if FREEINK_SSD1677_TEXT_TURN_AA
+  {
+    const auto allocated = allocationCalls;
+    const auto resets = bus.resets;
+    bw[100] = 0;
+    lsb[101] = 0x80;
+    stage(Mode::FAST_REFRESH);
+    d.displayGrayBuffer(false);
+    assert(pixels(bus) == 1 && d.displayCommitted() && bus.resets == resets);
+    const auto edgeLut = last(bus, 0x32);
+    assert(edgeLut.size() == 105 && edgeLut[20] == 0x80 && edgeLut[22] == 0xC0);
+    assert(edgeLut[50] == 24 && edgeLut[55] == 8 && edgeLut[60] == 24);
+    assert(last(bus, 0x24).at(100) == 0xFF && last(bus, 0x24).at(101) == 0x7F);
+    assert(last(bus, 0x26).at(100) == 0xFF && last(bus, 0x26).at(101) == 0x80);
+    assert(last(bus, 0x24).at(1) == 0x3F && last(bus, 0x26).at(1) == 0);
+    assert(last(bus, 0x11) == Bytes{static_cast<uint8_t>(BoardConfig::ACTIVE.orientation.mirrorX ? 0 : 1)});
+    d.cleanupGrayscaleBuffers(bw.data());
+    bus.clear();
+    stage(Mode::FAST_REFRESH);
+    d.displayGrayBuffer(false);
+    assert(pixels(bus) == 0);
+    d.cleanupGrayscaleBuffers(bw.data());
+
+    // An image switches to the original driver, and the next text entry uses
+    // the safe handoff rather than diffing against stale per-pixel history.
+    bus.clear();
+    std::memcpy(d.getFrameBuffer(), bw.data(), bw.size());
+    d.displayGrayscaleBase(Mode::HALF_REFRESH, false, RefreshContext::ImageReading);
+    d.copyGrayscaleBuffers(lsb.data(), msb.data());
+    d.displayGrayBuffer(false);
+    assert(d._driver == d._originalDriver && last(bus, 0x32) != edgeLut);
+    d.cleanupGrayscaleBuffers(bw.data());
+    bus.clear();
+    stage(Mode::FAST_REFRESH);
+    d.displayGrayBuffer(false);
+    assert(last(bus, 0x32) != edgeLut && d.displayCommitted());
+    d.cleanupGrayscaleBuffers(bw.data());
+    bus.clear();
+    d.setInverted(true);
+    stage(Mode::FAST_REFRESH);
+    d.displayGrayBuffer(false);
+    assert(d._driver == d._originalDriver && last(bus, 0x32) != edgeLut);
+    assert(allocationCalls == allocated);
+    return 0;
+  }
+#endif
   bw[100] = 0;
   stage(Mode::FAST_REFRESH);
   assert(pixels(bus) == 0);
