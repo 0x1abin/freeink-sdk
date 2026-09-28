@@ -333,17 +333,23 @@ void epdiyLcdDrawGray(const uint8_t* lsb, const uint8_t* msb, EpdiyLcdRefresh mo
   // white, so a clear bit is ink and a set bit is paper. NOTE: the comment at the top of
   // EpdiyLcdDriver.cpp claims level 0 renders white, which contradicts the table -- do
   // not reason from it.
-  constexpr uint8_t kDarkGray = 5;    // 2-bit 值 1（深灰）/ 2-bit value 1 (dark)
-  constexpr uint8_t kLightGray = 10;  // 2-bit 值 2（浅灰）/ 2-bit value 2 (light)
+  // 中间灰压暗：对齐原厂固件 ttf_font.h:43 的覆盖率 gamma（"Below 1 lifts mid
+  // coverage so AA edges are darker"）。均匀的 5/10 观感发灰，压到 3/8 让抗锯齿边缘
+  // 发深，既保留档间过渡又不显糊。
+  // / Mid tones darkened, matching the coverage gamma in the reference firmware
+  // (ttf_font.h:43). Even 5/10 reads washed out; 3/8 keeps the in-between step for
+  // anti-aliasing while the edges stay dark.
+  constexpr uint8_t kDarkGray = 3;   // 2-bit 值 1（深灰）/ 2-bit value 1 (dark)
+  constexpr uint8_t kLightGray = 8;  // 2-bit 值 2（浅灰）/ 2-bit value 2 (light)
   constexpr int kInkLevel = 0;        // 墨 = 黑 / ink is black
   constexpr int kPaperLevel = 15;     // 纸 = 白 / paper is white
   // 邻域权重与微调上限：这两个就是"圆润 vs 毛刺/模糊"的总旋钮。  // 权重集中到中心 = 邻域影响更小 = 更锐（24 与旧实现的取值一致）
   // / The two knobs that trade rounding against jaggies and blur.  // 权重集中到中心 = 邻域影响更小 = 更锐（24 与旧实现的取值一致）
   constexpr int kCentreWeight = 24;
-  // 微调上限。0 = 纯覆盖率（斜边出毛刺），4 偏糊，2 仍偏糊；1 是当前取值。
-  // / Nudge cap. 0 = coverage only (diagonals stair), 4 already read blurry; 2 is
-  // / Nudge cap. 0 = coverage only (diagonals stair), 4 blurred, 2 still soft;
-  constexpr int kMaxNudge = 1;
+  // 微调上限 = 0：关掉邻域扩散。原厂固件没有空间平滑（它把 1/16 真实覆盖率
+  // / Nudge cap = 0: the neighbourhood is off. The reference firmware does no
+  // / Nudge cap = 0: the neighbourhood is off. The reference firmware does no
+  constexpr int kMaxNudge = 0;
 
   const int w = static_cast<int>(epd_width());
   const int h = static_cast<int>(epd_height());
