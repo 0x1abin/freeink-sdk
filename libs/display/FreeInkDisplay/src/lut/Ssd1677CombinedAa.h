@@ -5,10 +5,10 @@
 #include "Ssd1677Luts.h"
 #include "StickyCombinedAa.h"
 
-// Metalio's endpoint-preserving text turn is panel-tested. Other combined-AA
-// boards can opt into the same core while retaining their analog calibration.
 #ifndef FREEINK_SSD1677_TEXT_TURN_AA
-#define FREEINK_SSD1677_TEXT_TURN_AA (FREEINK_SSD1677_TEXT_ROUTING && FREEINK_DEVICE_METALIO_EINK4)
+#define FREEINK_SSD1677_TEXT_TURN_AA                                                         \
+  (FREEINK_SSD1677_TEXT_ROUTING && (FREEINK_DEVICE_METALIO_EINK4 || FREEINK_DEVICE_STICKY || \
+                                    FREEINK_DEVICE_MURPHY_M4 || FREEINK_DEVICE_WAVESHARE_EPAPER_397))
 #endif
 #ifndef FREEINK_SSD1677_TEXT_WHITE_FRAMES
 #define FREEINK_SSD1677_TEXT_WHITE_FRAMES 32

@@ -10,14 +10,13 @@ class CombinedAaTest(unittest.TestCase):
                 with self.subTest(white=white, delay=delay):
                     run_trace(HERE / "test_ssd1677_text_turn.cpp", defines=(
                         "FREEINK_SSD1677_TEXT_ROUTING=1", "FREEINK_DEVICE_METALIO_EINK4=1",
-                        "FREEINK_SSD1677_TEXT_TURN_AA=1", f"FREEINK_SSD1677_TEXT_WHITE_FRAMES={white}",
+                        f"FREEINK_SSD1677_TEXT_WHITE_FRAMES={white}",
                         f"FREEINK_SSD1677_TEXT_BLACK_DELAY={delay}"))
 
         for board in ("STICKY", "MURPHY_M4", "WAVESHARE_EPAPER_397"):
             with self.subTest(board=board):
                 run_trace(HERE / "test_ssd1677_text_turn.cpp", defines=(
-                    "FREEINK_SSD1677_TEXT_ROUTING=1", f"FREEINK_DEVICE_{board}=1",
-                    "FREEINK_SSD1677_TEXT_TURN_AA=1"))
+                    "FREEINK_SSD1677_TEXT_ROUTING=1", f"FREEINK_DEVICE_{board}=1"))
 
     def test_sticky(self):
         run_trace(HERE / "test_sticky_combined_aa.cpp",

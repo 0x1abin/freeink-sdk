@@ -28,13 +28,15 @@ class TextRoutingTest(unittest.TestCase):
                     result = subprocess.run(
                         ["c++", "-std=c++17", "-E", "-dM", "-x", "c++", "-",
                          "-I"+str(include), "-I"+str(stub), "-I"+str(HERE / "pro_stubs"),
+                         "-I"+str(LIB / "src/lut"),
                          f"-DFREEINK_DEVICE_{board}=1", f"-DCONFIG_IDF_TARGET_{target}=1",
                          *([] if enabled is None else [f"-DFREEINK_SSD1677_COMBINED_AA={enabled}"])],
-                        input='#include <BoardConfig.h>\n#if FREEINK_SSD1677_READER_TRANSITIONS\n#define TEST_TRANSITIONS_ENABLED 1\n#else\n#define TEST_TRANSITIONS_ENABLED 0\n#endif\n', text=True, capture_output=True, check=True)
+                        input='#include "Ssd1677CombinedAa.h"\n#if FREEINK_SSD1677_READER_TRANSITIONS\n#define TEST_TRANSITIONS_ENABLED 1\n#else\n#define TEST_TRANSITIONS_ENABLED 0\n#endif\n#if FREEINK_SSD1677_TEXT_TURN_AA\n#define TEST_TEXT_TURN_ENABLED 1\n#else\n#define TEST_TEXT_TURN_ENABLED 0\n#endif\n', text=True, capture_output=True, check=True)
                     self.assertIn(f"#define FREEINK_SSD1677_TEXT_ROUTING {expected}\n", result.stdout)
                     transitions = int(bool(expected) and board in
                                       ("STICKY", "MURPHY_M4", "METALIO_EINK4", "WAVESHARE_EPAPER_397"))
                     self.assertIn(f"#define TEST_TRANSITIONS_ENABLED {transitions}\n", result.stdout)
+                    self.assertIn(f"#define TEST_TEXT_TURN_ENABLED {transitions}\n", result.stdout)
 
     def test_board_matrix(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -62,9 +64,9 @@ class TextRoutingTest(unittest.TestCase):
                       ("METALIO_EINK4", "STICKY", "MURPHY_M4", "WAVESHARE_EPAPER_397")]
             cases += [(device, False, False) for device in ("X4PRO", "X4CLASSIC")]
             cases = [(*case, False) for case in cases]
-            cases += [(board, True, True, True) for board in
+            cases += [(board, True, True, None) for board in
                       ("METALIO_EINK4", "STICKY", "MURPHY_M4", "WAVESHARE_EPAPER_397")]
-            cases += [("METALIO_EINK4", True, True, None)]
+            cases += [(board, False, True, None) for board in ("X4PRO", "X4CLASSIC", "PAPERMONO")]
             for device, transition, combined, edges in cases:
                 with self.subTest(device=device, transition=transition, edges=edges):
                     local = device in ("MURPHY_M4", "WAVESHARE_EPAPER_397", "METALIO_EINK4")
