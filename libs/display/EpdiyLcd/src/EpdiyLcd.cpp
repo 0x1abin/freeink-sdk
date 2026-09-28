@@ -340,10 +340,10 @@ void epdiyLcdDrawGray(const uint8_t* lsb, const uint8_t* msb, EpdiyLcdRefresh mo
   // 邻域权重与微调上限：这两个就是"圆润 vs 毛刺/模糊"的总旋钮。
   // / The two knobs that trade rounding against jaggies and blur.
   constexpr int kCentreWeight = 8;
-  // 微调上限。0 = 纯覆盖率（斜边出毛刺），4 已经偏糊；2 是当前取值。
+  // 微调上限。0 = 纯覆盖率（斜边出毛刺），4 偏糊，2 仍偏糊；1 是当前取值。
   // / Nudge cap. 0 = coverage only (diagonals stair), 4 already read blurry; 2 is
-  // the current value.
-  constexpr int kMaxNudge = 2;
+  // / Nudge cap. 0 = coverage only (diagonals stair), 4 blurred, 2 still soft;
+  constexpr int kMaxNudge = 1;
 
   const int w = static_cast<int>(epd_width());
   const int h = static_cast<int>(epd_height());
