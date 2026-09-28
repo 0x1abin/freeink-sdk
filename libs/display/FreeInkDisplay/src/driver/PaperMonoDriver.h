@@ -130,6 +130,7 @@ class PaperMonoDriver final : public PanelDriver {
   uint16_t makeTriLut(uint8_t out[111], bool bgTopUp = true) const;
   uint16_t makePostCleanLut(uint8_t out[111]) const;
   bool runOtpUpdate(EpdBus& bus, const uint8_t* bwTarget, bool forceAll);
+  bool runMetalioSinglePass(EpdBus& bus, const uint8_t* bwTarget);
   // Encodes the source-to-target transition against the recorded glass state,
   // runs its required activations plus optional endpoint post-clean, and waits
   // them out. Returns true when a waveform actually ran. overlayOnly restricts

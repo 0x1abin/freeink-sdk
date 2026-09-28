@@ -760,8 +760,85 @@ bool PaperMonoDriver::runOtpUpdate(EpdBus& bus, const uint8_t* bwTarget, bool fo
   return true;
 }
 
-bool PaperMonoDriver::runUpdate(EpdBus& bus, const uint8_t* bwTarget, bool useGray, bool corrective,
-                                bool overlayOnly) {
+#if FREEINK_DEVICE_METALIO_EINK4 && FREEINK_METALIO_TEXT_EDGE_AA && FREEINK_SSD1677_TEXT_ROUTING
+bool PaperMonoDriver::runMetalioSinglePass(EpdBus& bus, const uint8_t* bwTarget) {
+  if (!ensureControllerReady(bus)) return false;
+  uint8_t changed = 0;
+  uint8_t hasGray = 0;
+  for (uint32_t i = 0; i < BUFFER_SIZE; ++i) {
+    const uint8_t gray = _grayLsb[i] | _grayMsb[i];
+    const uint8_t nonWhite = static_cast<uint8_t>(gray | ~bwTarget[i]);
+    const uint8_t black = static_cast<uint8_t>(~bwTarget[i] & ~gray);
+    const uint8_t mask = static_cast<uint8_t>((nonWhite ^ _glassNonWhite[i]) | (black ^ _glassBlack[i]));
+    // Entries: idle=0, white=1, gray=2, black=3. Refresh all target white
+    // and black on a changed page to maintain both endpoints across turns.
+    // Static gray remains idle; black never receives white compensation.
+    _sel24[i] = static_cast<uint8_t>(~nonWhite | black);
+    _sel26[i] = static_cast<uint8_t>(black | (mask & gray));
+    changed |= mask;
+    hasGray |= gray;
+  }
+  if (!changed || displayWorkCancelled()) return false;
+  const auto started = millis();
+
+  // Independent experimental trajectories: keep gray/black drive lengths
+  // fixed while measuring white erasure and black optical onset separately.
+  constexpr uint16_t grayWhite = 32;
+  constexpr uint16_t grayEnd = grayWhite + FREEINK_METALIO_TEXT_EDGE_FRAMES;
+  constexpr uint16_t whiteStart = 24;
+  constexpr uint16_t whiteEnd = whiteStart + FREEINK_METALIO_TEXT_WHITE_FRAMES;
+  constexpr uint16_t blackStart = 24 + FREEINK_METALIO_TEXT_BLACK_DELAY;
+  constexpr uint16_t blackEnd = blackStart + FREEINK_METALIO_TEXT_BLACK_FRAMES;
+  uint16_t bounds[] = {0, whiteStart, whiteEnd, grayWhite, grayEnd, blackStart, blackEnd};
+  sortAscending(bounds, 7);
+  WaveLut lut;
+  lut.clear();
+  uint8_t group = 0;
+  uint16_t previous = 0;
+  for (const uint16_t current : bounds) {
+    if (current <= previous) continue;
+    if (previous >= whiteStart && previous < whiteEnd) lut.setVs(1, group, 0, VS_WHITE);
+    if (previous < grayEnd) lut.setVs(2, group, 0, previous < grayWhite ? VS_WHITE : VS_WEAK);
+    if (previous >= blackStart && previous < blackEnd) lut.setVs(3, group, 0, VS_BLACK);
+    lut.setTp(group++, static_cast<uint8_t>(current - previous), 0, 0, 0, 0);
+    previous = current;
+  }
+  lut.finish();
+  bus.cmd(0x21);
+  bus.data(0x00);
+  bus.data(0x00);
+  writePlane(bus, CMD_WRITE_NEW, _sel24);
+  writePlane(bus, CMD_WRITE_OLD, _sel26);
+  loadCustomLut(bus, lut.b);
+  if (!_controllerPowered) {
+    activate(bus, 0xC0);  // Settle rails without driving pixels.
+    if (!checkIdle(bus)) return false;
+    _controllerPowered = true;
+  }
+  // Cancellation is safe up to the sole pixel activation, including when it
+  // arrives during rail settle. Once submitted, finish this complete AA page.
+  if (displayWorkCancelled()) return false;
+  activate(bus, CTRL_DISPLAY_HOLD_WARM);
+  if (!checkIdle(bus)) return false;
+  for (uint32_t i = 0; i < BUFFER_SIZE; ++i) {
+    const uint8_t gray = _grayLsb[i] | _grayMsb[i];
+    _glassNonWhite[i] = static_cast<uint8_t>(gray | ~bwTarget[i]);
+    _glassBlack[i] = static_cast<uint8_t>(~bwTarget[i] & ~gray);
+  }
+  _panelHasGray = hasGray != 0;
+  _displayCommitted = true;
+#if defined(SSD1677_PROBE_DEBUG) && SSD1677_PROBE_DEBUG
+  esp_rom_printf("[SSD1677] Metalio compensated AA: white=%u delay=%u gray=%u black=%u frames=%u elapsed=%lums\n",
+                 FREEINK_METALIO_TEXT_WHITE_FRAMES, FREEINK_METALIO_TEXT_BLACK_DELAY, FREEINK_METALIO_TEXT_EDGE_FRAMES,
+                 FREEINK_METALIO_TEXT_BLACK_FRAMES, unsigned(std::max(whiteEnd, blackEnd)), millis() - started);
+#else
+  (void)started;
+#endif
+  return true;
+}
+#endif
+
+bool PaperMonoDriver::runUpdate(EpdBus& bus, const uint8_t* bwTarget, bool useGray, bool corrective, bool overlayOnly) {
   if (!useGray) {
     const bool otpRan = runOtpUpdate(bus, bwTarget, corrective);
     if (otpRan) _displayCommitted = true;
@@ -927,10 +1004,18 @@ bool PaperMonoDriver::commitPending(EpdBus& bus, bool useGray) {
 #else
   (void)transitionSource;
 #endif
-  const bool ran = runUpdate(bus, _pendingBw, useGray, corrective);
+  bool ran;
+#if FREEINK_DEVICE_METALIO_EINK4 && FREEINK_METALIO_TEXT_EDGE_AA && FREEINK_SSD1677_TEXT_ROUTING
+  if (useGray && !corrective && _lastBwValid && !_ioFailed && !_darkBackground && _pendingMode == RefreshMode::Fast) {
+    ran = runMetalioSinglePass(bus, _pendingBw);
+  } else
+#endif
+  {
+    ran = runUpdate(bus, _pendingBw, useGray, corrective);
+  }
   if (ran) _needsFull = false;
   _pendingCorrective = false;
-  if (_lastBw && !_ioFailed && (ran || !corrective)) {
+  if (_lastBw && !_ioFailed && (ran || (!corrective && !displayWorkCancelled()))) {
     memcpy(_lastBw, _pendingBw, BUFFER_SIZE);
     _lastBwValid = true;
   }
