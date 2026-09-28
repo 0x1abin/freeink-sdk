@@ -337,9 +337,9 @@ void epdiyLcdDrawGray(const uint8_t* lsb, const uint8_t* msb, EpdiyLcdRefresh mo
   constexpr uint8_t kLightGray = 10;  // 2-bit 值 2（浅灰）/ 2-bit value 2 (light)
   constexpr int kInkLevel = 0;        // 墨 = 黑 / ink is black
   constexpr int kPaperLevel = 15;     // 纸 = 白 / paper is white
-  // 邻域权重与微调上限：这两个就是"圆润 vs 毛刺/模糊"的总旋钮。
-  // / The two knobs that trade rounding against jaggies and blur.
-  constexpr int kCentreWeight = 8;
+  // 邻域权重与微调上限：这两个就是"圆润 vs 毛刺/模糊"的总旋钮。  // 权重集中到中心 = 邻域影响更小 = 更锐（24 与旧实现的取值一致）
+  // / The two knobs that trade rounding against jaggies and blur.  // 权重集中到中心 = 邻域影响更小 = 更锐（24 与旧实现的取值一致）
+  constexpr int kCentreWeight = 24;
   // 微调上限。0 = 纯覆盖率（斜边出毛刺），4 偏糊，2 仍偏糊；1 是当前取值。
   // / Nudge cap. 0 = coverage only (diagonals stair), 4 already read blurry; 2 is
   // / Nudge cap. 0 = coverage only (diagonals stair), 4 blurred, 2 still soft;
