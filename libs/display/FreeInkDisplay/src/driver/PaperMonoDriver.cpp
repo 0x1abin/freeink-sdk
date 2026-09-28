@@ -499,43 +499,6 @@ void PaperMonoDriver::loadCustomLut(EpdBus& bus, const uint8_t lut[111]) {
   _lutState = LutState::Custom;
 }
 
-// Endpoint polish. On ordinary pages entry 0 is unchanged white and entry 1 is
-// changed-to-white; both therefore receive the same white schedule. Gray and
-// black stay on entries 2 and 3. Every entry receives the same number of VSH1
-// and VSL frames, so the source impulse remains class-independent. Phase order
-// is the only difference: white alternates to avoid a visible dark hold, gray
-// makes a closed local excursion, and black groups its release before one
-// continuous black settle instead of bleaching the endpoint on every repeat.
-uint16_t PaperMonoDriver::makePostCleanLut(uint8_t out[111]) const {
-  WaveLut lut;
-  lut.clear();
-  if (_tri.postCleanCycles == 0) {
-    lut.finish();
-    memcpy(out, lut.b, 111);
-    return 0;
-  }
-
-  const uint8_t groups = std::min<uint8_t>(_tri.postCleanCycles, 10);
-  const uint16_t totalFrames = static_cast<uint16_t>(4u * groups);
-  for (uint8_t group = 0; group < groups; ++group) {
-    for (uint8_t phase = 0; phase < 4; ++phase) {
-      const uint16_t frame = static_cast<uint16_t>(4u * group + phase);
-      const uint8_t whiteVs = (frame & 1u) == 0 ? VS_BLACK : VS_WHITE;
-      const uint8_t grayVs = (phase == 0 || phase == 3) ? VS_BLACK : VS_WHITE;
-      const uint8_t blackVs = frame < totalFrames / 2 ? VS_WHITE : VS_BLACK;
-      lut.setVs(0, group, phase, whiteVs);
-      lut.setVs(1, group, phase, whiteVs);
-      lut.setVs(2, group, phase, grayVs);
-      lut.setVs(3, group, phase, blackVs);
-    }
-    lut.setTp(group, 1, 1, 1, 1, 0);
-  }
-
-  lut.finish();
-  memcpy(out, lut.b, 111);
-  return totalFrames;
-}
-
 // The one-shot three-level waveform used for every Balanced page. G0 is the
 // activation kick: the driven classes charge toward their anti-target rail
 // (white and gray toward black, black toward white) while unchanged white
@@ -761,12 +724,14 @@ bool PaperMonoDriver::runOtpUpdate(EpdBus& bus, const uint8_t* bwTarget, bool fo
 }
 
 uint16_t PaperMonoDriver::makeTextTurnLut(uint8_t out[111]) const {
-  constexpr uint16_t grayWhite = 32;
-  constexpr uint16_t grayEnd = grayWhite + FREEINK_METALIO_TEXT_EDGE_FRAMES;
-  constexpr uint16_t whiteStart = 24;
-  constexpr uint16_t whiteEnd = whiteStart + FREEINK_METALIO_TEXT_WHITE_FRAMES;
-  constexpr uint16_t blackStart = 24 + FREEINK_METALIO_TEXT_BLACK_DELAY;
-  constexpr uint16_t blackEnd = blackStart + FREEINK_METALIO_TEXT_BLACK_FRAMES;
+  const auto& panel = combinedAa::calibration();
+  const auto& timing = panel.textTurn;
+  const uint16_t grayWhite = timing.grayWhite;
+  const uint16_t grayEnd = grayWhite + panel.gray;
+  const uint16_t whiteStart = timing.whiteStart;
+  const uint16_t whiteEnd = whiteStart + timing.white;
+  const uint16_t blackStart = timing.blackStart;
+  const uint16_t blackEnd = blackStart + panel.black;
   uint16_t bounds[] = {0, whiteStart, whiteEnd, grayWhite, grayEnd, blackStart, blackEnd};
   sortAscending(bounds, 7);
   WaveLut lut;
@@ -795,7 +760,7 @@ bool PaperMonoDriver::runUpdate(EpdBus& bus, const uint8_t* bwTarget, bool useGr
   if (!bwTarget || !allocateBuffers() || !ensureControllerReady(bus)) return false;
 
   bool textTurn = false;
-#if FREEINK_DEVICE_METALIO_EINK4 && FREEINK_METALIO_TEXT_EDGE_AA && FREEINK_SSD1677_TEXT_ROUTING
+#if FREEINK_SSD1677_TEXT_TURN_AA && FREEINK_SSD1677_TEXT_ROUTING
   textTurn = !corrective && !overlayOnly && _lastBwValid && !_darkBackground && _pendingMode == RefreshMode::Fast;
 #endif
   uint8_t changedBits = 0;
@@ -815,7 +780,8 @@ bool PaperMonoDriver::runUpdate(EpdBus& bus, const uint8_t* bwTarget, bool useGr
     } else {
       // Corrective/legacy pages drive all non-white targets. An overlay follows
       // an already displayed B/W base, so only its changed gray pixels may drive.
-      const uint8_t drive = corrective ? 0xFFu : (overlayOnly ? changedMask : static_cast<uint8_t>(changedMask | nonWhite));
+      const uint8_t drive =
+          corrective ? 0xFFu : (overlayOnly ? changedMask : static_cast<uint8_t>(changedMask | nonWhite));
       _sel24[i] = static_cast<uint8_t>(drive & ~(nonWhite ^ black));
       _sel26[i] = static_cast<uint8_t>(drive & nonWhite);
     }
@@ -830,8 +796,6 @@ bool PaperMonoDriver::runUpdate(EpdBus& bus, const uint8_t* bwTarget, bool useGr
   const unsigned long started = millis();
   uint8_t lut[111];
   const uint16_t firstFrames = textTurn ? makeTextTurnLut(lut) : makeTriLut(lut, /*bgTopUp=*/!overlayOnly);
-  uint16_t cleanFrames = 0;
-  uint8_t stages = 1;
   if (textTurn) {
     bus.cmd(0x21);
     bus.data(0x00);
@@ -842,7 +806,7 @@ bool PaperMonoDriver::runUpdate(EpdBus& bus, const uint8_t* bwTarget, bool useGr
   writePlane(bus, CMD_WRITE_OLD, _sel26);
   loadCustomLut(bus, lut);
 #if FREEINK_SSD1677_TEXT_ROUTING
-  if (!_controllerPowered && combinedAa::calibration().powerUpFirst) {
+  if (!_controllerPowered && (textTurn || combinedAa::calibration().powerUpFirst)) {
     activate(bus, 0xC0);  // Settle rails without driving any pixels.
     if (!checkIdle(bus)) return false;
     _controllerPowered = true;
@@ -852,44 +816,26 @@ bool PaperMonoDriver::runUpdate(EpdBus& bus, const uint8_t* bwTarget, bool useGr
   activate(bus, _controllerPowered ? CTRL_DISPLAY_HOLD_WARM : CTRL_CUSTOM_HOLD_COLD);
   if (!checkIdle(bus)) return false;
   _controllerPowered = true;
-  // No boot-clean pass here: re-running the tri LUT is not direction-safe the
-  // way the OTP B/W waveform is. Its activation kick charges driven pixels
-  // toward the anti-target rail and entry 0 hits the whole white background
-  // with the +15 V top-up, so an extra pass reads as a full-screen flash on
-  // every AA page inside the boot budget. Residue cleanup stays on the OTP
-  // path only (runOtpUpdate), which the boot paints go through anyway.
-
-  // Retired in production (postCleanCycles is forced to 0): background deghost
-  // now rides inside the tri activation's kick group, and the right-aligned
-  // classes already end target-directed. Kept for lab experiments only.
-  if (!textTurn && _tri.postCleanCycles > 0) {
-    cleanFrames = makePostCleanLut(lut);
-    loadCustomLut(bus, lut);
-    activate(bus, CTRL_DISPLAY_HOLD_WARM);
-    if (!checkIdle(bus)) return false;
-    ++stages;
-  }
+  // Residue cleaning belongs to the OTP path. Repeating the legacy tri LUT
+  // would reapply its anti-target kick and visibly disturb the completed page.
 
   // Commit the recorded glass state only after every required activation has
   // completed. Advancing it before the controller write made a failed update
   // look successful and poisoned every subsequent transition classification.
   for (uint32_t i = 0; i < BUFFER_SIZE; ++i) {
     const uint8_t bw = bwTarget[i];
-    const uint8_t gray = useGray ? static_cast<uint8_t>(_grayLsb[i] | _grayMsb[i]) : 0u;
+    const uint8_t gray = static_cast<uint8_t>(_grayLsb[i] | _grayMsb[i]);
     _glassNonWhite[i] = static_cast<uint8_t>(gray | ~bw);
     _glassBlack[i] = static_cast<uint8_t>(~bw & ~gray);
   }
   _panelHasGray = hasGray != 0;
 
 #ifdef ENABLE_SERIAL_LOG
-  Serial.printf("[%lu] SSD1677 AA: textTurn=%u stages=%u frames=%u+%u changed=%lu full=%u elapsed=%lums\n",
-                millis(), static_cast<unsigned>(textTurn), static_cast<unsigned>(stages),
-                static_cast<unsigned>(firstFrames), static_cast<unsigned>(cleanFrames),
-                static_cast<unsigned long>(changed), static_cast<unsigned>(corrective), millis() - started);
+  Serial.printf("[%lu] SSD1677 AA: textTurn=%u frames=%u changed=%lu full=%u elapsed=%lums\n", millis(),
+                static_cast<unsigned>(textTurn), static_cast<unsigned>(firstFrames), static_cast<unsigned long>(changed),
+                static_cast<unsigned>(corrective), millis() - started);
 #else
   (void)firstFrames;
-  (void)cleanFrames;
-  (void)stages;
   (void)started;
 #endif
   _displayCommitted = true;
@@ -1272,7 +1218,6 @@ void PaperMonoDriver::setGrayParams(const PaperMonoGrayParams& params) {
   if (_grayParams.lightFrames > 12) _grayParams.lightFrames = 12;
   // Stored presets may still carry a nonzero polish count; the polish is
   // retired (see PaperMonoGrayParams), so it is not forwarded to the waveform.
-  _tri.postCleanCycles = 0;
 
   // lightFrames selects the middle tone: tGray weak-rail frames applied to a
   // saturated-white pixel. The full weak-rail swing is ~60 frames, so the

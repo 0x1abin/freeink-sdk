@@ -62,7 +62,9 @@ class TextRoutingTest(unittest.TestCase):
                       ("METALIO_EINK4", "STICKY", "MURPHY_M4", "WAVESHARE_EPAPER_397")]
             cases += [(device, False, False) for device in ("X4PRO", "X4CLASSIC")]
             cases = [(*case, False) for case in cases]
-            cases += [("METALIO_EINK4", True, True, True)]
+            cases += [(board, True, True, True) for board in
+                      ("METALIO_EINK4", "STICKY", "MURPHY_M4", "WAVESHARE_EPAPER_397")]
+            cases += [("METALIO_EINK4", True, True, None)]
             for device, transition, combined, edges in cases:
                 with self.subTest(device=device, transition=transition, edges=edges):
                     local = device in ("MURPHY_M4", "WAVESHARE_EPAPER_397", "METALIO_EINK4")
@@ -78,8 +80,8 @@ class TextRoutingTest(unittest.TestCase):
                     command += [str(root / f"src/driver/{name}Driver.cpp") for name in drivers]
                     if transition:
                         command += ["-DFREEINK_SSD1677_READER_TRANSITIONS=1"]
-                    if edges:
-                        command += ["-DFREEINK_METALIO_TEXT_EDGE_AA=1"]
+                    if edges is not None:
+                        command += [f"-DFREEINK_SSD1677_TEXT_TURN_AA={int(edges)}"]
                     binary = root / "test"
                     subprocess.run(command + ["-o", str(binary)], check=True)
                     scenarios = ["normal", *map(str, range(1, 9))]

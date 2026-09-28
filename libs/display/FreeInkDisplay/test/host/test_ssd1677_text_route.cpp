@@ -10,6 +10,7 @@
 #include "FreeInkDisplay.h"
 #include "src/driver/PaperMonoDriver.h"
 #undef private
+#include "src/lut/Ssd1677CombinedAa.h"
 
 using namespace freeink;
 using Mode = FreeInkDisplay;
@@ -145,7 +146,7 @@ int main(int argc, char** argv) {
   const auto scan = last(bus, 0x01);
   d.cleanupGrayscaleBuffers(bw.data());
   bus.clear();
-#if FREEINK_DEVICE_METALIO_EINK4 && FREEINK_METALIO_TEXT_EDGE_AA
+#if FREEINK_SSD1677_TEXT_TURN_AA
   {
     const auto allocated = allocationCalls;
     const auto resets = bus.resets;

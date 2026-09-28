@@ -5,43 +5,40 @@
 #include "Ssd1677Luts.h"
 #include "StickyCombinedAa.h"
 
-// Metalio text-only experiment. Production stays on the accepted combined LUT
-// until the single-activation candidate has been optically validated on this panel.
-#ifndef FREEINK_METALIO_TEXT_EDGE_AA
-#define FREEINK_METALIO_TEXT_EDGE_AA 0
+// Metalio's endpoint-preserving text turn is panel-tested. Other combined-AA
+// boards can opt into the same core while retaining their analog calibration.
+#ifndef FREEINK_SSD1677_TEXT_TURN_AA
+#define FREEINK_SSD1677_TEXT_TURN_AA (FREEINK_SSD1677_TEXT_ROUTING && FREEINK_DEVICE_METALIO_EINK4)
 #endif
-#ifndef FREEINK_METALIO_TEXT_EDGE_FRAMES
-#define FREEINK_METALIO_TEXT_EDGE_FRAMES 24
+#ifndef FREEINK_SSD1677_TEXT_WHITE_FRAMES
+#define FREEINK_SSD1677_TEXT_WHITE_FRAMES 32
 #endif
-#ifndef FREEINK_METALIO_TEXT_BLACK_FRAMES
-#define FREEINK_METALIO_TEXT_BLACK_FRAMES 32
+#ifndef FREEINK_SSD1677_TEXT_BLACK_DELAY
+#define FREEINK_SSD1677_TEXT_BLACK_DELAY 0
 #endif
-#ifndef FREEINK_METALIO_TEXT_WHITE_FRAMES
-#define FREEINK_METALIO_TEXT_WHITE_FRAMES 32
-#endif
-#ifndef FREEINK_METALIO_TEXT_BLACK_DELAY
-#define FREEINK_METALIO_TEXT_BLACK_DELAY 0
-#endif
-#if FREEINK_DEVICE_METALIO_EINK4 && FREEINK_METALIO_TEXT_EDGE_AA
-static_assert(FREEINK_METALIO_TEXT_EDGE_FRAMES == 24 && FREEINK_METALIO_TEXT_BLACK_FRAMES == 32,
-              "Keep gray and black drive fixed during white/delay calibration");
-static_assert(FREEINK_METALIO_TEXT_WHITE_FRAMES == 32 || FREEINK_METALIO_TEXT_WHITE_FRAMES == 40 ||
-                  FREEINK_METALIO_TEXT_WHITE_FRAMES == 48,
-              "Metalio white calibration uses 32, 40 or 48 frames");
-static_assert(FREEINK_METALIO_TEXT_BLACK_DELAY == 0 || FREEINK_METALIO_TEXT_BLACK_DELAY == 8 ||
-                  FREEINK_METALIO_TEXT_BLACK_DELAY == 16 || FREEINK_METALIO_TEXT_BLACK_DELAY == 24,
-              "Metalio black start delay uses 0, 8, 16 or 24 frames");
-#endif
+static_assert(FREEINK_SSD1677_TEXT_WHITE_FRAMES == 32 || FREEINK_SSD1677_TEXT_WHITE_FRAMES == 40 ||
+                  FREEINK_SSD1677_TEXT_WHITE_FRAMES == 48,
+              "Text-turn white calibration uses 32, 40 or 48 frames");
+static_assert(FREEINK_SSD1677_TEXT_BLACK_DELAY == 0 || FREEINK_SSD1677_TEXT_BLACK_DELAY == 8 ||
+                  FREEINK_SSD1677_TEXT_BLACK_DELAY == 16 || FREEINK_SSD1677_TEXT_BLACK_DELAY == 24,
+              "Text-turn black delay uses 0, 8, 16 or 24 frames");
 
 namespace freeink::combinedAa {
 // Per-panel calibration in nominal 5 ms frames. Keep independent entries so
 // tuning an unvalidated panel never changes Sticky or Paper Mono.
+struct TextTurnTiming {
+  uint8_t grayWhite = 32;
+  uint8_t whiteStart = 24;
+  uint8_t white = FREEINK_SSD1677_TEXT_WHITE_FRAMES;
+  uint8_t blackStart = 24 + FREEINK_SSD1677_TEXT_BLACK_DELAY;
+};
 struct Calibration {
   uint8_t kick, gray, black, frameRate;
   const uint8_t* voltages;
   uint8_t border, powerOff;
   bool powerUpFirst;
   uint8_t sleepKey = 0x03;
+  TextTurnTiming textTurn{};
 };
 inline const Calibration sticky{stickyCombinedAa::KICK_FRAMES,
                                 stickyCombinedAa::GRAY_FRAMES,

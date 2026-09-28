@@ -4,14 +4,20 @@ from test_ssd1677 import HERE, run_trace
 
 
 class CombinedAaTest(unittest.TestCase):
-    def test_metalio_text_edges(self):
+    def test_text_turn(self):
         for white in (32, 40, 48):
             for delay in (0, 8, 16, 24):
                 with self.subTest(white=white, delay=delay):
-                    run_trace(HERE / "test_metalio_text_edges.cpp", defines=(
+                    run_trace(HERE / "test_ssd1677_text_turn.cpp", defines=(
                         "FREEINK_SSD1677_TEXT_ROUTING=1", "FREEINK_DEVICE_METALIO_EINK4=1",
-                        "FREEINK_METALIO_TEXT_EDGE_AA=1", f"FREEINK_METALIO_TEXT_WHITE_FRAMES={white}",
-                        f"FREEINK_METALIO_TEXT_BLACK_DELAY={delay}"))
+                        "FREEINK_SSD1677_TEXT_TURN_AA=1", f"FREEINK_SSD1677_TEXT_WHITE_FRAMES={white}",
+                        f"FREEINK_SSD1677_TEXT_BLACK_DELAY={delay}"))
+
+        for board in ("STICKY", "MURPHY_M4", "WAVESHARE_EPAPER_397"):
+            with self.subTest(board=board):
+                run_trace(HERE / "test_ssd1677_text_turn.cpp", defines=(
+                    "FREEINK_SSD1677_TEXT_ROUTING=1", f"FREEINK_DEVICE_{board}=1",
+                    "FREEINK_SSD1677_TEXT_TURN_AA=1"))
 
     def test_sticky(self):
         run_trace(HERE / "test_sticky_combined_aa.cpp",

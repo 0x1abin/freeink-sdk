@@ -106,8 +106,8 @@ int main() {
   // Decode the actual uploaded waveform frame by frame, independently of the
   // driver's boundary sorting. Idle and VCOM never drive; independent white
   // and black extensions must not extend gray or shorten endpoint drive.
-  constexpr unsigned whiteEnd = 24 + FREEINK_METALIO_TEXT_WHITE_FRAMES;
-  constexpr unsigned blackStart = 24 + FREEINK_METALIO_TEXT_BLACK_DELAY;
+  constexpr unsigned whiteEnd = 24 + FREEINK_SSD1677_TEXT_WHITE_FRAMES;
+  constexpr unsigned blackStart = 24 + FREEINK_SSD1677_TEXT_BLACK_DELAY;
   constexpr unsigned total = std::max(whiteEnd, blackStart + 32);
   unsigned whiteTicks = 0, grayWhiteTicks = 0, grayWeakTicks = 0, blackTicks = 0;
   unsigned frame = 0;
@@ -141,10 +141,15 @@ int main() {
     }
   }
   assert(frame == total);
-  assert(whiteTicks == FREEINK_METALIO_TEXT_WHITE_FRAMES);
+  assert(whiteTicks == FREEINK_SSD1677_TEXT_WHITE_FRAMES);
   assert(grayWhiteTicks == 32 && grayWeakTicks == 24 && blackTicks == 32);
   for (size_t i = 100; i < 105; ++i) assert(expected[i] == 0x88);
   assert(d.displayCommitted() && d._panelHasGray);
+  const auto& panel = combinedAa::calibration();
+  assert(bus.last(0x03) == std::vector<uint8_t>{panel.voltages[0]});
+  assert(bus.last(0x04) == std::vector<uint8_t>(panel.voltages + 1, panel.voltages + 4));
+  assert(bus.last(0x2C) == std::vector<uint8_t>{panel.voltages[4]});
+  assert(bus.last(0x3C) == std::vector<uint8_t>{panel.border});
   bus.clear();
   page();
   assert(paints(bus).empty());
@@ -216,7 +221,7 @@ int main() {
   // Idle wake retains glass; power-cut sleep, manual clean and unknown history do not.
   bus.clear();
   d.controllerIdle(bus);
-  assert(bus.sequences().back() == 0x83);
+  assert(bus.sequences().back() == combinedAa::calibration().powerOff);
   bus.clear();
   setPixel(bw, gray, 50, Ink::Black);
   setPixel(bw, gray, 51, Ink::Gray);

@@ -6,16 +6,10 @@
 
 namespace freeink {
 
-// Paper Mono panel driver. The controller is an SSD1677; every waveform it
-// runs here is a host-authored 111-byte LUT.
-//
-// Binary UI and reader Fast paints use the panel's internal, temperature-
-// selected, non-flashing OTP waveform. Balanced book paints are one target-
-// coded W/G/B activation. Ordinary pages leave unchanged white background on
-// entry 0, which is not idle: it carries a short white-biased top-up (one +15 V
-// frame, then the white dose) that erases a little residue on every page turn
-// instead of letting ghosts accumulate until the corrective refresh. Changed
-// pixels and every target gray/black pixel run the full driven classes.
+// Native Paper Mono and optional SSD1677 text-only AA share staging and state.
+// Trusted normal-polarity text turns may use an endpoint-preserving LUT:
+// every white/black target drives, changed gray develops, static gray idles.
+// Corrective paints and legacy overlays keep their existing balanced waveform.
 struct PaperMonoGrayParams {
   // Retired endpoint-polish count, kept only so stored presets keep loading.
   // setGrayParams() ignores it: the driven classes are right-aligned and end
@@ -103,7 +97,6 @@ class PaperMonoDriver final : public PanelDriver {
     uint8_t preUp = 16;      // activation kick; also hosts the entry-0 top-up
     uint8_t tGray = 24;      // weak-rail (+5 V) frames that develop the middle tone
     uint8_t tBlack = 32;     // strong-rail (+15 V) frames that develop black
-    uint8_t postCleanCycles = 0;  // retired; nonzero only for lab experiments
   };
 
   PanelDriver* _originalDriver = nullptr;
@@ -128,11 +121,10 @@ class PaperMonoDriver final : public PanelDriver {
   // bgTopUp=false leaves LUT entry 0 completely idle (no background top-up)
   // for overlay passes, where entry 0 also holds undriven black text.
   uint16_t makeTriLut(uint8_t out[111], bool bgTopUp = true) const;
-  uint16_t makePostCleanLut(uint8_t out[111]) const;
   bool runOtpUpdate(EpdBus& bus, const uint8_t* bwTarget, bool forceAll);
   uint16_t makeTextTurnLut(uint8_t out[111]) const;
   // Encodes the source-to-target transition against the recorded glass state,
-  // runs its required activations plus optional endpoint post-clean, and waits
+  // runs its required activation, and waits
   // them out. Returns true when a waveform actually ran. overlayOnly restricts
   // the drive set to changed pixels (the AA grays) for the follow-up pass after
   // a separately displayed B/W base — see displayGray().
