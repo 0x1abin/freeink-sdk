@@ -307,22 +307,26 @@ void epdiyLcdDrawGray(const uint8_t* lsb, const uint8_t* msb, EpdiyLcdRefresh mo
   if (!g_started || g_fb4 == nullptr || g_cfg == nullptr) return;
   if (g_base == nullptr || lsb == nullptr || msb == nullptr) return;
 
-  // 两件事各司其职，不要再拿一个替代另一个：
+  // 只有一件事：覆盖率决定"这一像素属于哪一档"。底图给黑白，两个选择平面给两档中间
+  // 灰——这是宿主真正的 2-bit 抗锯齿数据，并口 16 级屏直接吃下去即可。
   //
-  //   1) 覆盖率给"这一像素属于哪一档"——底图给黑白，两个选择平面给两档中间灰。
-  //      这是宿主真正的 2-bit 抗锯齿数据，并口 16 级屏直接吃下去即可。
-  //   2) 邻域只做**有界微调**。4 档表达不了一条斜边，所以纯覆盖率渲染必然出锯齿；
-  //      而上一版让邻域**替代**覆盖率，又整体糊掉。把邻域限制在 ±kMaxNudge 级之内，
-  //      斜边就得到 4 档之间的过渡（圆润），笔画却不会被抬亮（不糊）。
+  // 邻域微调已彻底移除，不要再加回来。原厂固件不做空间平滑（它把 1/16 真实覆盖率直接
+  // 写进 framebuffer），而本屏 300 PPI 下覆盖率本身就够锐。2026-09 那版做过中心加权
+  // 3×3 微调，为避免糊掉把幅度钳到 0，等于每页白白遍历 9×41.5 万像素却一个像素都不改
+  // ——实测占掉每次灰阶提交约 150ms。要再引入邻域，请先拿出真机锐度/残影对比，并接受
+  // 这个代价。
   //
-  // / Two jobs, and neither may replace the other. Coverage decides which step a pixel
-  // belongs to: the base page gives black/white and the two selector planes give the
-  // two mid tones -- the host's real 2-bit anti-aliasing data, which a 16-level
-  // parallel panel takes directly. The neighbourhood only applies a BOUNDED nudge:
-  // four steps cannot describe a diagonal, so coverage alone always shows jaggies,
-  // while an earlier revision let the neighbourhood REPLACE coverage and blurred
-  // everything. Capping it at +/-kMaxNudge levels gives diagonals their in-between
-  // tones without lightening strokes.
+  // / One job only: coverage decides which step a pixel belongs to. The base page gives
+  // black/white and the two selector planes give the two mid tones -- the host's real
+  // 2-bit anti-aliasing data, which a 16-level parallel panel takes directly.
+  //
+  // The neighbourhood nudge is gone for good; do not reintroduce it. The reference
+  // firmware does no spatial smoothing (it writes the 1/16 true coverage straight into
+  // the framebuffer), and at 300 PPI coverage alone is sharp enough. The 2026-09
+  // centre-weighted 3x3 version capped its own nudge at 0 to avoid blurring, so it
+  // walked 9 x 415k pixels per page and changed none of them -- measured at ~150 ms of
+  // every grey commit. Reintroducing it needs on-glass sharpness/ghosting evidence and
+  // has to justify that cost.
   //
   // 极性：本文件不做极性推理，沿用 kBlackIsOne 的实测结论——这台玻璃 level 0 是白、
   // 15 是黑（见 EpdiyLcdDriver.cpp 顶部记录）。facade 的约定是"位置一 = 白"，所以
@@ -352,13 +356,6 @@ void epdiyLcdDrawGray(const uint8_t* lsb, const uint8_t* msb, EpdiyLcdRefresh mo
   constexpr uint8_t kLightGray = 8;  // 2-bit 值 2（浅灰）/ 2-bit value 2 (light)
   constexpr int kInkLevel = 0;        // 墨 = 黑 / ink is black
   constexpr int kPaperLevel = 15;     // 纸 = 白 / paper is white
-  // 邻域权重与微调上限：这两个就是"圆润 vs 毛刺/模糊"的总旋钮。  // 权重集中到中心 = 邻域影响更小 = 更锐（24 与旧实现的取值一致）
-  // / The two knobs that trade rounding against jaggies and blur.  // 权重集中到中心 = 邻域影响更小 = 更锐（24 与旧实现的取值一致）
-  constexpr int kCentreWeight = 24;
-  // 微调上限 = 0：关掉邻域扩散。原厂固件没有空间平滑（它把 1/16 真实覆盖率
-  // / Nudge cap = 0: the neighbourhood is off. The reference firmware does no
-  // / Nudge cap = 0: the neighbourhood is off. The reference firmware does no
-  constexpr int kMaxNudge = 0;
 
   const int w = static_cast<int>(epd_width());
   const int h = static_cast<int>(epd_height());
@@ -384,30 +381,6 @@ void epdiyLcdDrawGray(const uint8_t* lsb, const uint8_t* msb, EpdiyLcdRefresh mo
       } else {
         level = baseInk ? kInkLevel : kPaperLevel;
       }
-
-      // --- 2) 邻域的有界微调 -----------------------------------------------
-      int ink = 0, wsum = 0;
-      for (int dy = -1; dy <= 1; ++dy) {
-        const int yy = y + dy;
-        if (yy < 0 || yy >= h) continue;
-        const uint8_t* brow = g_base + static_cast<size_t>(yy) * stride;
-        for (int dx = -1; dx <= 1; ++dx) {
-          const int xx = x + dx;
-          if (xx < 0 || xx >= w) continue;
-          const int wgt = (dx == 0 && dy == 0) ? kCentreWeight : 1;
-          if ((brow[xx >> 3] & (0x80u >> (xx & 7))) == 0) ink += wgt;  // 位清零 = 墨
-          wsum += wgt;
-        }
-      }
-      // 邻域单独会给出的档位，再把这个偏离夹在 ±kMaxNudge 之内。
-      // / The level the neighbourhood alone would pick, with its deviation clamped.
-      const int nbLevel = (ink * kInkLevel + (wsum - ink) * kPaperLevel + wsum / 2) / wsum;
-      int delta = nbLevel - level;
-      if (delta > kMaxNudge) delta = kMaxNudge;
-      if (delta < -kMaxNudge) delta = -kMaxNudge;
-      level += delta;
-      if (level < 0) level = 0;
-      if (level > 15) level = 15;
 
       // epdiy 每字节两个像素：偶数列低半字节、奇数列高半字节。
       // / epdiy packs two pixels per byte: even column low nibble, odd high.

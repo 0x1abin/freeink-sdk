@@ -15,11 +15,6 @@
 
 #include <esp_heap_caps.h>
 
-#if FREEINK_DEVICE_READPICO
-// TEMP diagnostic only: esp_rom_printf for the grey-commit trace.
-#include <esp_rom_sys.h>
-#endif
-
 #if FREEINK_DRIVER_EPDIY_LCD
 
 #ifndef FREEINK_EPDIY_LCD_CONFIG
@@ -153,22 +148,6 @@ void EpdiyLcdDriver::displayGray(EpdBus& bus, const uint8_t* fb, bool turnOff, c
   (void)lut;
   (void)factoryMode;
   if (!_ready || _lsb == nullptr || _msb == nullptr) return;
-#if FREEINK_DEVICE_READPICO
-  // TEMP diagnostic: how much real grey actually reached the driver. All-zero
-  // planes mean the commit ran but the host contributed no mid tones, which
-  // renders as a page with black and white only. Counts set bytes (fast) rather
-  // than bits -- non-zero is what matters.
-  {
-    const size_t n = geometry().bufferSize;
-    unsigned lsbNonZero = 0, msbNonZero = 0;
-    for (size_t i = 0; i < n; ++i) {
-      if (_lsb[i]) ++lsbNonZero;
-      if (_msb[i]) ++msbNonZero;
-    }
-    esp_rom_printf("[GRAY] commit ran: lsb bytes set=%u/%u msb=%u/%u\n", lsbNonZero, (unsigned)n, msbNonZero,
-                   (unsigned)n);
-  }
-#endif
 
   // `fb` 故意不用：抗锯齿提交时它装的是最后一个选择平面（与页面互补），推上去就是
   // 整屏负片。底图由 EpdiyLcd 在 display() 时留存。
@@ -195,9 +174,6 @@ void EpdiyLcdDriver::displayGray(EpdBus& bus, const uint8_t* fb, bool turnOff, c
   // anti-aliasing away for a little speed.
   const EpdiyLcdRefresh grayMode =
       _lastBaseMode == EpdiyLcdRefresh::Fast ? EpdiyLcdRefresh::Half : _lastBaseMode;
-#if FREEINK_DEVICE_READPICO
-  esp_rom_printf("[GRAY] base=%d -> gray=%d\n", static_cast<int>(_lastBaseMode), static_cast<int>(grayMode));
-#endif
   epdiyLcdDrawGray(_lsb, _msb, grayMode, turnOff);
 }
 
