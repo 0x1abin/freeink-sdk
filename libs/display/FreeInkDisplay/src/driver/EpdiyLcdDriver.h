@@ -1,3 +1,8 @@
+/*
+ * SPDX-FileCopyrightText: 2026 mindreset
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 #pragma once
 
 // 中文：走 epdiy LCD 输出路径的原始并口 EPD 驱动。与 LgfxEpdDriver 同一类面板

@@ -1,3 +1,8 @@
+/*
+ * SPDX-FileCopyrightText: 2026 mindreset
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 #include "E0470Waveforms.h"
 
 #if defined(FREEINK_DEVICE_READPICO) && FREEINK_DEVICE_READPICO

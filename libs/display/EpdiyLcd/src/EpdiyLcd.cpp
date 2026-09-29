@@ -1,3 +1,8 @@
+/*
+ * SPDX-FileCopyrightText: 2026 mindreset
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 // 中文：epdiy LCD 输出路径的板级补齐与推帧实现。epdiy 本体在 src/epdiy/ 下原样
 // 编译（LGPL-3.0-or-later）；这里只做三件事：把 EpdBoardDefinition 接到板子的
 // 电源钩子上、把 1bpp 帧缓冲展开成 epdiy 的 4bpp、按档位调 epd_hl_update_screen。

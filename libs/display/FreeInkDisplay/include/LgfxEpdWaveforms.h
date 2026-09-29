@@ -1,3 +1,8 @@
+/*
+ * SPDX-FileCopyrightText: 2026 mindreset
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 #pragma once
 
 // Public access path for the E0470A01 waveform tables (Read Pico, LgfxEpd path).

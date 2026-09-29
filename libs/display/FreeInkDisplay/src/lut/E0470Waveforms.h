@@ -1,3 +1,8 @@
+/*
+ * SPDX-FileCopyrightText: 2026 mindreset
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 #pragma once
 
 // E0470A01 (684 x 1216, 40-pin) waveform data for the raw-parallel LgfxEpd path.

@@ -1,3 +1,8 @@
+/*
+ * SPDX-FileCopyrightText: 2026 mindreset
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 #pragma once
 
 // 中文：epdiy LCD 输出路径的 SDK 侧封装。epdiy 本体（LGPL-3.0-or-later，

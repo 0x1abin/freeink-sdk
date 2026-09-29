@@ -1,3 +1,8 @@
+/*
+ * SPDX-FileCopyrightText: 2026 mindreset
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 // 中文：epdiy LCD 路径的 PanelDriver 适配。所有面板时序、LUT/波形与逐行供数都在
 // EpdiyLcd 库里（epdiy 本体原样编译）；这里只把 SDK 的 1bpp 帧缓冲与刷新档位翻译
 // 成它的调用。

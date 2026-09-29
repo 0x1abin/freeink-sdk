@@ -1,3 +1,8 @@
+/*
+ * SPDX-FileCopyrightText: 2026 mindreset
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 #pragma once
 
 // FreeInk board support for Read Pico (小纸 Pico, RDP-G01-W): the FCA9555 expander,

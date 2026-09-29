@@ -1,3 +1,8 @@
+/*
+ * SPDX-FileCopyrightText: 2026 mindreset
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
 #pragma once
 
 // Read Pico (小纸 Pico, RDP-G01-W) pin map — the parallel-EPD bus, the FCA9555

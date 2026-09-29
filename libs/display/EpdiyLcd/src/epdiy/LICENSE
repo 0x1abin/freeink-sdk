@@ -1,8 +1,8 @@
 epdiy — parallel e-paper driver
 Upstream: https://github.com/vroland/epdiy
-License: LGPL-3.0-or-later (see idf_component.yml)
+License: LGPL-3.0-or-later (see COPYING.LESSER (this directory))
 
-本目录是 epdiy 的 fork，按 upstream 的 v2.0.0（组件版本号见 idf_component.yml）
+本目录是 epdiy 的 fork，按 upstream 的 v2.0.0（组件版本号见 COPYING.LESSER (this directory)）
 裁剪而来，只保留 ESP32-S3 的 LCD 外设输出路径与本板需要的显示定义，本地改动包括：
 
 - 删除 ESP32 的 I2S 输出路径（src/output_i2s/）、社区波形表与示例图片
