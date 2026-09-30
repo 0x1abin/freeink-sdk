@@ -4,12 +4,12 @@
  */
 
 // 中文：epdiy LCD 路径的 PanelDriver 适配。所有面板时序、LUT/波形与逐行供数都在
-// EpdiyLcd 库里（epdiy 本体原样编译）；这里只把 SDK 的 1bpp 帧缓冲与刷新档位翻译
+// EpdiyLcd 库里；这里只把 SDK 的 1bpp 帧缓冲与刷新档位翻译
 // 成它的调用。
 //
 // English: PanelDriver adapter for the epdiy LCD path. All panel timing, LUTs and
-// line feeding live in the EpdiyLcd library (where epdiy itself is compiled
-// verbatim); this file only translates the SDK's 1 bpp framebuffer and refresh
+// line feeding live in the EpdiyLcd library; this file translates the SDK's
+// 1 bpp framebuffer and refresh
 // profiles into its calls.
 
 #include "EpdiyLcdDriver.h"
@@ -67,9 +67,8 @@ PanelGeometry EpdiyLcdDriver::geometry() const {
 GrayscaleCapabilities EpdiyLcdDriver::grayscaleCapabilities(GrayscaleMode mode) const {
   (void)mode;
   // OverlayMasks: plane background 0 = black/white (taken from the B/W base the
-  // host pushes first), LSB set = dark, MSB set = light. base is Separate because
-  // display() pushes the B/W frame before the grey commit overlays it; stripUploads
-  // stays false so the host uses the whole-plane LSB/MSB path this driver implements.
+  // host supplies first), LSB set = dark, MSB set = light. The host supplies
+  // whole LSB/MSB planes; strip uploads are not implemented.
   // Combined: this driver defers the base so the grey commit presents the whole page
   // once. See displayGrayscaleBaseWithContext() below.
   return {GrayscaleEncoding::OverlayMasks, GrayscaleBase::Combined, false, false, false};

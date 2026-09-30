@@ -98,26 +98,12 @@ void syI2cEndIfWoke(bool woke) {
 }  // namespace
 
 // ===========================================================================
-// freeink::LgfxEpdPowerHooks bodies (declared in BoardReadPico.h)
+// freeink::EpdiyLcdPowerHooks bodies (declared in BoardReadPico.h)
 // ===========================================================================
 
 bool epdPrepare() {
-  // Runs as the FIRST thing inside FreeInkBusEPD::init(), i.e. immediately before
-  // lgfx::Bus_EPD::init() builds the i80 bus. Bus_EPD::init() sets the pin modes
-  // for its own lines and (since IDF v5.4) clears the boot-time open-drain state
-  // on the data pins; what it does NOT do is give them a defined level, and the
-  // output register's power-on value is whatever the pad held. So park every line
-  // we own at a safe idle level here.
-  //
-  // NOTE ON XSTL: the reference firmware's board_poweron() first routes EPD_XSTL
-  // to the LCD's DE signal (esp_rom_gpio_connect_out_signal(EPD_XSTL,
-  // LCD_H_ENABLE_IDX, ...)). That is NOT reproducible on the Lgfx path: Bus_EPD
-  // drives pin_sph as the i80 CS line instead (Bus_EPD.cpp `io_cs_gpio_num =
-  // (gpio_num_t)_config.pin_sph`), and re-routing the pad to DE would fight the
-  // peripheral's CS function on the same GPIO. This divergence is read-pico.md
-  // §2.4 item 3 / blocker B4 and it is a hardware A/B item, not something to
-  // paper over here. XSTL is therefore left to the i80 peripheral.
-
+  // Park owned pins before LCD_CAM takes control. The epdiy adapter then routes
+  // XSTL to DE and XCL to PCLK; board rail timing stays in these power hooks.
   bool ok = true;
 
   // Plain-GPIO timing lines. SPV idles LOW (read_pico_board.c drives it from the
@@ -131,8 +117,7 @@ bool epdPrepare() {
   digitalWrite(READPICO_EP_XLE, LOW);
   pinMode(READPICO_EP_XCL, OUTPUT);
   digitalWrite(READPICO_EP_XCL, LOW);
-  // XSTL is handed to the i80 CS; leave it as a plain output for now so it has a
-  // defined level until esp_lcd_new_i80_bus takes the pad over.
+  // Park XSTL LOW until the LCD adapter connects the DE signal.
   pinMode(READPICO_EP_XSTL, OUTPUT);
   digitalWrite(READPICO_EP_XSTL, LOW);
 
@@ -162,8 +147,7 @@ bool epdPrepare() {
 }
 
 bool epdPowerOn() {
-  // Replaces the stock Bus_EPD::powerControl() sequence entirely (see
-  // LgfxEpdDriver.cpp FreeInkBusEPD::powerControl), so this owns every rail line.
+  // These hooks own every rail line for the epdiy LCD adapter.
   // Steps 1-4 are read-pico.md §1.4's verified board_poweron() order.
   if (g_railsOn) return true;
 
