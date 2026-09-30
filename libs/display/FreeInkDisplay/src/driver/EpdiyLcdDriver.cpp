@@ -15,10 +15,9 @@
 #include "EpdiyLcdDriver.h"
 
 #include <BoardConfig.h>
+#include <esp_heap_caps.h>
 
 #include <cstring>
-
-#include <esp_heap_caps.h>
 
 #if FREEINK_DRIVER_EPDIY_LCD
 
@@ -38,29 +37,21 @@ const EpdiyLcdConfig& FREEINK_EPDIY_LCD_CONFIG();
 
 namespace {
 
-// 帧缓冲极性。facade 的约定是「置位 = 白」（FreeInkDisplay.cpp:263-264：1bpp、
-// MSB 在前、1 = 白），这里却告诉 EpdiyLcd「置位 = 黑」，也就是展开表取 index 0，
-// 于是 facade 的白被翻成 epdiy 的 level 0。**这块玻璃上 level 0 呈现为白**，两处
-// 相反的电平约定正好抵消，画面才是对的。
-//
-// 别把这个常量当成"可以按文档改"的东西：它只是抵消项，不是 epdiy 文档意义上的
-// 极性。改动记录——本轮曾在"旧画面残留"之后把它翻成 false，结果整屏反色；退回
-// true 后恢复。那次"残留"会让人误判明暗，所以判断极性一定要在一次干净的全屏刷新
-// 之后看（epdiyLcdBegin 里的开机全局刷新提供了这个基准）。
-//
-// / Framebuffer polarity. The facade's contract is "a set bit is white"
-// (FreeInkDisplay.cpp:263-264), yet this tells EpdiyLcd "a set bit is black", i.e.
-// expansion-table index 0, so a facade white becomes epdiy level 0. On THIS glass
-// level 0 renders white, so the two opposite conventions cancel and the picture is
-// right.
-//
-// Do not treat this constant as a documentation question — it is a cancellation
-// term, not a polarity in epdiy's sense. Change log: it was briefly flipped to
-// false after an "old image residue" report and the screen came out fully
-// inverted; reverting to true restored it. Residue makes brightness judgments
-// unreliable, so always judge polarity after a clean full-screen refresh (the
-// boot-time global refresh in epdiyLcdBegin provides that baseline).
+// Preserve the established expansion convention: a set facade bit maps to
+// panel white (15). This wrapper's historical parameter name is blackIsOne.
 constexpr bool kBlackIsOne = true;
+
+EpdiyLcdRefresh refreshFor(RefreshMode mode) {
+  switch (mode) {
+    case RefreshMode::Full:
+      return EpdiyLcdRefresh::Full;
+    case RefreshMode::Half:
+      return EpdiyLcdRefresh::Half;
+    case RefreshMode::Fast:
+      return EpdiyLcdRefresh::Fast;
+  }
+  return EpdiyLcdRefresh::Fast;
+}
 
 }  // namespace
 
@@ -98,6 +89,13 @@ void EpdiyLcdDriver::begin(EpdBus& bus) {
   if (_lsb == nullptr) _lsb = static_cast<uint8_t*>(heap_caps_malloc(g.bufferSize, MALLOC_CAP_SPIRAM));
   if (_msb == nullptr) _msb = static_cast<uint8_t*>(heap_caps_malloc(g.bufferSize, MALLOC_CAP_SPIRAM));
   if (_lsb == nullptr || _msb == nullptr) {
+    Serial.printf("[EpdiyLcd] grayscale plane allocation failed (%u bytes each)\n",
+                  static_cast<unsigned>(g.bufferSize));
+    heap_caps_free(_lsb);
+    heap_caps_free(_msb);
+    _lsb = nullptr;
+    _msb = nullptr;
+    epdiyLcdEnd();
     _ready = false;
     return;
   }
@@ -108,6 +106,10 @@ void EpdiyLcdDriver::begin(EpdBus& bus) {
 void EpdiyLcdDriver::deepSleep(EpdBus& bus) {
   (void)bus;
   epdiyLcdDeepSleep();
+  heap_caps_free(_lsb);
+  heap_caps_free(_msb);
+  _lsb = nullptr;
+  _msb = nullptr;
   _ready = false;
 }
 
@@ -116,23 +118,9 @@ void EpdiyLcdDriver::display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev
   (void)prev;  // epdiy's highlevel keeps its own previous frame / epdiy 自己记上一帧
   if (!_ready) return;
 
-  EpdiyLcdRefresh refresh;
-  switch (mode) {
-    case RefreshMode::Full:
-      refresh = EpdiyLcdRefresh::Full;  // GC16
-      break;
-    case RefreshMode::Half:
-      refresh = EpdiyLcdRefresh::Half;  // GL16
-      break;
-    case RefreshMode::Fast:
-    default:
-      refresh = EpdiyLcdRefresh::Fast;  // DU
-      break;
-  }
-
   // 帧缓冲极性见文件顶部的 kBlackIsOne。/ Framebuffer polarity: see kBlackIsOne above.
-  _lastBaseMode = refresh;
-  epdiyLcdDraw(fb, refresh, turnOff);
+  _lastBaseMode = refreshFor(mode);
+  epdiyLcdDraw(fb, _lastBaseMode, turnOff);
 }
 
 void EpdiyLcdDriver::copyGrayscaleLsb(EpdBus& bus, const uint8_t* lsb) {
@@ -161,34 +149,18 @@ void EpdiyLcdDriver::displayGray(EpdBus& bus, const uint8_t* fb, bool turnOff, c
   // EpdiyLcd kept the base image during display().
   (void)fb;
 
-  // 灰度提交必须用能出灰阶的波形。MODE_DU（Fast）是快速差分模式，只有黑白 —— 复用它
-  // 等于把整页的中间灰整批丢掉，屏幕上只剩纯黑和纯白。实测症状正是「大部分页面只剩
-  // 纯黑，偶尔几页正常」：那几页的底图恰好走了 Half/Full（GL16），其余走 FAST_REFRESH。
-  //
-  // 底图是 DU 时这里升到 Half。代价是这一次提交会按 GL16 把整屏重新驱动一遍（略有
-  // 闪动），但宿主既然已经要求了灰度提交，GL16 才是正确的档位；沿用 DU 换来的那点
-  // 速度，代价是抗锯齿彻底失效。
-  //
-  // / A grey commit must use a grey-capable waveform. MODE_DU (Fast) is a fast
-  // differential mode with black and white only, so reusing it discards every mid tone
-  // on the page and leaves pure black on white. That is exactly the reported pattern
-  // ("mostly pure black, the odd page fine"): those pages' base happened to go through
-  // Half/Full (GL16) while the rest used FAST_REFRESH. When the base was DU this steps
-  // up to Half; the commit then re-drives the panel through GL16 (a slight flash), but
-  // GL16 is the correct profile once the host has asked for grey. Keeping DU trades
-  // anti-aliasing away for a little speed.
-  const EpdiyLcdRefresh grayMode =
-      _lastBaseMode == EpdiyLcdRefresh::Fast ? EpdiyLcdRefresh::Half : _lastBaseMode;
+  // DU cannot present mid tones. Promote Fast to GL16; retain explicit GC16.
+  const EpdiyLcdRefresh grayMode = _lastBaseMode == EpdiyLcdRefresh::Fast ? EpdiyLcdRefresh::Half : _lastBaseMode;
   epdiyLcdDrawGray(_lsb, _msb, grayMode, turnOff);
 }
 
-void EpdiyLcdDriver::displayGrayscaleBaseWithContext(EpdBus& bus, const uint8_t* fb, RefreshMode fallback,
-                                                     bool turnOff, RefreshContext context) {
+void EpdiyLcdDriver::displayGrayscaleBaseWithContext(EpdBus& bus, const uint8_t* fb, RefreshMode fallback, bool turnOff,
+                                                     RefreshContext context) {
   (void)bus;
-  (void)fallback;
   (void)turnOff;
   (void)context;
   if (!_ready) return;
+  _lastBaseMode = refreshFor(fallback);
   // 底图只暂存。宿主接下来会写 LSB/MSB 平面并调 displayGray()，由它合成整页后推一次。
   // / Defer: the host writes the LSB/MSB planes next and calls displayGray(), which
   // composes the whole page and presents it once.

@@ -5,20 +5,11 @@
 
 #pragma once
 
-// 中文：epdiy LCD 输出路径的 SDK 侧封装。epdiy 本体（LGPL-3.0-or-later，
-// src/epdiy/）在这里原样编译，不做改写；本文件只提供它缺的三块板级输入——
-// EpdBoardDefinition 回调、总线/扫描时序、波形表——并把帧缓冲喂进去。
-//
-// English: SDK-side wrapper around epdiy's LCD output path. epdiy itself
-// (LGPL-3.0-or-later, src/epdiy/) is compiled verbatim; this file only supplies
-// the three board inputs epdiy deliberately leaves out — the EpdBoardDefinition
-// callbacks, the bus/scan timing, and the waveform — and feeds frames in.
-//
-// 冻结 / Frozen：
-//   - 本库只在需要它的时候被链接（platformio.ini 的 [readpico_hardware]），
-//     不得成为其它 target 的依赖。/ Linked only where asked for.
-//   - 绝不下发 VCOM 写。set_vcom 回调是空实现，面板 VCOM 只由 PMU 决定。
-//     / Never writes VCOM. The set_vcom callback is a no-op.
+// Board glue for the vendor epdiy LCD fork (LGPL-3.0-or-later).
+// Local highlevel changes retain the baseline on draw failure, check allocations,
+// and release owned buffers; see test/host/test_transactions.py.
+// Linked only on raw parallel targets. Panel VCOM remains the factory PMU value;
+// the epdiy set_vcom callback never writes it.
 
 #include <Arduino.h>
 
@@ -27,7 +18,7 @@ namespace freeink {
 /// 板级电源钩子。与 LgfxEpdPowerHooks 同形，但定义在这里，避免本库反向依赖
 /// FreeInkDisplay（那会成环）。任一可为 nullptr。
 /// / Board power hooks. Same shape as LgfxEpdPowerHooks but defined here so this
-/// library does not depend back on FreeInkDisplay. Any hook may be null.
+/// library does not depend back on FreeInkDisplay. powerOn must report successful rail bring-up.
 struct EpdiyLcdPowerHooks {
   bool (*prepare)();   ///< 上电前：引脚归安全电平，轨全部关。/ Park pins, rails down.
   bool (*powerOn)();   ///< VCOM 校验通过后才升轨。/ Raise rails after the VCOM check.
@@ -91,7 +82,7 @@ void epdiyLcdEnd();
 /// epdiyLcdBegin 的 `blackIsOne` 给定。
 /// / Push one frame. `fb` is 1 bpp MSB-first, width/8 bytes per row, height rows;
 /// the bit convention is the one handed to epdiyLcdBegin.
-void epdiyLcdDraw(const uint8_t* fb, EpdiyLcdRefresh mode, bool turnOff);
+bool epdiyLcdDraw(const uint8_t* fb, EpdiyLcdRefresh mode, bool turnOff);
 
 /// 只把这一页留作底图，不推屏。给「底图与灰阶合并成一次波形」的宿主用：宿主随后调用
 /// epdiyLcdDrawGray()，由它用这张底图合成整页并只推一次。
@@ -113,7 +104,7 @@ void epdiyLcdStashBase(const uint8_t* fb);
 /// LAST SELECTOR PLANE, not the page (plane background 0, gray marks 1, i.e. the
 /// complement of the page), so pushing it yields a negative. LgfxEpdDriver.cpp:187-201
 /// documents the same trap; this keeps a base image for the same reason.
-void epdiyLcdDrawGray(const uint8_t* lsb, const uint8_t* msb, EpdiyLcdRefresh mode, bool turnOff);
+bool epdiyLcdDrawGray(const uint8_t* lsb, const uint8_t* msb, EpdiyLcdRefresh mode, bool turnOff);
 
 /// 进入低功耗：掉轨并释放 LCD_CAM/GDMA/RMT。
 /// / Enter low power: drop the rails and release LCD_CAM/GDMA/RMT.

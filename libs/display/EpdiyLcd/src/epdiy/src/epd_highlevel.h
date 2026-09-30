@@ -97,6 +97,9 @@ typedef struct {
  */
 EpdiyHighlevelState epd_hl_init(const EpdWaveform* waveform);
 
+/** Release all highlevel buffers, including a partially initialized state. */
+void epd_hl_deinit(EpdiyHighlevelState* state);
+
 /// Get a reference to the front framebuffer.
 /// Use this to draw on the framebuffer before updating the screen with `epd_hl_update_screen()`.
 uint8_t* epd_hl_get_framebuffer(EpdiyHighlevelState* state);

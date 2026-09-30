@@ -1,5 +1,7 @@
 /**
  * High-level API implementation for epdiy.
+ * FreeInk local changes (2026-09-30): checked allocation/deinit and
+ * success-only baseline copies.
  */
 
 #include <assert.h>
@@ -39,18 +41,18 @@ EpdiyHighlevelState epd_hl_init(const EpdWaveform* waveform) {
         "EPDiy", "Please enable PSRAM for the ESP32 (menuconfig→ Component config→ ESP32-specific)"
     );
 #endif
-    EpdiyHighlevelState state;
+    EpdiyHighlevelState state = {0};
     state.back_fb = heap_caps_aligned_alloc(16, fb_size, MALLOC_CAP_SPIRAM);
-    assert(state.back_fb != NULL);
     state.front_fb = heap_caps_aligned_alloc(16, fb_size, MALLOC_CAP_SPIRAM);
-    assert(state.front_fb != NULL);
     state.difference_fb = heap_caps_aligned_alloc(16, 2 * fb_size, MALLOC_CAP_SPIRAM);
-    assert(state.difference_fb != NULL);
     state.dirty_lines = malloc(epd_height() * sizeof(bool));
-    assert(state.dirty_lines != NULL);
     state.dirty_columns
         = heap_caps_aligned_alloc(16, epd_width() / 2, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
-    assert(state.dirty_columns != NULL);
+    if (!state.back_fb || !state.front_fb || !state.difference_fb || !state.dirty_lines || !state.dirty_columns) {
+        ESP_LOGE("EPDiy", "Highlevel framebuffer allocation failed");
+        epd_hl_deinit(&state);
+        return state;
+    }
     state.waveform = waveform;
 
     memset(state.front_fb, 0xFF, fb_size);
@@ -58,6 +60,16 @@ EpdiyHighlevelState epd_hl_init(const EpdWaveform* waveform) {
 
     already_initialized = true;
     return state;
+}
+
+void epd_hl_deinit(EpdiyHighlevelState* state) {
+    heap_caps_free(state->back_fb);
+    heap_caps_free(state->front_fb);
+    heap_caps_free(state->difference_fb);
+    free(state->dirty_lines);
+    heap_caps_free(state->dirty_columns);
+    memset(state, 0, sizeof(*state));
+    already_initialized = false;
 }
 
 uint8_t* epd_hl_get_framebuffer(EpdiyHighlevelState* state) {
@@ -124,6 +136,7 @@ enum EpdDrawError epd_hl_update_screen_full(
 
     uint32_t t2 = esp_timer_get_time() / 1000;
 
+    if (err != EPD_DRAW_SUCCESS) return err;
     memcpy(state->back_fb, state->front_fb, (size_t)col_bytes * fb_height);
 
     uint32_t t3 = esp_timer_get_time() / 1000;
@@ -246,6 +259,7 @@ static enum EpdDrawError hl_update_area(
 
     uint32_t t2 = esp_timer_get_time() / 1000;
 
+    if (err != EPD_DRAW_SUCCESS) return err;
     // 回写范围和差分实际算过的列段一致：段外的像素没被驱动，back_fb 不能跟着改。
     int x_start, x_stop;
     epd_difference_column_range(area, &x_start, &x_stop);

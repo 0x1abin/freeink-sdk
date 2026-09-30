@@ -3,38 +3,28 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-// 中文：epdiy LCD 输出路径的板级补齐与推帧实现。epdiy 本体在 src/epdiy/ 下原样
-// 编译（LGPL-3.0-or-later）；这里只做三件事：把 EpdBoardDefinition 接到板子的
-// 电源钩子上、把 1bpp 帧缓冲展开成 epdiy 的 4bpp、按档位调 epd_hl_update_screen。
-//
-// English: board glue and frame feeding for epdiy's LCD output path. epdiy itself
-// is compiled verbatim under src/epdiy/ (LGPL-3.0-or-later); this file only wires
-// the EpdBoardDefinition to the board's power hooks, expands a 1 bpp framebuffer
-// into epdiy's 4 bpp layout, and calls epd_hl_update_screen per refresh profile.
-//
-// 冻结 / Frozen：
-//   - 不改 epdiy 源码。/ Do not modify epdiy sources.
-//   - set_vcom 是空实现：面板 VCOM 只由 PMU 出厂值决定，主机只读。
-//     / set_vcom is a no-op: the panel VCOM is the PMU's factory value, read-only.
+// Board power hooks, 1 bpp/overlay-mask conversion and refresh transactions.
+// Vendored epdiy retains its LGPL licence; local resource/baseline fixes are
+// exercised by test/host/test_transactions.py.
 
 #include <EpdiyLcd.h>
+#include <esp_heap_caps.h>
+#include <esp_log.h>
 
 #include <cstring>
-
-#include <esp_heap_caps.h>
 
 extern "C" {
 // 未带 extern "C" 守卫的 epdiy 头（见本库 README 的清单）在这里统一包住；
 // 已带守卫的再包一层是合法的。
 // / epdiy headers without extern "C" guards are wrapped here; re-wrapping the
 // guarded ones is harmless.
+#include "e0470/include/e0470_epaper_waveform.h"
+#include "epdiy/include/epd_lcd.h"
+#include "epdiy/include/epd_waveform.h"
 #include "epdiy/src/epd_board.h"
 #include "epdiy/src/epd_display.h"
-#include "epdiy/include/epd_waveform.h"
-#include "epdiy/src/epdiy.h"
 #include "epdiy/src/epd_highlevel.h"
-#include "epdiy/include/epd_lcd.h"
-#include "e0470/include/e0470_epaper_waveform.h"
+#include "epdiy/src/epdiy.h"
 }
 
 namespace freeink {
@@ -48,6 +38,9 @@ uint8_t* g_fb4 = nullptr;
 // needs it as a base because the caller's buffer then holds a selector plane.
 uint8_t* g_base = nullptr;
 bool g_started = false;
+bool g_initialized = false;
+bool g_powerReady = false;
+bool g_baselineKnown = false;
 // 调用方的 1bpp 位约定，由 epdiyLcdBegin 给定一次。
 // / The caller's 1 bpp bit convention, fixed once by epdiyLcdBegin.
 bool g_blackIsOne = false;
@@ -118,7 +111,7 @@ void boardInit(uint32_t epdRowWidth) {
   epd_lcd_set_prefill_lines(g_cfg->prefillLines);
 }
 
-void boardDeinit() {}
+void boardDeinit() { epd_lcd_deinit(); }
 
 // XOE 与 MODE 在 FCA9555 上，由 powerOn/powerOff 按顺序持有；本板没有 epdiy 假设的
 // 那个通用控制寄存器，所以这里是空实现。
@@ -131,12 +124,13 @@ void boardSetCtrl(epd_ctrl_state_t* state, const epd_ctrl_state_t* const mask) {
 
 void boardPowerOn(epd_ctrl_state_t* state) {
   (void)state;
-  if (g_cfg != nullptr && g_cfg->power.powerOn != nullptr) (void)g_cfg->power.powerOn();
+  g_powerReady = g_cfg != nullptr && g_cfg->power.powerOn != nullptr && g_cfg->power.powerOn();
 }
 
 void boardPowerOff(epd_ctrl_state_t* state) {
   (void)state;
   if (g_cfg != nullptr && g_cfg->power.powerOff != nullptr) g_cfg->power.powerOff();
+  g_powerReady = false;
 }
 
 void boardMeasureVcom(epd_ctrl_state_t* state) { (void)state; }
@@ -177,6 +171,7 @@ bool epdiyLcdBegin(const EpdiyLcdConfig& cfg, uint16_t width, uint16_t height, b
 
   epd_set_board(&kBoard);
   epd_init(&kBoard, &E0470_DISPLAY, EPD_OPTIONS_DEFAULT);
+  g_initialized = true;
 
   // 几何校验必须在 epd_init 之后：epd_width()/epd_height() 读的是 epd_init 里
   // `display = disp` 设进去的那张表，在此之前 esp_get_display() 还是 NULL。
@@ -186,39 +181,40 @@ bool epdiyLcdBegin(const EpdiyLcdConfig& cfg, uint16_t width, uint16_t height, b
   // display table that epd_init assigns, and before it epd_get_display() is NULL.
   // epdiy scans using its own epd_width()/epd_height() (E0470_DISPLAY is 1216x684);
   // it must agree with the BoardProfile geometry or scan and framebuffer disagree.
-  if (epd_width() != width || epd_height() != height) return false;
+  if (epd_width() != width || epd_height() != height) {
+    epdiyLcdEnd();
+    return false;
+  }
 
   g_hl = epd_hl_init(&E0470_WAVEFORM);
   g_fb4 = epd_hl_get_framebuffer(&g_hl);
-  if (g_fb4 == nullptr) return false;
+  if (g_fb4 == nullptr) {
+    epdiyLcdEnd();
+    return false;
+  }
 
   // 1bpp 底图，宽/8 字节每行。/ 1 bpp base image, width/8 bytes per row.
   const size_t baseBytes = static_cast<size_t>(width) / 8 * static_cast<size_t>(height);
   g_base = static_cast<uint8_t*>(heap_caps_malloc(baseBytes, MALLOC_CAP_SPIRAM));
-  if (g_base == nullptr) return false;
+  if (g_base == nullptr) {
+    ESP_LOGE("EpdiyLcd", "Base allocation failed (%u bytes)", static_cast<unsigned>(baseBytes));
+    epdiyLcdEnd();
+    return false;
+  }
   memset(g_base, 0xFF, baseBytes);  // 起始为白纸 / starts as white paper
 
   buildExpandTable();
 
-  // 开机全局刷新：把面板驱动到一个确定的白色状态。
-  //
-  // e-ink 会保留上一次的画面，而且那幅图很可能是被复位/掉电打断的中间态；epdiy 的
-  // 差分刷新却假定基线是白的（epd_hl_init 的帧缓冲全 0，而在本玻璃上 level 0 就是
-  // 白）。两者对不上时，每一帧差分都做在错的基线上，旧画面就一直残留。所以上电后
-  // 先无条件全屏清一次，再用白场同步 epdiy 的帧缓冲和底图，之后第一帧差分才是对的。
-  //
-  // / Boot-time global refresh: drive the panel to a known white state.
-  //
-  // An e-ink panel keeps its previous image, and that image is likely an interrupted
-  // mid-waveform state, while epdiy's differential refresh assumes a white baseline
-  // (epd_hl_init's framebuffer is all zero, and level 0 is white on this glass).
-  // While the two disagree, every diff runs against the wrong baseline and the old
-  // picture ghosts through. So clear the whole panel unconditionally after bring-up,
-  // then sync epdiy's framebuffer and our base image to white so the first real frame
-  // diffs correctly.
+  // Establish a physical white baseline; e-ink retains the image across resets.
   epd_poweron();
+  if (!g_powerReady) {
+    ESP_LOGE("EpdiyLcd", "Panel power-on failed; boot clear skipped");
+    epdiyLcdEnd();
+    return false;
+  }
   epd_clear();
   epd_poweroff();
+  g_baselineKnown = true;
 
   const size_t bufBytes = static_cast<size_t>(width) / 2 * static_cast<size_t>(height);
   // 白场按调用方的位约定展开，极性翻转时不会写错。
@@ -234,16 +230,15 @@ bool epdiyLcdBegin(const EpdiyLcdConfig& cfg, uint16_t width, uint16_t height, b
 }
 
 void epdiyLcdEnd() {
-  if (!g_started) return;
-  // epdiy 没有 epd_hl_deinit()（highlevel.c 只提供 init/get_framebuffer/update_*），
-  // 所以那个 4bpp 帧缓冲留在 PSRAM 里不回收：它只有一个，且只在本板分配一次。
-  // / epdiy provides no epd_hl_deinit() (highlevel.c only has init/get_framebuffer/
-  // update_*), so the 4 bpp framebuffer stays allocated in PSRAM: there is exactly
-  // one and it is allocated once per boot on this board.
-  epd_lcd_deinit();
+  if (!g_initialized) return;
+  epd_deinit();
+  epd_hl_deinit(&g_hl);
+  heap_caps_free(g_base);
+  g_base = nullptr;
   g_fb4 = nullptr;
-  g_hl = {};
   g_started = false;
+  g_initialized = false;
+  g_baselineKnown = false;
 }
 
 namespace {
@@ -278,16 +273,32 @@ void fillFrom1bpp(const uint8_t* fb) {
   }
 }
 
-void pushFrame(EpdiyLcdRefresh mode, bool turnOff) {
+bool pushFrame(EpdiyLcdRefresh mode, bool turnOff) {
   epd_poweron();
-  (void)epd_hl_update_screen(&g_hl, drawModeFor(mode), static_cast<int>(panelTemperature()));
-  if (turnOff) epd_poweroff();
+  if (!g_powerReady) {
+    g_baselineKnown = false;
+    ESP_LOGE("EpdiyLcd", "Panel power-on failed; frame skipped");
+    epd_poweroff();
+    return false;
+  }
+  if (!g_baselineKnown) {
+    epd_clear();
+    memset(g_hl.back_fb, 0xFF, static_cast<size_t>(epd_width()) / 2 * epd_height());
+    mode = EpdiyLcdRefresh::Full;
+  }
+  const int temperature = static_cast<int>(panelTemperature());
+  const auto err = mode == EpdiyLcdRefresh::Full ? epd_hl_update_screen_full(&g_hl, drawModeFor(mode), temperature)
+                                                 : epd_hl_update_screen(&g_hl, drawModeFor(mode), temperature);
+  g_baselineKnown = err == EPD_DRAW_SUCCESS;
+  if (!g_baselineKnown) ESP_LOGE("EpdiyLcd", "Frame failed (%u); clean retry required", static_cast<unsigned>(err));
+  if (turnOff || !g_baselineKnown) epd_poweroff();
+  return g_baselineKnown;
 }
 
 }  // namespace
 
-void epdiyLcdDraw(const uint8_t* fb, EpdiyLcdRefresh mode, bool turnOff) {
-  if (!g_started || fb == nullptr || g_fb4 == nullptr || g_cfg == nullptr) return;
+bool epdiyLcdDraw(const uint8_t* fb, EpdiyLcdRefresh mode, bool turnOff) {
+  if (!g_started || fb == nullptr || g_fb4 == nullptr || g_cfg == nullptr) return false;
 
   // 留一份底图：AA 的 displayGray() 提交时调用方的缓冲已经变成选择平面了。
   // / Keep a base copy: by the time the AA displayGray() commit runs, the caller's
@@ -296,7 +307,7 @@ void epdiyLcdDraw(const uint8_t* fb, EpdiyLcdRefresh mode, bool turnOff) {
   if (g_base != nullptr) memcpy(g_base, fb, bytes);
 
   fillFrom1bpp(fb);
-  pushFrame(mode, turnOff);
+  return pushFrame(mode, turnOff);
 }
 
 void epdiyLcdStashBase(const uint8_t* fb) {
@@ -308,59 +319,16 @@ void epdiyLcdStashBase(const uint8_t* fb) {
   memcpy(g_base, fb, bytes);
 }
 
-void epdiyLcdDrawGray(const uint8_t* lsb, const uint8_t* msb, EpdiyLcdRefresh mode, bool turnOff) {
-  if (!g_started || g_fb4 == nullptr || g_cfg == nullptr) return;
-  if (g_base == nullptr || lsb == nullptr || msb == nullptr) return;
+bool epdiyLcdDrawGray(const uint8_t* lsb, const uint8_t* msb, EpdiyLcdRefresh mode, bool turnOff) {
+  if (!g_started || g_fb4 == nullptr || g_cfg == nullptr) return false;
+  if (g_base == nullptr || lsb == nullptr || msb == nullptr) return false;
 
-  // 只有一件事：覆盖率决定"这一像素属于哪一档"。底图给黑白，两个选择平面给两档中间
-  // 灰——这是宿主真正的 2-bit 抗锯齿数据，并口 16 级屏直接吃下去即可。
-  //
-  // 邻域微调已彻底移除，不要再加回来。原厂固件不做空间平滑（它把 1/16 真实覆盖率直接
-  // 写进 framebuffer），而本屏 300 PPI 下覆盖率本身就够锐。2026-09 那版做过中心加权
-  // 3×3 微调，为避免糊掉把幅度钳到 0，等于每页白白遍历 9×41.5 万像素却一个像素都不改
-  // ——实测占掉每次灰阶提交约 150ms。要再引入邻域，请先拿出真机锐度/残影对比，并接受
-  // 这个代价。
-  //
-  // / One job only: coverage decides which step a pixel belongs to. The base page gives
-  // black/white and the two selector planes give the two mid tones -- the host's real
-  // 2-bit anti-aliasing data, which a 16-level parallel panel takes directly.
-  //
-  // The neighbourhood nudge is gone for good; do not reintroduce it. The reference
-  // firmware does no spatial smoothing (it writes the 1/16 true coverage straight into
-  // the framebuffer), and at 300 PPI coverage alone is sharp enough. The 2026-09
-  // centre-weighted 3x3 version capped its own nudge at 0 to avoid blurring, so it
-  // walked 9 x 415k pixels per page and changed none of them -- measured at ~150 ms of
-  // every grey commit. Reintroducing it needs on-glass sharpness/ghosting evidence and
-  // has to justify that cost.
-  //
-  // 极性：本文件不做极性推理，沿用 kBlackIsOne 的实测结论——这台玻璃 level 0 是白、
-  // 15 是黑（见 EpdiyLcdDriver.cpp 顶部记录）。facade 的约定是"位置一 = 白"，所以
-  // 底图里**位清零 = 墨**。平面含义来自 GfxRenderer::mapTwoBitPixel（非 EEGO 分支）：
-  // LSB 置位 ⇔ 2-bit 值 1（深灰），MSB 置位 ⇔ 值 1 或 2。
-  // / Polarity follows the measured kBlackIsOne result recorded at the top of
-  // EpdiyLcdDriver.cpp (level 0 is white on this glass). The facade sets the bit for
-  // white, so a CLEAR bit is ink. Plane meaning comes from mapTwoBitPixel.
-  // 极性由展开表的实际逻辑钉住（EpdiyLcd.cpp 的 buildExpandTable，blackIsOne=true 取
-  // g_expand[0]，即 oneIsBlack=0 -> black = bit ^ 1 -> 位=1 落到 15），与 epdiy.h:93 的
-  // 0x0 = 黑 / 0xF = 白 一致。facade 的约定是"位置一 = 白"，所以底图里位清零 = 墨、
-  // 位置一 = 纸。**注意 EpdiyLcdDriver.cpp 顶部那段注释说"level 0 呈现为白"，与表
-  // 的实际行为相反，不要照它推。**
-  // / Polarity is pinned by what buildExpandTable() actually does (with blackIsOne = true
-  // EpdiyLcd uses g_expand[0], i.e. oneIsBlack = 0 -> black = bit ^ 1 -> a set bit lands
-  // on 15), matching epdiy.h:93 (0x0 = black, 0xF = white). The facade sets the bit for
-  // white, so a clear bit is ink and a set bit is paper. NOTE: the comment at the top of
-  // EpdiyLcdDriver.cpp claims level 0 renders white, which contradicts the table -- do
-  // not reason from it.
-  // 中间灰压暗：对齐原厂固件 ttf_font.h:43 的覆盖率 gamma（"Below 1 lifts mid
-  // coverage so AA edges are darker"）。均匀的 5/10 观感发灰，压到 3/8 让抗锯齿边缘
-  // 发深，既保留档间过渡又不显糊。
-  // / Mid tones darkened, matching the coverage gamma in the reference firmware
-  // (ttf_font.h:43). Even 5/10 reads washed out; 3/8 keeps the in-between step for
-  // anti-aliasing while the edges stay dark.
+  // The existing 2-bit coverage maps directly to four panel tones. A set base
+  // bit is white (15); selector masks choose the two calibrated mid tones.
   constexpr uint8_t kDarkGray = 3;   // 2-bit 值 1（深灰）/ 2-bit value 1 (dark)
   constexpr uint8_t kLightGray = 8;  // 2-bit 值 2（浅灰）/ 2-bit value 2 (light)
-  constexpr int kInkLevel = 0;        // 墨 = 黑 / ink is black
-  constexpr int kPaperLevel = 15;     // 纸 = 白 / paper is white
+  constexpr int kInkLevel = 0;       // 墨 = 黑 / ink is black
+  constexpr int kPaperLevel = 15;    // 纸 = 白 / paper is white
 
   const int w = static_cast<int>(epd_width());
   const int h = static_cast<int>(epd_height());
@@ -398,7 +366,7 @@ void epdiyLcdDrawGray(const uint8_t* lsb, const uint8_t* msb, EpdiyLcdRefresh mo
     }
   }
 
-  pushFrame(mode, turnOff);
+  return pushFrame(mode, turnOff);
 }
 
 void epdiyLcdDeepSleep() {
