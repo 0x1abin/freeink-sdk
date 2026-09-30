@@ -3,10 +3,9 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-#include <BoardReadPico.h>
-
-#include <BoardConfig.h>
 #include <BatteryMonitor.h>
+#include <BoardConfig.h>
+#include <BoardReadPico.h>
 #include <InputManager.h>
 #include <Rtc.h>
 #include <Wire.h>
@@ -140,17 +139,15 @@ constexpr size_t kPmuEventSize = 16;
 constexpr size_t kPmuQuickBatterySize = 8;
 constexpr uint16_t kPmuSocUnknown = 0xFFFF;
 
-uint16_t g_pmuSeq = 1;         // first request sequence; 0 is skipped
-uint32_t g_pmuBootId = 0;      // IDENTITY session_id; survives an ESP-only reset
-uint16_t g_pmuLastEventId = 0; // STATUS.last_event_id
+uint16_t g_pmuSeq = 1;          // first request sequence; 0 is skipped
+uint32_t g_pmuBootId = 0;       // IDENTITY session_id; survives an ESP-only reset
+uint16_t g_pmuLastEventId = 0;  // STATUS.last_event_id
 uint8_t g_pmuPowerState = 0xFF;
 uint8_t g_pmuPendingEvents = 0;
 // STATUS.flags bit 5: the PMU power key is held right now. Only ever written by
 // a successful STATUS parse; keyStripHook() clears it when a poll fails so a
 // dropped I2C read cannot look like a stuck key.
 bool g_pmuKeyDown = false;
-uint8_t g_pmuLastPayload[kPmuPayloadSize] = {0};
-uint8_t g_pmuLastPlen = 0;
 bool g_pmuPresent = false;
 
 // ---------------------------------------------------------------------------
@@ -175,8 +172,8 @@ constexpr unsigned long kPmuKeyPollMs = 50;
 // ---------------------------------------------------------------------------
 uint16_t rd16(const uint8_t* p) { return static_cast<uint16_t>(p[0]) | (static_cast<uint16_t>(p[1]) << 8); }
 uint32_t rd32(const uint8_t* p) {
-  return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
-         (static_cast<uint32_t>(p[2]) << 16) | (static_cast<uint32_t>(p[3]) << 24);
+  return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) | (static_cast<uint32_t>(p[2]) << 16) |
+         (static_cast<uint32_t>(p[3]) << 24);
 }
 void wr16(uint8_t* p, uint16_t v) {
   p[0] = static_cast<uint8_t>(v);
@@ -201,9 +198,7 @@ uint16_t crc16CcittFalse(const uint8_t* data, size_t length) {
   return crc;
 }
 
-bool crcOk(const uint8_t* data, size_t cover, uint16_t expect) {
-  return crc16CcittFalse(data, cover) == expect;
-}
+bool crcOk(const uint8_t* data, size_t cover, uint16_t expect) { return crc16CcittFalse(data, cover) == expect; }
 
 // ---------------------------------------------------------------------------
 // PMU transport. Retries on a stale session / sequence conflict exactly like
@@ -290,11 +285,13 @@ bool pmuReadResponseFor(uint16_t seq, uint8_t* raw) {
   return false;
 }
 
-// One command round trip. Returns true only for STATUS OK / ACCEPTED; the
-// payload of the accepted response is left in g_pmuLastPayload/Plen for the
-// callers that need it (VCOM_GET, ACTION_PREPARE).
-bool pmuCommand(uint16_t code, const uint8_t* payload, uint8_t plen) {
-  if (!g_pmuPresent) return false;
+// ponytail: hold the existing bus lock through the PMU round trip; use a
+// separate PMU lock if the bounded response wait becomes a touch-latency issue.
+bool pmuCommand(uint16_t code, const uint8_t* payload, uint8_t plen, uint8_t* responsePayload = nullptr,
+                uint8_t* responseLength = nullptr) {
+  ScopedI2CLock lock;
+  if (responseLength != nullptr) *responseLength = 0;
+  if (!g_pmuPresent || plen > kPmuPayloadSize || (plen != 0 && payload == nullptr)) return false;
 
   uint8_t req[kPmuFrameSize];
   uint8_t resp[kPmuFrameSize];
@@ -315,10 +312,12 @@ bool pmuCommand(uint16_t code, const uint8_t* payload, uint8_t plen) {
   if (!haveResp) return false;
 
   const uint16_t status = rd16(&resp[10]);
-  g_pmuLastPlen = resp[12];
-  if (g_pmuLastPlen > kPmuPayloadSize) g_pmuLastPlen = static_cast<uint8_t>(kPmuPayloadSize);
-  memcpy(g_pmuLastPayload, &resp[18], g_pmuLastPlen);
-  return status == kPmuStatusOk || status == kPmuStatusAccepted;
+  if (status != kPmuStatusOk && status != kPmuStatusAccepted) return false;
+  const uint8_t length = resp[12];
+  if (length > kPmuPayloadSize) return false;
+  if (responsePayload != nullptr) memcpy(responsePayload, &resp[18], length);
+  if (responseLength != nullptr) *responseLength = length;
+  return true;
 }
 
 // Poll STATUS only (read_pico_pmu.c `refresh_core(false)` without the battery /
@@ -366,10 +365,11 @@ bool pmuAction(uint8_t action, uint16_t delayMs, uint16_t reason) {
   prep[0] = action;
   wr16(&prep[1], delayMs);
   wr16(&prep[3], reason);
-  if (!pmuCommand(kPmuCmdActionPrepare, prep, sizeof(prep))) return false;
-  if (g_pmuLastPlen < 4) return false;
+  uint8_t response[kPmuPayloadSize];
+  uint8_t length;
+  if (!pmuCommand(kPmuCmdActionPrepare, prep, sizeof(prep), response, &length) || length < 4) return false;
   uint8_t commit[4];
-  wr32(commit, rd32(g_pmuLastPayload));
+  wr32(commit, rd32(response));
   return pmuCommand(kPmuCmdActionCommit, commit, sizeof(commit));
 }
 
@@ -390,8 +390,8 @@ bool accelProbe() {
   if (!detail::i2cRead(READPICO_ACCEL_ADDR, kSc7a20hRegWhoAmI, &who, 1)) return false;
   (void)detail::i2cRead(READPICO_ACCEL_ADDR, kSc7a20hRegVersion, &ver, 1);
   const bool ok = (who == kSc7a20hWhoAmIValue) && (ver == kSc7a20hVersionValue);
-  logLine("[RDP] SC7A20H WHO_AM_I=0x%02X (want 0x%02X) VER=0x%02X (want 0x%02X) %s\r\n", who,
-          kSc7a20hWhoAmIValue, ver, kSc7a20hVersionValue, ok ? "ok" : "unexpected");
+  logLine("[RDP] SC7A20H WHO_AM_I=0x%02X (want 0x%02X) VER=0x%02X (want 0x%02X) %s\r\n", who, kSc7a20hWhoAmIValue, ver,
+          kSc7a20hVersionValue, ok ? "ok" : "unexpected");
   return ok;
 }
 
@@ -742,12 +742,14 @@ bool pmuTimeGet(uint32_t& unixSec, bool& synced) {
   unixSec = 0;
   synced = false;
   if (!g_pmuPresent) return false;
-  if (!pmuCommand(kPmuCmdTimeGet, nullptr, 0)) return false;
+  uint8_t response[kPmuPayloadSize];
+  uint8_t length;
+  if (!pmuCommand(kPmuCmdTimeGet, nullptr, 0, response, &length)) return false;
   // 8-byte response: unix_seconds u32 (0 = never calibrated) + millis u16 +
   // synced u8 + rsvd u8 (read_pico_pmu_protocol.h PMU_CMD_TIME_GET).
-  if (g_pmuLastPlen < 7) return false;
-  unixSec = rd32(g_pmuLastPayload);
-  synced = g_pmuLastPayload[6] != 0;
+  if (length < 7) return false;
+  unixSec = rd32(response);
+  synced = response[6] != 0;
   return unixSec != 0;
 }
 
@@ -854,9 +856,11 @@ int pmuVcomMv() {
   //
   // Returns the factory value in mV, or -1 when it is unavailable / out of range.
   // Callers MUST read -1 as "do not power the panel", never as "use a default".
-  if (g_pmuPresent && pmuCommand(kPmuCmdVcomGet, nullptr, 0)) {
-    if (g_pmuLastPlen >= 4 && g_pmuLastPayload[2] != 0) {
-      const int mv = static_cast<int>(rd16(g_pmuLastPayload));
+  uint8_t response[kPmuPayloadSize];
+  uint8_t length;
+  if (g_pmuPresent && pmuCommand(kPmuCmdVcomGet, nullptr, 0, response, &length)) {
+    if (length >= 4 && response[2] != 0) {
+      const int mv = static_cast<int>(rd16(response));
       if (mv >= 500 && mv <= 2500 && (mv % 10) == 0) {
         logLine("[RDP] panel VCOM %d mV (PMU factory value)\r\n", mv);
         return mv;
