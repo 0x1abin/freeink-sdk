@@ -97,5 +97,8 @@ int gpio_set_direction(int, int);
 int gpio_config(const gpio_config_t*);
 int gpio_set_level(int, int);
 int gpio_reset_pin(int);
-#include "lcd_host_noops.h"
+// Declare RMT APIs before replacing raw register operations with test macros.
+// clang-format off
 #include "output_common/rmt_compat.h"
+#include "lcd_host_noops.h"
+// clang-format on
