@@ -343,30 +343,19 @@ bool epdiyLcdDrawGray(const uint8_t* lsb, const uint8_t* msb, EpdiyLcdRefresh mo
     const uint8_t* mrow = msb + static_cast<size_t>(y) * stride;
     uint8_t* drow = g_fb4 + static_cast<size_t>(y) * (w / 2);
 
-    for (int x = 0; x < w; ++x) {
+    const auto toneFor = [](bool baseInk, bool lb, bool mb) -> uint8_t {
+      if (mb && !lb) return kLightGray;
+      if (lb) return kDarkGray;
+      return baseInk ? kInkLevel : kPaperLevel;
+    };
+    for (int x = 0; x < w; x += 2) {
       const uint8_t mask = static_cast<uint8_t>(0x80u >> (x & 7));
-      const bool lb = (lrow[x >> 3] & mask) != 0;
-      const bool mb = (mrow[x >> 3] & mask) != 0;
-      const bool baseInk = (g_base[static_cast<size_t>(y) * stride + (x >> 3)] & mask) == 0;
-
-      // --- 1) 覆盖率决定的档位 ---------------------------------------------
-      int level;
-      if (mb && !lb) {
-        level = kLightGray;  // 2-bit 值 2
-      } else if (lb) {
-        level = kDarkGray;  // 2-bit 值 1
-      } else {
-        level = baseInk ? kInkLevel : kPaperLevel;
-      }
-
-      // epdiy 每字节两个像素：偶数列低半字节、奇数列高半字节。
-      // / epdiy packs two pixels per byte: even column low nibble, odd high.
-      uint8_t* cell = drow + (x >> 1);
-      if ((x & 1) != 0) {
-        *cell = static_cast<uint8_t>((*cell & 0x0Fu) | static_cast<uint8_t>(level << 4));
-      } else {
-        *cell = static_cast<uint8_t>((*cell & 0xF0u) | static_cast<uint8_t>(level));
-      }
+      const uint8_t base = g_base[static_cast<size_t>(y) * stride + (x >> 3)];
+      const uint8_t l = lrow[x >> 3], m = mrow[x >> 3];
+      const uint8_t low = toneFor((base & mask) == 0, (l & mask) != 0, (m & mask) != 0);
+      const uint8_t high = toneFor((base & (mask >> 1)) == 0, (l & (mask >> 1)) != 0, (m & (mask >> 1)) != 0);
+      // Both nibbles are known: one PSRAM store, without reading the old byte.
+      drow[x >> 1] = static_cast<uint8_t>(low | (high << 4));
     }
   }
 

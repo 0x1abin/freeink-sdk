@@ -18,6 +18,7 @@ bool powered = false;
 bool failDraw = false;
 int draws = 0, clears = 0;
 int lastMode = 0;
+uint8_t lastTo[32];
 const EpdBoardDefinition* board = nullptr;
 EpdiyHighlevelState* state = nullptr;
 bool powerOn() {
@@ -69,8 +70,12 @@ void epd_difference_column_range(EpdRect area, int* first, int* end) {
   *first = area.x;
   *end = area.x + area.width;
 }
-EpdRect epd_difference_image_cropped(const uint8_t* to, const uint8_t* from, EpdRect area, uint8_t*, bool* lines,
+EpdRect epd_difference_image_cropped(const uint8_t* to, const uint8_t* from, EpdRect area, uint8_t* diff, bool* lines,
                                      uint8_t* columns) {
+  for (int p = 0; p < 32; ++p) {
+    const int shift = 4 * (p & 1);
+    diff[p] = static_cast<uint8_t>(((to[p / 2] >> shift) & 15) << 4 | ((from[p / 2] >> shift) & 15));
+  }
   bool changed = false;
   for (int y = 0; y < 2; ++y) {
     lines[y] = std::memcmp(to + y * 8, from + y * 8, 8) != 0;
@@ -79,13 +84,36 @@ EpdRect epd_difference_image_cropped(const uint8_t* to, const uint8_t* from, Epd
   std::memset(columns, changed ? 0xFF : 0, 8);
   return changed ? area : EpdRect{0, 0, 0, 0};
 }
-enum EpdDrawError epd_draw_base(EpdRect, const uint8_t*, EpdRect, enum EpdDrawMode mode, int, const bool*,
+enum EpdDrawError epd_draw_base(EpdRect, const uint8_t* diff, EpdRect, enum EpdDrawMode mode, int, const bool*,
                                 const uint8_t*, const EpdWaveform*) {
   assert(powered);
   ++draws;
+  for (int p = 0; p < 32; ++p) lastTo[p] = diff[p] >> 4;
   lastMode = mode & 0x3F;
   return failDraw ? EPD_DRAW_EMPTY_LINE_QUEUE : EPD_DRAW_SUCCESS;
 }
+}
+
+void checkGrayPacking(freeink::EpdiyLcdDriver& driver, freeink::EpdBus& bus) {
+  for (int pair = 0; pair < 64; ++pair) {
+    uint8_t base[4]{}, lsb[4]{}, msb[4]{};
+    uint8_t expected[32];
+    for (int pixel = 0; pixel < 32; ++pixel) {
+      // All 64 base/LSB/MSB pairs at every byte and row boundary.
+      const unsigned bits = (pair >> (3 * (pixel & 1))) & 7;
+      const uint8_t mask = 0x80 >> (pixel & 7);
+      if (bits & 1) base[pixel / 8] |= mask;
+      if (bits & 2) lsb[pixel / 8] |= mask;
+      if (bits & 4) msb[pixel / 8] |= mask;
+      expected[pixel] = (bits & 4) && !(bits & 2) ? 8 : (bits & 2) ? 3 : (bits & 1) ? 15 : 0;
+    }
+    driver.displayGrayscaleBaseWithContext(bus, base, freeink::RefreshMode::Full, false,
+                                           freeink::RefreshContext::Normal);
+    driver.copyGrayscaleLsb(bus, lsb);
+    driver.copyGrayscaleMsb(bus, msb);
+    driver.displayGray(bus, msb, true, nullptr, false);
+    assert(std::memcmp(lastTo, expected, sizeof(expected)) == 0);
+  }
 }
 
 void checkHighlevel() {
@@ -144,6 +172,7 @@ int main(int argc, char** argv) {
     assert(lastMode == (mode == freeink::RefreshMode::Full ? MODE_GC16 : MODE_GL16));
     fb[0] ^= 1;
   }
+  checkGrayPacking(driver, bus);
   const int before = draws;
   assert(freeink::epdiyLcdDraw(fb, freeink::EpdiyLcdRefresh::Full, true));
   assert(freeink::epdiyLcdDraw(fb, freeink::EpdiyLcdRefresh::Full, true));
