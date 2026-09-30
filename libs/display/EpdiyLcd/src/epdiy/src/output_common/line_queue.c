@@ -1,3 +1,4 @@
+/* FreeInk local change (2026-09-30): size the pointer table by pointer width. */
 #include <assert.h>
 #include <esp_attr.h>
 #include <esp_heap_caps.h>
@@ -22,7 +23,7 @@ LineQueue_t lq_init(int queue_len, int element_size) {
 
     int elem_buf_size = ceil_div(element_size, 16) * 16;
 
-    queue.bufs = calloc(queue.size, elem_buf_size);
+    queue.bufs = calloc(queue.size, sizeof(*queue.bufs));
     assert(queue.bufs != NULL);
 
     for (int i = 0; i < queue.size; i++) {
