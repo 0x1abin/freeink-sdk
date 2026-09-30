@@ -15,7 +15,8 @@ static inline int ceil_div(int x, int y) {
 
 /// Initialize the line queue and allocate memory.
 LineQueue_t lq_init(int queue_len, int element_size) {
-    LineQueue_t queue;
+    LineQueue_t queue = {0};
+    if (queue_len < 2 || element_size <= 0) return queue;
     queue.element_size = element_size;
     queue.size = queue_len;
     queue.current = 0;
@@ -24,11 +25,14 @@ LineQueue_t lq_init(int queue_len, int element_size) {
     int elem_buf_size = ceil_div(element_size, 16) * 16;
 
     queue.bufs = calloc(queue.size, sizeof(*queue.bufs));
-    assert(queue.bufs != NULL);
+    if (queue.bufs == NULL) return (LineQueue_t){0};
 
     for (int i = 0; i < queue.size; i++) {
         queue.bufs[i] = heap_caps_aligned_alloc(16, elem_buf_size, MALLOC_CAP_INTERNAL);
-        assert(queue.bufs[i] != NULL);
+        if (queue.bufs[i] == NULL) {
+            lq_free(&queue);
+            return (LineQueue_t){0};
+        }
     }
 
     return queue;
@@ -36,11 +40,13 @@ LineQueue_t lq_init(int queue_len, int element_size) {
 
 /// Deinitialize the line queue and free memory.
 void lq_free(LineQueue_t* queue) {
-    for (int i = 0; i < queue->size; i++) {
+    if (queue == NULL) return;
+    for (int i = queue->size - 1; i >= 0 && queue->bufs != NULL; i--) {
         heap_caps_free(queue->bufs[i]);
     }
 
     free(queue->bufs);
+    memset(queue, 0, sizeof(*queue));
 }
 
 uint8_t* IRAM_ATTR lq_current(LineQueue_t* queue) {

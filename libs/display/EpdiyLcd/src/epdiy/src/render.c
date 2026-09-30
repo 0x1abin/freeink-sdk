@@ -1,3 +1,4 @@
+/* FreeInk local change (2026-09-30): recover partial initialization; reuse clear buffers. */
 #include "render.h"
 
 #include "epd_board.h"
@@ -33,15 +34,9 @@ static inline int max(int x, int y) {
 
 const int clear_cycle_time = 15;
 
-#define RTOS_ERROR_CHECK(x)       \
-    do {                          \
-        esp_err_t __err_rc = (x); \
-        if (__err_rc != pdPASS) { \
-            abort();              \
-        }                         \
-    } while (0)
-
 static RenderContext_t render_context;
+static bool board_init_attempted;
+static bool renderer_ready;
 
 void epd_push_pixels(EpdRect area, short time, int color) {
     render_context.area = area;
@@ -333,17 +328,16 @@ void epd_clear_area_cycles(EpdRect area, int cycles, int cycle_time) {
     }
 }
 
-void epd_renderer_init(enum EpdInitOptions options) {
-    // Either the board should be set in menuconfig or the epd_set_board() must
-    // be called before epd_init()
-    assert((epd_current_board() != NULL));
-
-    epd_current_board()->init(epd_width());
+bool epd_renderer_init(enum EpdInitOptions options) {
+    if (renderer_ready) return true;
+    const EpdBoardDefinition* board = epd_current_board();
+    if (board == NULL || board->init == NULL) return false;
+    board_init_attempted = true;
+    if (!board->init(epd_width())) goto fail;
     epd_control_reg_init();
 
     render_context.display_width = epd_width();
     render_context.display_height = epd_height();
-
     size_t lut_size = 0;
     if (options & EPD_LUT_1K) {
         lut_size = 1 << 10;
@@ -357,92 +351,69 @@ void epd_renderer_init(enum EpdInitOptions options) {
 #endif
     } else {
         ESP_LOGE("epd", "invalid init options: %d", options);
-        return;
+        goto fail;
     }
-
-    ESP_LOGI("epd", "Space used for waveform LUT: %dK", lut_size / 1024);
-    render_context.conversion_lut
-        = (uint8_t*)heap_caps_malloc(lut_size, MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL);
-    if (render_context.conversion_lut == NULL) {
-        ESP_LOGE("epd", "could not allocate LUT!");
-        abort();
-    }
+    // Owned by render_context; DMA/feed tasks need these buffers beyond this call.
+    render_context.conversion_lut = heap_caps_malloc(lut_size, MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL);
+    if (render_context.conversion_lut == NULL) goto fail;
     render_context.conversion_lut_size = lut_size;
-    render_context.static_line_buffer = NULL;
-
     render_context.frame_done = xSemaphoreCreateBinary();
-
+    if (render_context.frame_done == NULL) goto fail;
     for (int i = 0; i < NUM_RENDER_THREADS; i++) {
         render_context.feed_done_smphr[i] = xSemaphoreCreateBinary();
+        if (render_context.feed_done_smphr[i] == NULL) goto fail;
     }
+    render_context.line_threads = heap_caps_malloc(rounded_display_height(), MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL);
+    if (render_context.line_threads == NULL) goto fail;
+    render_context.line_mask = heap_caps_aligned_alloc(16, epd_width() / 4, MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL);
+    if (render_context.line_mask == NULL) goto fail;
 
-    // When using the LCD peripheral, we may need padding lines to
-    // satisfy the bounce buffer size requirements
-    render_context.line_threads = (uint8_t*)heap_caps_malloc(
-        rounded_display_height(), MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL
-    );
-
-    int queue_len = 32;
-    if (options & EPD_FEED_QUEUE_32) {
-        queue_len = 32;
-    } else if (options & EPD_FEED_QUEUE_8) {
-        queue_len = 8;
-    }
-    if (epd_get_display()->bus_width == 16) {
-        queue_len = 64;
-    }
-
-    if (render_context.conversion_lut == NULL) {
-        ESP_LOGE("epd", "could not allocate line mask!");
-        abort();
-    }
-
-    render_context.line_mask
-        = heap_caps_aligned_alloc(16, epd_width() / 4, MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL);
-    assert(render_context.line_mask != NULL);
-
-    size_t queue_elem_size = render_context.display_width / 4;
-
+    int queue_len = (options & EPD_FEED_QUEUE_8) ? 8 : 32;
+    if (epd_get_display()->bus_width == 16) queue_len = 64;
     for (int i = 0; i < NUM_RENDER_THREADS; i++) {
-        render_context.line_queues[i] = lq_init(queue_len, queue_elem_size);
-        render_context.feed_line_buffers[i] = (uint8_t*)heap_caps_malloc(
-            render_context.display_width, MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL
-        );
-        assert(render_context.feed_line_buffers[i] != NULL);
-        RTOS_ERROR_CHECK(xTaskCreatePinnedToCore(
-            render_thread,
-            "epd_prep",
-            1 << 12,
-            (void*)i,
-            configMAX_PRIORITIES - 1,
-            &render_context.feed_tasks[i],
-            i
-        ));
+        render_context.line_queues[i] = lq_init(queue_len, render_context.display_width / 4);
+        if (render_context.line_queues[i].bufs == NULL) goto fail;
+        render_context.feed_line_buffers[i] = heap_caps_malloc(render_context.display_width, MALLOC_CAP_8BIT | MALLOC_CAP_INTERNAL);
+        if (render_context.feed_line_buffers[i] == NULL) goto fail;
     }
+    // Start workers only after all buffers and synchronization objects exist.
+    for (int i = 0; i < NUM_RENDER_THREADS; i++) {
+        if (xTaskCreatePinnedToCore(render_thread, "epd_prep", 1 << 12, (void*)i,
+                                  configMAX_PRIORITIES - 1, &render_context.feed_tasks[i], i) != pdPASS) goto fail;
+    }
+    renderer_ready = true;
+    return true;
+fail:
+    ESP_LOGE("epd", "renderer initialization failed; releasing partial resources");
+    epd_renderer_deinit();
+    return false;
 }
 
 void epd_renderer_deinit() {
-    const EpdBoardDefinition* epd_board = epd_current_board();
-
-    epd_board->poweroff(epd_ctrl_state());
-
-    for (int i = 0; i < NUM_RENDER_THREADS; i++) {
-        vTaskDelete(render_context.feed_tasks[i]);
-        lq_free(&render_context.line_queues[i]);
+    const EpdBoardDefinition* board = epd_current_board();
+    if (board_init_attempted && board != NULL) board->poweroff(epd_ctrl_state());
+    for (int i = NUM_RENDER_THREADS - 1; i >= 0; i--) {
+        // FreeRTOS interprets a null task handle as the calling task.
+        if (render_context.feed_tasks[i] != NULL) vTaskDelete(render_context.feed_tasks[i]);
+    }
+    for (int i = NUM_RENDER_THREADS - 1; i >= 0; i--) {
         heap_caps_free(render_context.feed_line_buffers[i]);
-        vSemaphoreDelete(render_context.feed_done_smphr[i]);
+        lq_free(&render_context.line_queues[i]);
     }
-
-    epd_control_reg_deinit();
-
-    if (epd_board->deinit) {
-        epd_board->deinit();
-    }
-
-    heap_caps_free(render_context.conversion_lut);
-    heap_caps_free(render_context.line_threads);
     heap_caps_free(render_context.line_mask);
-    vSemaphoreDelete(render_context.frame_done);
+    heap_caps_free(render_context.line_threads);
+    for (int i = NUM_RENDER_THREADS - 1; i >= 0; i--) {
+        if (render_context.feed_done_smphr[i] != NULL) vSemaphoreDelete(render_context.feed_done_smphr[i]);
+    }
+    if (render_context.frame_done != NULL) vSemaphoreDelete(render_context.frame_done);
+    heap_caps_free(render_context.conversion_lut);
+    if (board_init_attempted && board != NULL) {
+        epd_control_reg_deinit();
+        if (board->deinit != NULL) board->deinit();
+    }
+    memset(&render_context, 0, sizeof(render_context));
+    board_init_attempted = false;
+    renderer_ready = false;
 }
 
 #ifdef RENDER_METHOD_LCD

@@ -84,14 +84,14 @@ float panelTemperature() {
 
 // --- EpdBoardDefinition -----------------------------------------------------
 
-void boardInit(uint32_t epdRowWidth) {
+bool boardInit(uint32_t epdRowWidth) {
   (void)epdRowWidth;  // 行宽由 lcd_bus_config_t + 面板宽度决定 / from the bus config
-  if (g_cfg == nullptr) return;
+  if (g_cfg == nullptr) return false;
 
   // 引脚先归到安全电平（厂商 board_init 的顺序：pinMode 全部先做，再让 LCD 外设接管）。
   // / Park the pins first, exactly like the reference board_init(), then hand them
   // to the LCD peripheral.
-  if (g_cfg->power.prepare != nullptr) (void)g_cfg->power.prepare();
+  if (g_cfg->power.prepare != nullptr && !g_cfg->power.prepare()) return false;
 
   LcdEpdConfig_t c = {};
   c.pixel_clock = static_cast<size_t>(g_cfg->pclkMhz) * 1000u * 1000u;
@@ -107,8 +107,9 @@ void boardInit(uint32_t epdRowWidth) {
   c.bus.leh = static_cast<gpio_num_t>(g_cfg->pinLeh);
   c.bus.stv = static_cast<gpio_num_t>(g_cfg->pinStv);
 
-  epd_lcd_init(&c, static_cast<int>(epd_width()), static_cast<int>(epd_height()));
+  if (epd_lcd_init(&c, static_cast<int>(epd_width()), static_cast<int>(epd_height())) != ESP_OK) return false;
   epd_lcd_set_prefill_lines(g_cfg->prefillLines);
+  return true;
 }
 
 void boardDeinit() { epd_lcd_deinit(); }
@@ -170,7 +171,10 @@ bool epdiyLcdBegin(const EpdiyLcdConfig& cfg, uint16_t width, uint16_t height, b
   e0470_waveform_init();
 
   epd_set_board(&kBoard);
-  epd_init(&kBoard, &E0470_DISPLAY, EPD_OPTIONS_DEFAULT);
+  if (!epd_init(&kBoard, &E0470_DISPLAY, EPD_OPTIONS_DEFAULT)) {
+    ESP_LOGE("EpdiyLcd", "LCD renderer initialization failed");
+    return false;
+  }
   g_initialized = true;
 
   // 几何校验必须在 epd_init 之后：epd_width()/epd_height() 读的是 epd_init 里

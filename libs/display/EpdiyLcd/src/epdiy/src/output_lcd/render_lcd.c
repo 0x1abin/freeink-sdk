@@ -1,3 +1,4 @@
+/* FreeInk local change (2026-09-30): recover partial initialization; reuse clear buffers. */
 #include <stdint.h>
 #include <string.h>
 
@@ -130,32 +131,25 @@ static void push_pixels_populate_line(RenderContext_t* ctx, int color) {
             fill_byte = 0x00;
     }
 
-    // Compute a line mask based on the drawn area
-    uint8_t* dirtyness = malloc(ctx->display_width / 2);
-    assert(dirtyness != NULL);
-
-    memset(dirtyness, 0, ctx->display_width / 2);
-
-    for (int i = 0; i < ctx->display_width; i++) {
-        if ((i >= ctx->area.x) && (i < ctx->area.x + ctx->area.width)) {
-            dirtyness[i / 2] |= i % 2 ? 0xF0 : 0x0F;
+    // Same two-bit enable mask as epd_populate_line_mask, without a scratch allocation.
+    memset(ctx->line_mask, 0, ctx->display_width / 4);
+    for (int x = 0; x < ctx->display_width; x++) {
+        if (x >= ctx->area.x && x < ctx->area.x + ctx->area.width) {
+            ctx->line_mask[x / 4] |= 3U << (2 * (x & 3));
         }
     }
-    epd_populate_line_mask(ctx->line_mask, dirtyness, ctx->display_width / 4);
-
-    // mask the line pattern with the populated mask
     memset(ctx->static_line_buffer, fill_byte, ctx->display_width / 4);
     epd_apply_line_mask(ctx->static_line_buffer, ctx->line_mask, ctx->display_width / 4);
 
-    free(dirtyness);
 }
 
 void epd_push_pixels_lcd(RenderContext_t* ctx, short time, int color) {
     ctx->current_frame = 0;
     ctx->lines_total = ctx->display_height;
     ctx->lines_consumed = 0;
-    ctx->static_line_buffer = malloc(ctx->display_width / 4);
-    assert(ctx->static_line_buffer != NULL);
+    // Synchronous clear runs with both feed tasks idle. Borrow their existing
+    // buffer until frame_done; only the renderer owns/frees it.
+    ctx->static_line_buffer = ctx->feed_line_buffers[0];
 
     push_pixels_populate_line(ctx, color);
     epd_lcd_frame_done_cb((frame_done_func_t)handle_lcd_frame_done, ctx);
@@ -166,7 +160,6 @@ void epd_push_pixels_lcd(RenderContext_t* ctx, short time, int color) {
     xSemaphoreTake(ctx->frame_done, portMAX_DELAY);
     epd_set_mode(0);
 
-    free(ctx->static_line_buffer);
     ctx->static_line_buffer = NULL;
 }
 

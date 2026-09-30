@@ -27,9 +27,9 @@ typedef struct {
  */
 typedef struct {
     /**
-     * Initialize the board.
+     * Initialize the board. Return false on failure; deinit must tolerate partial initialization.
      */
-    void (*init)(uint32_t epd_row_width);
+    bool (*init)(uint32_t epd_row_width);
     /**
      * Clean up resources and peripherals used by the board.
      */

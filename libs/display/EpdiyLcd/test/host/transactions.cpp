@@ -47,7 +47,10 @@ int epd_width() { return 16; }
 int epd_height() { return 2; }
 EpdRect epd_full_screen() { return {0, 0, 16, 2}; }
 enum EpdRotation epd_get_rotation() { return EPD_ROT_LANDSCAPE; }
-void epd_init(const EpdBoardDefinition* b, const EpdDisplay_t*, enum EpdInitOptions) { board = b; }
+bool epd_init(const EpdBoardDefinition* b, const EpdDisplay_t*, enum EpdInitOptions) {
+  board = b;
+  return board->init(16);
+}
 void epd_deinit() {
   board->poweroff(nullptr);
   board->deinit();
@@ -58,7 +61,7 @@ void epd_clear() {
   assert(powered);
   ++clears;
 }
-void epd_lcd_init(const LcdEpdConfig_t*, int, int) {}
+esp_err_t epd_lcd_init(const LcdEpdConfig_t*, int, int) { return ESP_OK; }
 void epd_lcd_set_prefill_lines(int) {}
 void epd_lcd_deinit() {}
 void epd_leading_skip_discard() {}

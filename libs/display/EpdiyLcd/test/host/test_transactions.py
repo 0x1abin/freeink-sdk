@@ -3,7 +3,10 @@ from pathlib import Path
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
+
+sys.dont_write_bytecode = True
 
 HERE = Path(__file__).resolve().parent
 SDK = HERE.parents[4]
@@ -33,7 +36,7 @@ struct SerialStub { template<class... T> void printf(const char*,T...) {} };
 inline SerialStub Serial;
 """,
             "esp_attr.h": "#pragma once\n#define IRAM_ATTR\n",
-            "esp_err.h": "#pragma once\ntypedef int esp_err_t;\n",
+            "esp_err.h": "#pragma once\ntypedef int esp_err_t;\n#define ESP_OK 0\n#define ESP_FAIL -1\n#define ESP_ERR_NO_MEM 0x101\n",
             "esp_types.h": "#pragma once\n#include <stdint.h>\n",
             "esp_log.h": "#pragma once\n#define ESP_LOGE(...) ((void)0)\n#define ESP_LOGW(...) ((void)0)\n#define ESP_LOGI(...) ((void)0)\n",
             "esp_timer.h": "#pragma once\n#include <stdint.h>\nstatic inline int64_t esp_timer_get_time(void) { return 0; }\n",
@@ -118,7 +121,9 @@ inline void xSemaphoreGiveRecursive(SemaphoreHandle_t m) { m->unlock(); }
                         "-I" + str(board / "include"), "-I" + str(board / "src"),
                         str(HERE / "pmu.cpp"), "-o", str(binary)], check=True)
         subprocess.run([str(binary)], check=True)
-        print("Read Pico display, queue allocation and concurrent PMU checks passed")
+        from test_resources import run as run_resources
+        run_resources(root, includes)
+        print("Read Pico display, resource failures, clear masks and concurrent PMU checks passed")
 
 
 if __name__ == "__main__":

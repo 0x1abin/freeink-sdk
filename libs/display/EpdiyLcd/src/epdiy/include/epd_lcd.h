@@ -1,6 +1,7 @@
 #pragma once
 
 #include <driver/gpio.h>
+#include <esp_err.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -32,7 +33,7 @@ typedef struct {
     lcd_bus_config_t bus;
 } LcdEpdConfig_t;
 
-void epd_lcd_init(const LcdEpdConfig_t* config, int display_width, int display_height);
+esp_err_t epd_lcd_init(const LcdEpdConfig_t* config, int display_width, int display_height);
 void epd_lcd_deinit(void);
 void epd_lcd_set_pixel_clock_MHz(int frequency);
 void epd_lcd_set_line_timing(const LcdLineTiming_t* timing);

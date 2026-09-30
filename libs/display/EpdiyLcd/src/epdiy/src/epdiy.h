@@ -201,7 +201,7 @@ typedef struct {
 #include "epd_highlevel.h"
 
 /** Initialize the ePaper display */
-void epd_init(
+bool epd_init(
     const EpdBoardDefinition* board, const EpdDisplay_t* display, enum EpdInitOptions options
 );
 

@@ -1,3 +1,4 @@
+/* FreeInk local change (2026-09-30): recover partial initialization; reuse clear buffers. */
 #include "lcd_driver.h"
 #include "epdiy.h"
 
@@ -108,6 +109,11 @@ static portMUX_TYPE frame_start_spinlock = portMUX_INITIALIZER_UNLOCKED;
 
 typedef struct {
     lcd_hal_context_t hal;
+    bool peripheral_enabled;
+    bool gpio_attempted;
+    bool ckv_initialized;
+    bool dma_connected;
+    bool initialized;
     intr_handle_t vsync_intr;
     intr_handle_t done_intr;
 
@@ -359,6 +365,7 @@ static esp_err_t init_dma_trans_link() {
 #endif
     gdma_trigger_t trigger = GDMA_MAKE_TRIGGER(GDMA_TRIG_PERIPH_LCD, 0);
     ESP_RETURN_ON_ERROR(gdma_connect(lcd.dma_chan, trigger), TAG, "dma connect error");
+    lcd.dma_connected = true;
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(6, 0, 0)
     gdma_strategy_config_t dma_strategy = {
         .eof_till_data_popped = false,
@@ -389,9 +396,12 @@ static esp_err_t init_dma_trans_link() {
 }
 
 void deinit_dma_trans_link() {
+    if (lcd.dma_chan == NULL) return;
     gdma_reset(lcd.dma_chan);
-    gdma_disconnect(lcd.dma_chan);
+    if (lcd.dma_connected) gdma_disconnect(lcd.dma_chan);
     gdma_del_channel(lcd.dma_chan);
+    lcd.dma_chan = NULL;
+    lcd.dma_connected = false;
 }
 
 /**
@@ -410,15 +420,15 @@ static esp_err_t init_bus_gpio() {
     // connect peripheral signals via GPIO matrix
     for (size_t i = (16 - lcd.config.bus_width); i < 16; i++) {
         gpio_hal_func_sel(&hal, DATA_LINES[i], PIN_FUNC_GPIO);
-        gpio_set_direction(DATA_LINES[i], GPIO_MODE_OUTPUT);
+        ESP_RETURN_ON_ERROR(gpio_set_direction(DATA_LINES[i], GPIO_MODE_OUTPUT), TAG, "configure GPIO failed");
         esp_rom_gpio_connect_out_signal(DATA_LINES[i], LCD_PERIPH_SIG(data_sigs[i]), false, false);
     }
     gpio_hal_func_sel(&hal, lcd.config.bus.leh, PIN_FUNC_GPIO);
-    gpio_set_direction(lcd.config.bus.leh, GPIO_MODE_OUTPUT);
+    ESP_RETURN_ON_ERROR(gpio_set_direction(lcd.config.bus.leh, GPIO_MODE_OUTPUT), TAG, "configure GPIO failed");
     gpio_hal_func_sel(&hal, lcd.config.bus.clock, PIN_FUNC_GPIO);
-    gpio_set_direction(lcd.config.bus.clock, GPIO_MODE_OUTPUT);
+    ESP_RETURN_ON_ERROR(gpio_set_direction(lcd.config.bus.clock, GPIO_MODE_OUTPUT), TAG, "configure GPIO failed");
     gpio_hal_func_sel(&hal, lcd.config.bus.start_pulse, PIN_FUNC_GPIO);
-    gpio_set_direction(lcd.config.bus.start_pulse, GPIO_MODE_OUTPUT);
+    ESP_RETURN_ON_ERROR(gpio_set_direction(lcd.config.bus.start_pulse, GPIO_MODE_OUTPUT), TAG, "configure GPIO failed");
 
     esp_rom_gpio_connect_out_signal(lcd.config.bus.leh, LCD_PERIPH_SIG(hsync_sig), false, false);
     esp_rom_gpio_connect_out_signal(lcd.config.bus.clock, LCD_PERIPH_SIG(pclk_sig), false, false);
@@ -430,8 +440,8 @@ static esp_err_t init_bus_gpio() {
         .mode = GPIO_MODE_OUTPUT,
         .pin_bit_mask = 1ull << lcd.config.bus.stv,
     };
-    gpio_config(&vsync_gpio_conf);
-    gpio_set_level(lcd.config.bus.stv, 1);
+    ESP_RETURN_ON_ERROR(gpio_config(&vsync_gpio_conf), TAG, "configure GPIO failed");
+    ESP_RETURN_ON_ERROR(gpio_set_level(lcd.config.bus.stv, 1), TAG, "configure GPIO failed");
     return ESP_OK;
 }
 
@@ -565,6 +575,7 @@ static esp_err_t init_lcd_peripheral() {
     periph_module_reset(PERIPH_LCD_CAM_MODULE);
 #endif
 
+    lcd.peripheral_enabled = true;
     lcd_hal_init(&lcd.hal, 0);
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(6, 0, 0)
     // IDF 6 requires explicit clock-tree enable; otherwise PCLK can fall back to a slow source.
@@ -662,10 +673,17 @@ static esp_err_t init_lcd_peripheral() {
 
 static void deinit_lcd_peripheral() {
     // disable and free interrupts
-    esp_intr_disable(lcd.vsync_intr);
-    esp_intr_disable(lcd.done_intr);
-    esp_intr_free(lcd.vsync_intr);
-    esp_intr_free(lcd.done_intr);
+    if (!lcd.peripheral_enabled) return;
+    if (lcd.vsync_intr != NULL) {
+        esp_intr_disable(lcd.vsync_intr);
+        esp_intr_free(lcd.vsync_intr);
+        lcd.vsync_intr = NULL;
+    }
+    if (lcd.done_intr != NULL) {
+        esp_intr_disable(lcd.done_intr);
+        esp_intr_free(lcd.done_intr);
+        lcd.done_intr = NULL;
+    }
 
     lcd_ll_stop(lcd.hal.dev);
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(6, 0, 0)
@@ -694,48 +712,45 @@ static void deinit_lcd_peripheral() {
 /**
  * Configure the LCD driver for epdiy.
  */
-void epd_lcd_init(const LcdEpdConfig_t* config, int display_width, int display_height) {
+esp_err_t epd_lcd_init(const LcdEpdConfig_t* config, int display_width, int display_height) {
+    if (lcd.initialized) return ESP_OK;
     esp_err_t ret = ESP_OK;
     assign_lcd_parameters_from_config(config, display_width, display_height);
-
     ret = allocate_lcd_buffers();
     ESP_GOTO_ON_ERROR(ret, err, TAG, "lcd buffer allocation failed");
-
     ret = init_lcd_peripheral();
     ESP_GOTO_ON_ERROR(ret, err, TAG, "lcd peripheral init failed");
-
     ret = init_dma_trans_link();
     ESP_GOTO_ON_ERROR(ret, err, TAG, "install DMA failed");
-
+    lcd.gpio_attempted = true;
     ret = init_bus_gpio();
     ESP_GOTO_ON_ERROR(ret, err, TAG, "configure GPIO failed");
-
     init_ckv_rmt();
-
-    // setup driver state
+    lcd.ckv_initialized = true;
     epd_lcd_set_pixel_clock_MHz(lcd.config.pixel_clock / 1000 / 1000);
     epd_lcd_line_source_cb(NULL, NULL);
-
+    lcd.initialized = true;
     ESP_LOGI(TAG, "LCD init done.");
-    return;
+    return ESP_OK;
 err:
-    ESP_LOGE(TAG, "LCD initialization failed!");
-    abort();
+    ESP_LOGE(TAG, "LCD initialization failed (%d)", ret);
+    epd_lcd_deinit();
+    return ret;
 }
 
-/**
- * Deinitializue the LCD driver, i.e., free resources and peripherals.
- */
 void epd_lcd_deinit() {
     epd_lcd_line_source_cb(NULL, NULL);
-
-    deinit_bus_gpio();
+    epd_lcd_frame_done_cb(NULL, NULL);
+    // Interrupts/peripheral must stop before their DMA buffers are released.
     deinit_lcd_peripheral();
+    lcd.peripheral_enabled = false;
     deinit_dma_trans_link();
+    if (lcd.ckv_initialized) deinit_ckv_rmt();
+    lcd.ckv_initialized = false;
+    if (lcd.gpio_attempted) deinit_bus_gpio();
+    lcd.gpio_attempted = false;
     free_lcd_buffers();
-    deinit_ckv_rmt();
-
-    ESP_LOGI(TAG, "LCD deinitialized.");
+    lcd.initialized = false;
 }
 
 void epd_lcd_set_line_timing(const LcdLineTiming_t* timing) {
@@ -846,8 +861,8 @@ void IRAM_ATTR epd_lcd_start_frame() {
 #else
 
 /// Dummy implementation to link on the old ESP32
-void epd_lcd_init(const LcdEpdConfig_t* config, int display_width, int display_height) {
-    assert(false);
+esp_err_t epd_lcd_init(const LcdEpdConfig_t* config, int display_width, int display_height) {
+    return ESP_ERR_NOT_SUPPORTED;
 }
 
 #endif  // S3 Target
