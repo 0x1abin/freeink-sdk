@@ -28,4 +28,8 @@ int main() {
   panel.join();
   input.join();
   assert(Wire.commands == 61 && !Wire.inFlight);
+#if FREEINK_READPICO_DIAGNOSTICS
+  assert(BoardReadPico::g_pmuTiming.commands == 60);
+  assert(BoardReadPico::g_pmuTiming.maxHoldUs >= 1000);
+#endif
 }

@@ -104,20 +104,31 @@ inline void xSemaphoreGiveRecursive(SemaphoreHandle_t m) { m->unlock(); }
         queue_check = root / "queue-check.o"
         subprocess.run(["cc", "-std=c11", *flags, "-c", str(HERE / "queue.c"),
                         "-o", str(queue_check)], check=True)
-        binary = root / "display-test"
-        subprocess.run(["c++", "-std=c++20", *flags, "-DFREEINK_EPDIY_LCD_CONFIG=testConfig",
-                        str(HERE / "transactions.cpp"), str(LCD / "src/EpdiyLcd.cpp"),
-                        str(display / "src/driver/EpdiyLcdDriver.cpp"), str(highlevel), str(queue), str(queue_check),
-                        "-Wl,--wrap=calloc", "-o", str(binary)], check=True)
-        subprocess.run([str(binary)], check=True)
-        subprocess.run([str(binary), "boot-power-failure"], check=True)
-        subprocess.run([str(binary), "highlevel"], check=True)
-        for allocation in range(1, 8):
-            subprocess.run([str(binary), "oom", str(allocation)], check=True)
+        for diagnostics in (0, 1):
+            binary = root / f"display-test-{diagnostics}"
+            subprocess.run(["c++", "-std=c++20", *flags, "-DFREEINK_EPDIY_LCD_CONFIG=testConfig",
+                        f"-DFREEINK_READPICO_DIAGNOSTICS={diagnostics}",
+                            str(HERE / "transactions.cpp"), str(LCD / "src/EpdiyLcd.cpp"),
+                            str(display / "src/driver/EpdiyLcdDriver.cpp"), str(highlevel), str(queue), str(queue_check),
+                            "-Wl,--wrap=calloc", "-o", str(binary)], check=True)
+            subprocess.run([str(binary)], check=True)
+            subprocess.run([str(binary), "boot-power-failure"], check=True)
+            subprocess.run([str(binary), "highlevel"], check=True)
+            for allocation in range(1, 8):
+                subprocess.run([str(binary), "oom", str(allocation)], check=True)
         (root / "Wire.h").write_text((HERE / "pmu_wire.h").read_text())
+        (root / "esp_timer.h").write_text("""#pragma once
+#include <stdint.h>
+#ifdef __cplusplus
+#include <chrono>
+static inline int64_t esp_timer_get_time() { return std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
+#else
+static inline int64_t esp_timer_get_time(void) { return 0; }
+#endif
+""")
         board = SDK / "libs/hardware/BoardReadPico"
         binary = root / "pmu-test"
-        subprocess.run(["c++", "-std=c++20", "-pthread", "-I" + str(root),
+        subprocess.run(["c++", "-std=c++20", "-pthread", "-DFREEINK_READPICO_DIAGNOSTICS=1", "-I" + str(root),
                         "-I" + str(board / "include"), "-I" + str(board / "src"),
                         str(HERE / "pmu.cpp"), "-o", str(binary)], check=True)
         subprocess.run([str(binary)], check=True)

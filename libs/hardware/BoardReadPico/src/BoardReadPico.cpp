@@ -11,6 +11,9 @@
 #include <Wire.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
+#if FREEINK_READPICO_DIAGNOSTICS
+#include <esp_timer.h>
+#endif
 
 #include <atomic>
 #include <cstdarg>
@@ -288,11 +291,43 @@ bool pmuReadResponseFor(uint16_t seq, uint8_t* raw) {
   return false;
 }
 
+#if FREEINK_READPICO_DIAGNOSTICS
+struct PmuTimingStats {
+  uint32_t commands = 0, maxWaitUs = 0, maxHoldUs = 0;
+};
+PmuTimingStats g_pmuTiming;
+// Declared after ScopedI2CLock, so this runs before the bus lock is released,
+// including all early returns. Stats are serialized by that existing lock.
+class PmuTiming {
+  int64_t acquiredUs_;
+  uint32_t waitUs_;
+
+ public:
+  explicit PmuTiming(int64_t waitingUs) : acquiredUs_(esp_timer_get_time()), waitUs_(acquiredUs_ - waitingUs) {}
+  ~PmuTiming() {
+    const uint32_t holdUs = esp_timer_get_time() - acquiredUs_;
+    ++g_pmuTiming.commands;
+    if (waitUs_ > g_pmuTiming.maxWaitUs) g_pmuTiming.maxWaitUs = waitUs_;
+    if (holdUs > g_pmuTiming.maxHoldUs) g_pmuTiming.maxHoldUs = holdUs;
+    logLine("[RDP] PMU #%lu wait=%luus hold=%luus max_wait=%luus max_hold=%luus\r\n",
+            static_cast<unsigned long>(g_pmuTiming.commands), static_cast<unsigned long>(waitUs_),
+            static_cast<unsigned long>(holdUs), static_cast<unsigned long>(g_pmuTiming.maxWaitUs),
+            static_cast<unsigned long>(g_pmuTiming.maxHoldUs));
+  }
+};
+#endif
+
 // ponytail: hold the existing bus lock through the PMU round trip; use a
 // separate PMU lock if the bounded response wait becomes a touch-latency issue.
 bool pmuCommand(uint16_t code, const uint8_t* payload, uint8_t plen, uint8_t* responsePayload = nullptr,
                 uint8_t* responseLength = nullptr) {
+#if FREEINK_READPICO_DIAGNOSTICS
+  const int64_t waitingUs = esp_timer_get_time();
+#endif
   ScopedI2CLock lock;
+#if FREEINK_READPICO_DIAGNOSTICS
+  PmuTiming timing(waitingUs);
+#endif
   if (responseLength != nullptr) *responseLength = 0;
   if (!g_pmuPresent || plen > kPmuPayloadSize || (plen != 0 && payload == nullptr)) return false;
 

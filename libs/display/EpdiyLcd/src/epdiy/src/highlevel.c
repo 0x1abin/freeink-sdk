@@ -100,6 +100,7 @@ enum EpdDrawError epd_hl_update_screen_full(
     EpdiyHighlevelState* state, enum EpdDrawMode mode, int temperature
 ) {
     assert(state != NULL);
+    hl_record_timing(0, 0, 0);
 
     EpdRect area = epd_full_screen();
     uint32_t ts = esp_timer_get_time() / 1000;
@@ -136,7 +137,10 @@ enum EpdDrawError epd_hl_update_screen_full(
 
     uint32_t t2 = esp_timer_get_time() / 1000;
 
-    if (err != EPD_DRAW_SUCCESS) return err;
+    if (err != EPD_DRAW_SUCCESS) {
+        hl_record_timing(t1 - ts, t2 - t1, 0);
+        return err;
+    }
     memcpy(state->back_fb, state->front_fb, (size_t)col_bytes * fb_height);
 
     uint32_t t3 = esp_timer_get_time() / 1000;
@@ -234,6 +238,7 @@ static enum EpdDrawError hl_update_area(
     }
 
     if (diff_area.height == 0 || diff_area.width == 0) {
+        hl_record_timing(esp_timer_get_time() / 1000 - ts, 0, 0);
         epd_leading_skip_discard();
         return EPD_DRAW_SUCCESS;
     }
@@ -259,7 +264,10 @@ static enum EpdDrawError hl_update_area(
 
     uint32_t t2 = esp_timer_get_time() / 1000;
 
-    if (err != EPD_DRAW_SUCCESS) return err;
+    if (err != EPD_DRAW_SUCCESS) {
+        hl_record_timing(t1 - ts, t2 - t1, 0);
+        return err;
+    }
     // 回写范围和差分实际算过的列段一致：段外的像素没被驱动，back_fb 不能跟着改。
     int x_start, x_stop;
     epd_difference_column_range(area, &x_start, &x_stop);
@@ -320,6 +328,7 @@ enum EpdDrawError epd_hl_update_area_full(
 
 void epd_hl_set_all_white(EpdiyHighlevelState* state) {
     assert(state != NULL);
+    hl_record_timing(0, 0, 0);
     int fb_size = epd_width() / 2 * epd_height();
     memset(state->front_fb, 0xFF, fb_size);
 }

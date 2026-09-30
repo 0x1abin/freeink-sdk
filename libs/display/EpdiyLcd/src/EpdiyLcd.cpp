@@ -9,6 +9,9 @@
 
 #include <EpdiyLcd.h>
 #include <esp_heap_caps.h>
+#if FREEINK_READPICO_DIAGNOSTICS
+#include <esp_timer.h>
+#endif
 #include <esp_log.h>
 
 #include <cstring>
@@ -277,6 +280,17 @@ void fillFrom1bpp(const uint8_t* fb) {
   }
 }
 
+#if FREEINK_READPICO_DIAGNOSTICS
+struct FrameTimingStats {
+  uint32_t frames = 0, convertUs = 0, maxConvertUs = 0;
+};
+FrameTimingStats g_frameTiming;
+void recordConversion(int64_t startedUs) {
+  g_frameTiming.convertUs = esp_timer_get_time() - startedUs;
+  if (g_frameTiming.convertUs > g_frameTiming.maxConvertUs) g_frameTiming.maxConvertUs = g_frameTiming.convertUs;
+}
+#endif
+
 bool pushFrame(EpdiyLcdRefresh mode, bool turnOff) {
   epd_poweron();
   if (!g_powerReady) {
@@ -293,6 +307,15 @@ bool pushFrame(EpdiyLcdRefresh mode, bool turnOff) {
   const int temperature = static_cast<int>(panelTemperature());
   const auto err = mode == EpdiyLcdRefresh::Full ? epd_hl_update_screen_full(&g_hl, drawModeFor(mode), temperature)
                                                  : epd_hl_update_screen(&g_hl, drawModeFor(mode), temperature);
+#if FREEINK_READPICO_DIAGNOSTICS
+  int diffMs, drawMs, copyMs;
+  epd_hl_last_timing(&diffMs, &drawMs, &copyMs);
+  ++g_frameTiming.frames;
+  ESP_LOGI("EpdiyLcd", "frame #%u mode=%u result=%u convert=%uus max_convert=%uus diff=%dms scan=%dms copy=%dms",
+           static_cast<unsigned>(g_frameTiming.frames), static_cast<unsigned>(mode), static_cast<unsigned>(err),
+           static_cast<unsigned>(g_frameTiming.convertUs), static_cast<unsigned>(g_frameTiming.maxConvertUs), diffMs,
+           drawMs, copyMs);
+#endif
   g_baselineKnown = err == EPD_DRAW_SUCCESS;
   if (!g_baselineKnown) ESP_LOGE("EpdiyLcd", "Frame failed (%u); clean retry required", static_cast<unsigned>(err));
   if (turnOff || !g_baselineKnown) epd_poweroff();
@@ -304,6 +327,9 @@ bool pushFrame(EpdiyLcdRefresh mode, bool turnOff) {
 bool epdiyLcdDraw(const uint8_t* fb, EpdiyLcdRefresh mode, bool turnOff) {
   if (!g_started || fb == nullptr || g_fb4 == nullptr || g_cfg == nullptr) return false;
 
+#if FREEINK_READPICO_DIAGNOSTICS
+  const int64_t conversionStartedUs = esp_timer_get_time();
+#endif
   // 留一份底图：AA 的 displayGray() 提交时调用方的缓冲已经变成选择平面了。
   // / Keep a base copy: by the time the AA displayGray() commit runs, the caller's
   // buffer has become a selector plane.
@@ -311,6 +337,9 @@ bool epdiyLcdDraw(const uint8_t* fb, EpdiyLcdRefresh mode, bool turnOff) {
   if (g_base != nullptr) memcpy(g_base, fb, bytes);
 
   fillFrom1bpp(fb);
+#if FREEINK_READPICO_DIAGNOSTICS
+  recordConversion(conversionStartedUs);
+#endif
   return pushFrame(mode, turnOff);
 }
 
@@ -327,6 +356,9 @@ bool epdiyLcdDrawGray(const uint8_t* lsb, const uint8_t* msb, EpdiyLcdRefresh mo
   if (!g_started || g_fb4 == nullptr || g_cfg == nullptr) return false;
   if (g_base == nullptr || lsb == nullptr || msb == nullptr) return false;
 
+#if FREEINK_READPICO_DIAGNOSTICS
+  const int64_t conversionStartedUs = esp_timer_get_time();
+#endif
   // The existing 2-bit coverage maps directly to four panel tones. A set base
   // bit is white (15); selector masks choose the two calibrated mid tones.
   constexpr uint8_t kDarkGray = 3;   // 2-bit 值 1（深灰）/ 2-bit value 1 (dark)
@@ -359,6 +391,9 @@ bool epdiyLcdDrawGray(const uint8_t* lsb, const uint8_t* msb, EpdiyLcdRefresh mo
     }
   }
 
+#if FREEINK_READPICO_DIAGNOSTICS
+  recordConversion(conversionStartedUs);
+#endif
   return pushFrame(mode, turnOff);
 }
 
