@@ -2056,7 +2056,7 @@ constexpr BoardProfile READ_PICO = {
     1.2f,  // uiScale: touch device — STARTING VALUE, pending on-hardware measurement
     {},    // power: no latch, no charge enable — the PMU owns the host enable rail
     0,     // displayControllerVariant: not probed on this panel
-    {}     // viewableInsets: struct defaults; measure the CNC bezel on hardware
+    {9, 3, 24, 3}  // portrait TRBL: provisional bottom clearance; measure the CNC bezel
 };
 
 static_assert(READ_PICO.displayWidth / 8 * READ_PICO.displayHeight == 103968,
