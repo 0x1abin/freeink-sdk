@@ -18,7 +18,14 @@ int main() {
   std::thread panel([] {
     for (int i = 0; i < 30; ++i) assert(BoardReadPico::pmuVcomMv() == 1500);
   });
+  std::thread input([] {
+    for (int i = 0; i < 30; ++i) {
+      assert(BoardReadPico::pmuPoll());
+      assert(BoardReadPico::keyStripHook() == (1U << InputManager::BTN_POWER));
+    }
+  });
   clock.join();
   panel.join();
-  assert(Wire.commands == 60 && !Wire.inFlight);
+  input.join();
+  assert(Wire.commands == 61 && !Wire.inFlight);
 }

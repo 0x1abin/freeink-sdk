@@ -12,6 +12,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
+#include <atomic>
 #include <cstdarg>
 #include <cstring>
 
@@ -139,16 +140,18 @@ constexpr size_t kPmuEventSize = 16;
 constexpr size_t kPmuQuickBatterySize = 8;
 constexpr uint16_t kPmuSocUnknown = 0xFFFF;
 
-uint16_t g_pmuSeq = 1;          // first request sequence; 0 is skipped
-uint32_t g_pmuBootId = 0;       // IDENTITY session_id; survives an ESP-only reset
-uint16_t g_pmuLastEventId = 0;  // STATUS.last_event_id
-uint8_t g_pmuPowerState = 0xFF;
-uint8_t g_pmuPendingEvents = 0;
+uint16_t g_pmuSeq = 1;     // first request sequence; 0 is skipped
+uint32_t g_pmuBootId = 0;  // IDENTITY session_id; survives an ESP-only reset
+// Input polling reads these caches outside command transactions; recovery may
+// publish new values on the display/RTC task while the input task is running.
+std::atomic<uint16_t> g_pmuLastEventId{0};  // STATUS.last_event_id
+std::atomic<uint8_t> g_pmuPowerState{0xFF};
+std::atomic<uint8_t> g_pmuPendingEvents{0};
 // STATUS.flags bit 5: the PMU power key is held right now. Only ever written by
 // a successful STATUS parse; keyStripHook() clears it when a poll fails so a
 // dropped I2C read cannot look like a stuck key.
-bool g_pmuKeyDown = false;
-bool g_pmuPresent = false;
+std::atomic<bool> g_pmuKeyDown{false};
+std::atomic<bool> g_pmuPresent{false};
 
 // ---------------------------------------------------------------------------
 // Key-strip latch. InputManager::ButtonHook takes no arguments and the CST836U
@@ -575,10 +578,10 @@ bool pmuInit() {
     return true;  // the PMU answered; the handshake is retried on demand
   }
   if (!pmuWaitPowerState(kPmuPwrRunning, 1000)) {
-    logLine("[RDP] PMU not RUNNING after HOST_READY (state %u)\r\n", g_pmuPowerState);
+    logLine("[RDP] PMU not RUNNING after HOST_READY (state %u)\r\n", g_pmuPowerState.load());
   }
   logLine("[RDP] PMU ready proto/fw parsed, session=%08lX state=%u\r\n", static_cast<unsigned long>(g_pmuBootId),
-          g_pmuPowerState);
+          g_pmuPowerState.load());
   return true;
 }
 
@@ -823,10 +826,13 @@ bool pmuPowerOff() {
   }
 
   if (!pending) {
-    logLine("[RDP] PMU never reached SHUTDOWN_PENDING (state %u)\r\n", g_pmuPowerState);
+    logLine("[RDP] PMU never reached SHUTDOWN_PENDING (state %u)\r\n", g_pmuPowerState.load());
     return false;
   }
-  if (eventId == 0) eventId = g_pmuLastEventId != 0 ? g_pmuLastEventId : 1;
+  if (eventId == 0) {
+    const uint16_t lastEventId = g_pmuLastEventId.load();
+    eventId = lastEventId != 0 ? lastEventId : 1;
+  }
 
   uint8_t ready[2];
   wr16(ready, eventId);
