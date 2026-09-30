@@ -3,6 +3,7 @@
 #include <Arduino.h>
 #include <BoardConfig.h>
 #include <driver/gpio.h>
+#include <driver/rtc_io.h>
 #include <esp_sleep.h>
 #include <esp_system.h>
 #include <soc/soc_caps.h>
@@ -14,7 +15,7 @@ namespace freeink {
 namespace {
 int8_t powerPin() { return BoardConfig::ACTIVE.input.power; }
 bool powerActiveHigh() { return BoardConfig::ACTIVE.input.powerActiveHigh; }
-
+PowerManager::HostShutdownHook g_hostShutdownHook = nullptr;
 // Records a deepSleep() abort (see deepSleep()) across the esp_restart() that
 // follows it, so the next boot can report it via takeAbortedSleepInfo().
 // RTC_NOINIT_ATTR survives esp_restart() (a warm reset, same RTC-memory domain)
@@ -27,6 +28,58 @@ struct AbortedSleepRecord {
   int wakePinLevel;
 };
 }  // namespace
+
+void PowerManager::setHostShutdownHook(const HostShutdownHook hook) { g_hostShutdownHook = hook; }
+
+bool PowerManager::isDeepSleepWakePin(const int8_t pin) {
+  if (pin < 0) return false;
+#if SOC_PM_SUPPORT_EXT1_WAKEUP
+  // Xtensa (S3/S2, classic ESP32): ext1 can only arm an RTC-capable pad, so a
+  // digital-only line (Read Pico FCA9555 INT# = GPIO41, CST836U INT# = GPIO43)
+  // is out by construction, not by policy.
+  return rtc_gpio_is_valid_gpio(static_cast<gpio_num_t>(pin));
+#elif SOC_GPIO_SUPPORT_DEEPSLEEP_WAKEUP
+  // RISC-V (C3/C6/H2): the deep-sleep "gpio" source takes ordinary digital pins.
+  return static_cast<gpio_num_t>(pin) < GPIO_NUM_MAX;
+#else
+  return false;
+#endif
+}
+
+bool PowerManager::armLightSleepWakeupLevels(const uint64_t lowMask, const uint64_t highMask) {
+  bool armed = false;
+  for (uint8_t pin = 0; pin < static_cast<uint8_t>(GPIO_NUM_MAX); ++pin) {
+    const uint64_t bit = 1ULL << pin;
+    if ((lowMask & bit) == 0 && (highMask & bit) == 0) continue;
+    const esp_err_t err = gpio_wakeup_enable(static_cast<gpio_num_t>(pin),
+                                             (lowMask & bit) != 0 ? GPIO_INTR_LOW_LEVEL : GPIO_INTR_HIGH_LEVEL);
+    if (err != ESP_OK) {
+      clearLightSleepWakeup(lowMask | highMask);
+      return false;
+    }
+    armed = true;
+  }
+  if (!armed) return false;
+  if (esp_sleep_enable_gpio_wakeup() != ESP_OK) {
+    clearLightSleepWakeup(lowMask | highMask);
+    return false;
+  }
+  return true;
+}
+
+bool PowerManager::armLightSleepWakeup(const uint64_t gpioMask, const bool wakeLow) {
+  return armLightSleepWakeupLevels(wakeLow ? gpioMask : 0ULL, wakeLow ? 0ULL : gpioMask);
+}
+
+void PowerManager::clearLightSleepWakeup(const uint64_t gpioMask) {
+  for (uint8_t pin = 0; pin < static_cast<uint8_t>(GPIO_NUM_MAX); ++pin) {
+    if ((gpioMask & (1ULL << pin)) == 0) continue;
+    (void)gpio_wakeup_disable(static_cast<gpio_num_t>(pin));
+  }
+  // The level triggers above are per pin, but the wakeup SOURCE is shared: it has
+  // to be disabled as well, or the next light sleep would still be armed.
+  (void)esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_GPIO);
+}
 
 RTC_NOINIT_ATTR uint32_t abortedSleepMagic;
 RTC_NOINIT_ATTR AbortedSleepRecord abortedSleepRecord;
@@ -121,6 +174,16 @@ void PowerManager::powerDownRailsForSleep() {
 }
 
 void PowerManager::deepSleep() {
+  if (g_hostShutdownHook != nullptr) {
+    // The board supports no ESP-side deep-sleep wake source (its "off" is a
+    // PMU-driven host shutdown), so esp_deep_sleep_start() would strand the chip.
+    // Hand the shutdown to the board; a return means the rail was never cut, and
+    // there is nothing left that could wake this board, so idle rather than sleep.
+    g_hostShutdownHook();
+    while (true) {
+      delay(1000);
+    }
+  }
   esp_sleep_config_gpio_isolate();
 #if !FREEINK_MCU_C61
   gpio_deep_sleep_hold_en();

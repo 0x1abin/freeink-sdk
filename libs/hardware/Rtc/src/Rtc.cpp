@@ -4,6 +4,15 @@
 
 #include <BoardConfig.h>
 
+namespace {
+// Board-supplied PMU time source (BoardConfig::RtcType::Cw32L010Pmu). Kept
+// outside the FREEINK_CAP_RTC guard so a capability-off build still links the
+// setter the board support library calls from its own begin().
+Rtc::PmuTimeHooks g_pmuTimeHooks = {};
+}  // namespace
+
+void Rtc::setPmuTimeHooks(const PmuTimeHooks& hooks) { g_pmuTimeHooks = hooks; }
+
 #if FREEINK_CAP_RTC
 
 #include <Wire.h>
@@ -46,6 +55,20 @@ constexpr uint8_t RX8130_STOP = 0x01;
 constexpr uint8_t RX8010_REG_TIME = 0x10;
 constexpr uint8_t RX8010_REG_FLAG = 0x1E;
 constexpr uint8_t RX8010_FLAG_VLF = 0x02;
+
+// Calendar -> unix seconds in UTC, for the PMU RTC (which speaks unix seconds
+// rather than BCD fields). mktime() is local-time and timegm() is not declared
+// by the newlib <time.h> this project builds against, so the civil-days formula
+// is the only timezone-independent route. HalClock.cpp carries the same copy for
+// its own epoch conversions.
+int64_t daysFromCivil(int year, unsigned month, unsigned day) {
+  year -= month <= 2;
+  const int era = (year >= 0 ? year : year - 399) / 400;
+  const unsigned yearOfEra = static_cast<unsigned>(year - era * 400);
+  const unsigned dayOfYear = (153 * (month + (month > 2 ? -3 : 9)) + 2) / 5 + day - 1;
+  const unsigned dayOfEra = yearOfEra * 365 + yearOfEra / 4 - yearOfEra / 100 + dayOfYear;
+  return static_cast<int64_t>(era) * 146097 + static_cast<int64_t>(dayOfEra) - 719468;
+}
 
 bool g_wireReady[2] = {false, false};
 
@@ -127,7 +150,10 @@ bool Rtc::begin() {
     return true;
   }
 #endif
-  ensureWire();
+  // The PMU RTC is not on the Wire register interface at all: the board owns the
+  // CW32L010 frame protocol and its own bus bring-up, so re-begin()ing Wire here
+  // would only reconfigure a bus the board handshake already set up.
+  if (s.rtcType != BoardConfig::RtcType::Cw32L010Pmu) ensureWire();
   uint8_t status = 0;
   switch (s.rtcType) {
     case BoardConfig::RtcType::Pcf8563:
@@ -148,6 +174,17 @@ bool Rtc::begin() {
       break;
     case BoardConfig::RtcType::Rx8010:
       return false;
+    case BoardConfig::RtcType::Cw32L010Pmu:
+      // The hooks are installed by the board support library AFTER its own PMU
+      // handshake, so their presence is the "device answers" signal every other
+      // case proves with a register read here. Availability itself is not a
+      // promise that the PMU's clock is calibrated: an unsynced or absent PMU
+      // still fails every now()/set() below, which is exactly the documented
+      // failure semantics (HalClock then keeps the software clock and logs the
+      // failed write). Refusing here instead would make the write path
+      // unreachable, so the PMU RTC could never be set or restored at all.
+      if (g_pmuTimeHooks.getUnix == nullptr || g_pmuTimeHooks.setUnix == nullptr) return false;
+      break;
     case BoardConfig::RtcType::None:
       return false;
   }
@@ -247,6 +284,29 @@ bool Rtc::now(DateTime& out) {
       return false;
 #endif
     }
+    case BoardConfig::RtcType::Cw32L010Pmu: {
+      // PMU_CMD_TIME_GET: unix seconds (0 = never calibrated) plus the PMU's own
+      // `synced` flag (read_pico_pmu_protocol.h). Like the VL / POR / OSF checks
+      // in the register-map cases above, an unsynced or zero clock means the time
+      // is not trustworthy, so this reports "no time" and the consumer falls back
+      // to the software clock rather than restoring a bogus epoch.
+      if (g_pmuTimeHooks.getUnix == nullptr) return false;
+      uint32_t unixSec = 0;
+      bool synced = false;
+      if (!g_pmuTimeHooks.getUnix(unixSec, synced)) return false;
+      if (!synced || unixSec == 0) return false;
+      struct tm utc {};
+      const time_t epoch = static_cast<time_t>(unixSec);
+      if (gmtime_r(&epoch, &utc) == nullptr) return false;
+      out.year = static_cast<uint16_t>(utc.tm_year + 1900);
+      out.month = static_cast<uint8_t>(utc.tm_mon + 1);
+      out.day = static_cast<uint8_t>(utc.tm_mday);
+      out.hour = static_cast<uint8_t>(utc.tm_hour);
+      out.minute = static_cast<uint8_t>(utc.tm_min);
+      out.second = static_cast<uint8_t>(utc.tm_sec);
+      out.weekday = static_cast<uint8_t>(utc.tm_wday);
+      return true;
+    }
     case BoardConfig::RtcType::None:
       return false;
   }
@@ -257,6 +317,23 @@ bool Rtc::set(const DateTime& dt) {
   const uint8_t addr = BoardConfig::ACTIVE.sensors.rtcAddr;
   if (!begun_ || addr == 0) return false;
   const auto& s = BoardConfig::ACTIVE.sensors;
+  if (s.rtcType == BoardConfig::RtcType::Cw32L010Pmu) {
+    // PMU_CMD_TIME_SYNC takes unix seconds, so the calendar has to be converted
+    // here. Unix seconds cannot express a year before 1970, and the register-map
+    // branches above already reject an implausible year (PCF85063: <2000/>2099);
+    // the same bound plus field sanity keeps a nonsense DateTime out of the PMU
+    // instead of writing a wrapped epoch. A failed write is the caller's to log:
+    // HalClock keeps the system clock and only reports the persistence failure.
+    if (g_pmuTimeHooks.setUnix == nullptr) return false;
+    if (dt.year < 2000 || dt.year > 2099 || dt.month < 1 || dt.month > 12 || dt.day < 1 || dt.day > 31 ||
+        dt.hour > 23 || dt.minute > 59 || dt.second > 59) {
+      return false;
+    }
+    const int64_t seconds = daysFromCivil(dt.year, dt.month, dt.day) * 86400 + static_cast<int64_t>(dt.hour) * 3600 +
+                            static_cast<int64_t>(dt.minute) * 60 + dt.second;
+    if (seconds <= 0 || seconds > 0xFFFFFFFFLL) return false;
+    return g_pmuTimeHooks.setUnix(static_cast<uint32_t>(seconds));
+  }
   if (s.rtcType == BoardConfig::RtcType::Pcf85063) {
     if (dt.year < 2000 || dt.year > 2099) return false;
     ensureWire();

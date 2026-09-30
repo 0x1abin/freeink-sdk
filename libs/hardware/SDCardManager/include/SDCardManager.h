@@ -79,6 +79,25 @@ class SDCardManager {
   using PowerHook = void (*)();
   void setPowerHook(PowerHook hook) { _powerHook = hook; }
 
+  // NO CARD-DETECT HOOK — a deliberate round-1 decision, not an omission.
+  // Boards can carry a card-detect line that is not an ESP GPIO (Read Pico:
+  // FCA9555 P0.6, active-low, read by the board support library), and the
+  // reference firmware for that board skips the mount entirely when it reads
+  // "absent". This manager still mounts BY ATTEMPT on every target instead:
+  //   * a detect-gated mount would need a second board hook here, and the frozen
+  //     port contract (docs/engineering/read-pico.md §5.3 B11) keeps round 1 on
+  //     mount-by-attempt;
+  //   * an I2C read issued from inside begin() would put an expander transfer on
+  //     the SD bring-up path for every board that has one, not just this board;
+  //   * consumers that want a UI hint read the board's own presence query
+  //     (BoardReadPico::sdCardPresent()) directly — golden rule: HAL/board
+  //     access, never a raw expander read from an activity.
+  // The cost of skipping the gate on a cardless unit is the retry cycle in
+  // begin(); nothing measures it yet. If a cardless boot turns out to be slow
+  // enough to matter, add `using CardDetectHook = bool (*)();` +
+  // `setCardDetectHook()` right here and skip the mount when it returns false —
+  // that is the shape this file would take, not a board name in this library.
+
   // The raw block device (512-byte sector I/O) backing the volume, for exposing
   // the card over USB-MSC ("USB Transfer" mode). Null until begin() succeeds.
   // Do NOT touch the filesystem while the card is handed to the USB host.

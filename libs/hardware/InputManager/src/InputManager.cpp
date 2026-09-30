@@ -18,6 +18,10 @@
 #if FREEINK_DEVICE_MURPHY_M4
 #include <MurphyM4I2c.h>
 #endif
+#if FREEINK_DEVICE_READPICO
+#include <BoardReadPico.h>
+#include <esp_rom_sys.h>
+#endif
 #endif
 #if FREEINK_DEVICE_PAPERMONO
 #include <PaperMonoBoard.h>
@@ -51,7 +55,7 @@ const char* InputManager::BUTTON_NAMES[] = {"Back", "Confirm", "Left", "Right", 
 namespace {
 int absInt(const int value) { return value < 0 ? -value : value; }
 
-#if FREEINK_DEVICE_EEGO_A4 || FREEINK_DEVICE_MURPHY_M4 || FREEINK_DEVICE_METALIO_EINK4
+#if FREEINK_DEVICE_EEGO_A4 || FREEINK_DEVICE_MURPHY_M4 || FREEINK_DEVICE_METALIO_EINK4 || FREEINK_DEVICE_READPICO
 bool movedBeyondSlop(const int dx, const int dy, const int slop) {
   return absInt(dx) > slop || absInt(dy) > slop;
 }
@@ -708,7 +712,8 @@ InputManager::TouchPoint InputManager::getTouchPoint() const { return touchPoint
 
 bool InputManager::supportsMultiTouch() const {
 #if FREEINK_CAP_TOUCH
-  return touchDataEnabled && BoardConfig::ACTIVE.touch.controller == BoardConfig::TouchController::Gt911;
+  return touchDataEnabled && (BoardConfig::ACTIVE.touch.controller == BoardConfig::TouchController::Gt911 ||
+                              BoardConfig::ACTIVE.touch.controller == BoardConfig::TouchController::Cst836u);
 #else
   return false;
 #endif
@@ -1364,6 +1369,23 @@ void InputManager::prepareForDeepSleep() {
       touchDataEnabled = false;
 #endif
       return;
+    case BoardConfig::TouchController::Cst836u:
+#if FREEINK_DEVICE_READPICO
+      // Deep sleep command 0xA503 goes through the board (the expander owns RST
+      // and the chip stops ACKing I2C once asleep). Clearing the contact state
+      // here keeps the last frame from looking like a held finger while the chip
+      // is down; beginCst836u() re-pulses RST before the first read on wake.
+      if (touchDataEnabled && !BoardReadPico::touchSleep())
+        esp_rom_printf("[touch] CST836U sleep command failed\r\n");
+      BoardReadPico::setStripRawPoint(0, 0, false);
+      touchDataEnabled = false;
+      touchPressed = false;
+      touchPoint.valid = false;
+      touchSnapshot.count = 0;
+      touchSnapshot.reportedCount = 0;
+      resetMultiTouchGesture();
+#endif
+      return;
     case BoardConfig::TouchController::None:
     case BoardConfig::TouchController::Chsc6x:
     case BoardConfig::TouchController::Gt911:
@@ -1404,6 +1426,12 @@ void InputManager::beginTouch() {
 #if FREEINK_DEVICE_MURPHY_M4
   if (t.controller == BoardConfig::TouchController::Ft6336u) {
     beginFt6336u(true);
+    return;
+  }
+#endif
+#if FREEINK_DEVICE_READPICO
+  if (t.controller == BoardConfig::TouchController::Cst836u) {
+    beginCst836u();
     return;
   }
 #endif
@@ -1451,6 +1479,13 @@ uint8_t InputManager::serviceTouch() {
     resetMultiTouchGesture();
   }
 
+#if FREEINK_DEVICE_READPICO
+  // Filled by the Cst836u arm below. The same mask is also OR'd into every
+  // update() through the board's setButtonHook() registration, so this is the
+  // fallback path when a consumer never installs that hook (the OR is
+  // idempotent, so having both costs nothing).
+  uint8_t cst836uButtons = 0;
+#endif
 #if FREEINK_DEVICE_METALIO_EINK4
   const uint8_t cstButtons = t.controller == BoardConfig::TouchController::Cst816s ? pollCst816s(now) : 0;
   if (t.controller != BoardConfig::TouchController::Cst816s)
@@ -1470,7 +1505,13 @@ uint8_t InputManager::serviceTouch() {
       pollGt911(now);
     } else if (t.controller == BoardConfig::TouchController::Ft5x06) {
       pollFt5x06(now);
-    } else {
+    }
+#if FREEINK_DEVICE_READPICO
+    else if (t.controller == BoardConfig::TouchController::Cst836u) {
+      cst836uButtons = pollCst836u(now);
+    }
+#endif
+    else {
       updateTouchFromIrq(now, 0);  // detection polls I2C; the IRQ is unused now
       // Synthesized confirm tracks an actually-detected press, not the IRQ line.
       if (touchPressedEvent) touchIrqPulseUntil = now + TOUCH_IRQ_PULSE_MS;
@@ -1487,6 +1528,9 @@ uint8_t InputManager::serviceTouch() {
 
 #if FREEINK_DEVICE_METALIO_EINK4
   if (t.controller == BoardConfig::TouchController::Cst816s) return cstButtons;
+#endif
+#if FREEINK_DEVICE_READPICO
+  if (t.controller == BoardConfig::TouchController::Cst836u) return cst836uButtons;
 #endif
   return (t.synthesizeConfirm && now < touchIrqPulseUntil) ? (1 << BTN_CONFIRM) : 0;
 #else
@@ -1595,7 +1639,7 @@ uint16_t InputManager::mapTouchAxis(uint16_t raw, const uint16_t rawMin, const u
   return static_cast<uint32_t>(raw - rawMin) * outMax / (rawMax - rawMin);
 }
 
-#if FREEINK_DEVICE_EEGO_A4 || FREEINK_DEVICE_MURPHY_M4 || FREEINK_DEVICE_METALIO_EINK4
+#if FREEINK_DEVICE_EEGO_A4 || FREEINK_DEVICE_MURPHY_M4 || FREEINK_DEVICE_METALIO_EINK4 || FREEINK_DEVICE_READPICO
 InputManager::TouchPoint InputManager::mapTouchPoint(const uint16_t rawX, const uint16_t rawY,
                                                      const unsigned long now) const {
   const auto& t = BoardConfig::ACTIVE.touch;
@@ -1705,6 +1749,206 @@ uint8_t InputManager::pollCst816s(const unsigned long now) {
   return 0;
 }
 #endif
+
+#if FREEINK_DEVICE_READPICO
+// --- CST836U (Read Pico: 2-point self-capacitive touch + key strip) ----------
+// Protocol and frame layout are quoted from read_pico_firmware
+// components/cst836u/{include/cst836u.h,cst836u.c}: a 15-byte frame read from
+// register 0x00, up to 2 points of 6 bytes starting at data[3], and the CHIP's
+// active-low reset living on the FCA9555 expander (P0.7) rather than a GPIO.
+// Nothing here drives a pin: the reset and the deep-sleep command go through the
+// board support library.
+
+void InputManager::beginCst836u() {
+  const auto& t = BoardConfig::ACTIVE.touch;
+  if (t.sda < 0 || t.scl < 0 || t.i2cAddress == 0) return;
+
+  // Reset through the board callback. This is also the ONLY way back from the
+  // chip's own deep sleep, where it stops ACKing I2C entirely (cst836u.h), so it
+  // runs on every bring-up rather than only after a scheduled sleep.
+  if (!BoardReadPico::touchReset()) {
+    esp_rom_printf("[touch] CST836U reset pulse failed; touch disabled\r\n");
+    touchDataEnabled = false;
+    return;
+  }
+  delay(50);  // RST_BOOT_MS: the chip needs ~50 ms to boot before it answers I2C
+
+  // The controller shares the board's sensor/PMU bus. The clock comes from the
+  // active profile (Read Pico: SDA39/SCL40 at 400 kHz, read_pico_board.c
+  // board_init) — never a literal in this file.
+  const uint32_t hz = BoardConfig::ACTIVE.sensors.i2cHz != 0 ? BoardConfig::ACTIVE.sensors.i2cHz : 100000;
+  Wire.begin(t.sda, t.scl, hz);
+  // Chosen bound, not a measured value: a 15-byte frame plus its register byte is
+  // ~0.4 ms at 400 kHz, so 20 ms only ever trips on a stuck bus (the other
+  // backends here use 4 and 10 ms).
+  Wire.setTimeOut(20);
+  if (t.irq >= 0) pinMode(t.irq, INPUT_PULLUP);  // open-drain INT#, 10k pull-up on the FPC
+
+  // Bring-up probe: read the info register (0xA6, 6 bytes — cst836u_get_info).
+  // Gate on the transaction, not the payload: those bytes are firmware / module /
+  // project identifiers, not a fixed part ID, so a content check would be an
+  // invention.
+  uint8_t info[6] = {};
+  touchDataEnabled = cst836uReadReg(CST836U_REG_INFO, info, sizeof(info));
+  if (!touchDataEnabled) esp_rom_printf("[touch] CST836U not answering at 0x%02X\r\n", t.i2cAddress);
+}
+
+bool InputManager::cst836uReadReg(const uint8_t reg, uint8_t* out, const uint8_t len) {
+  // cst836u.c read_regs(): transmit the register byte, a ~5 µs gap, then receive.
+  // That is a STOP followed by a fresh START, not the repeated START the other
+  // backends use here — it is the only transaction shape verified for this part.
+  const uint8_t addr = BoardConfig::ACTIVE.touch.i2cAddress;
+  Wire.beginTransmission(addr);
+  Wire.write(reg);
+  if (Wire.endTransmission(true) != 0) return false;
+  delayMicroseconds(5);
+  if (Wire.requestFrom(addr, len, static_cast<uint8_t>(true)) != len) {
+    while (Wire.available()) Wire.read();
+    return false;
+  }
+  for (uint8_t i = 0; i < len; ++i) out[i] = static_cast<uint8_t>(Wire.read());
+  return true;
+}
+
+uint8_t InputManager::cst836uReadFrame(uint8_t* out) {
+  for (uint8_t attempt = 0; attempt < CST836U_FRAME_ATTEMPTS; ++attempt) {
+    if (!cst836uReadReg(CST836U_REG_TOUCH_DATA, out, CST836U_RAW_LEN)) return CST836U_FRAME_INVALID;
+    if (out[2] < 3) return static_cast<uint8_t>(out[2] & 0x0F);
+  }
+  return CST836U_FRAME_INVALID;
+}
+
+uint8_t InputManager::pollCst836u(const unsigned long now) {
+  // 不做 INT# 电平门控，也不留空闲心跳。原厂主循环每次迭代都无条件调
+  // cst836u_read()（read_pico_firmware/main/app/app_loop.c:178-184），而本板
+  // INT# 到底是不是"保持低"从未实测过。按电平门控 + 500ms 空闲心跳的后果是空闲期
+  // 几乎采不到触摸：滑动的中间帧被丢掉，松手时位移不够就被判成点击；三个条键也要
+  // 靠撞运气的采样才响应。这里改成固定 8ms 下限（125Hz，远超这块面板需要），失败
+  // 退避保留，避免芯片深睡时猛打 I2C。
+  //
+  // / No INT# level gate and no idle heartbeat. The reference firmware calls
+  // cst836u_read() unconditionally on every loop iteration
+  // (read_pico_firmware/main/app/app_loop.c:178-184), and whether this board's INT#
+  // is a HELD level was never measured. Gating on it plus a 500 ms idle heartbeat
+  // starved the idle period: swipe frames were dropped (so a drag came out as a
+  // tap) and the three strip keys needed a lucky sample. This reads on a fixed
+  // 8 ms floor instead; the failure back-off stays so a chip in its own deep sleep
+  // is not hammered.
+  if (static_cast<int32_t>(now - cst836uRetryAt) < 0) return 0;  // backing off a failed read
+  if (static_cast<int32_t>(now - cst836uReadAt) < 0) return 0;
+
+  uint8_t raw[CST836U_RAW_LEN] = {};
+  const uint8_t frameCount = cst836uReadFrame(raw);
+  if (frameCount == CST836U_FRAME_INVALID) {
+    // The current *screen* contact state is deliberately kept: a transient I2C
+    // failure is not a release. The back-off exists because the chip ignores I2C
+    // completely in its own deep sleep, and the main loop must not hammer a dead
+    // bus.
+    //
+    // The board's strip mailbox is a different matter and MUST be released here.
+    // It holds exactly one raw point and is only ever rewritten by a successful
+    // decode, so leaving it alone keeps the last point's down=true alive: the
+    // board's keyStripHook() would then keep reporting a held capacitive key until
+    // the next successful read, i.e. a phantom press for as long as the bus is
+    // wedged. Publishing an explicit release is harmless because a live contact
+    // re-publishes itself on the very next good frame.
+    BoardReadPico::setStripRawPoint(0, 0, false);
+    cst836uRetryAt = now + CST836U_RETRY_MS;
+    cst836uReadAt = now + CST836U_RETRY_MS;
+    return 0;
+  }
+  cst836uRetryAt = 0;
+  cst836uReadAt = now + TOUCH_SAMPLE_DELAY_MS;
+  // The three capacitive key zones come from the board's single hit test over the
+  // raw point pushed inside the decode. InputManager::update() also ORs the same
+  // board function back in through setButtonHook(), which is idempotent — this
+  // return value only keeps the keys working if a consumer never installs it.
+  return cst836uDecodeFrame(raw, now);
+}
+
+uint8_t InputManager::cst836uDecodeFrame(const uint8_t* data, const unsigned long now) {
+  // Per-point record (cst836u.c cst836u_read): 6 bytes at data[3 + i*6];
+  // byte0 bits[7:6] = event (0 down, 1 up, 2 move, 3 invalid), bits[3:0] = X high
+  // nibble; byte1 = X low; byte2 bits[7:4] = id, bits[3:0] = Y high; byte3 = Y low.
+  uint8_t screenCount = 0;
+  bool stripDown = false;
+  uint16_t stripX = 0;
+  uint16_t stripY = 0;
+
+  // The chip reports a per-point id, but no fetched source says it is a stable
+  // track id across frames, so the shared gesture matcher falls back to its
+  // geometry-based contact assignment (idsStable = false) — the same path the
+  // coords-at-byte-0 GT911 variants take. Only hardware can settle this.
+  touchSnapshot.idsStable = false;
+
+  for (uint8_t i = 0; i < CST836U_MAX_POINTS; ++i) {
+    const uint8_t* src = data + 3 + i * 6;
+    const uint8_t event = static_cast<uint8_t>(src[0] >> 6);
+    const uint8_t id = static_cast<uint8_t>(src[2] >> 4);
+    if (id > 1 || event == 3) continue;  // not a usable record (cst836u_read)
+    if (event == 1) continue;            // 1 = up: this point is not in contact
+    const uint16_t rawX = static_cast<uint16_t>((src[0] & 0x0F) << 8) | src[1];
+    const uint16_t rawY = static_cast<uint16_t>((src[2] & 0x0F) << 8) | src[3];
+    if (rawY > READPICO_KEY_AREA_TOP) {
+      // The touch plane is TALLER than the display: the three capacitive key
+      // zones sit in the undrawn strip below it and are hit-tested on RAW
+      // coordinates (the board does that; main/ui/ui_menu.h UI_KEY_AREA_TOP).
+      // Such a contact is NOT a screen contact — reporting it as one would also
+      // deliver a tap at the clamped bottom edge of the display.
+      if (!stripDown) {
+        stripDown = true;
+        stripX = rawX;
+        stripY = rawY;
+      }
+      continue;
+    }
+    if (screenCount >= MAX_TOUCH_CONTACTS) continue;
+    TouchPoint& point = touchSnapshot.points[screenCount].point;
+    touchSnapshot.points[screenCount].id = id;
+    point = mapTouchPoint(rawX, rawY, now);
+    ++screenCount;
+  }
+
+  // One-slot mailbox for the board's key-strip hit test. Down = false releases
+  // the strip immediately, which is what the hook expects.
+  BoardReadPico::setStripRawPoint(stripX, stripY, stripDown);
+
+  // Only contacts inside the display frame are published, so the snapshot's count
+  // and reportedCount agree and the gesture matcher is never handed a truncation
+  // it would have to reject.
+  touchSnapshot.count = screenCount;
+  touchSnapshot.reportedCount = screenCount;
+
+  if (screenCount > 0) {
+    updateMultiTouchGesture(touchSnapshot, now);
+    // Preserve the existing single-touch API from the first contact.
+    touchPoint = touchSnapshot.points[0].point;
+    if (!touchPressed) {
+      touchPressedEvent = true;
+      touchDownPoint = touchPoint;  // first contact sample, used for tap routing
+      touchMovedBeyondTapSlop = false;
+      touchMovedBeyondTapReleaseSlop = false;
+    }
+    touchUpPoint = touchPoint;
+    const int dx = static_cast<int>(touchUpPoint.x) - static_cast<int>(touchDownPoint.x);
+    const int dy = static_cast<int>(touchUpPoint.y) - static_cast<int>(touchDownPoint.y);
+    if (movedBeyondSlop(dx, dy, TOUCH_TAP_SLOP_PX)) touchMovedBeyondTapSlop = true;
+    if (movedBeyondSlop(dx, dy, TOUCH_TAP_RELEASE_SLOP_PX)) touchMovedBeyondTapReleaseSlop = true;
+    // A multi-contact gesture must not become a primary-contact tap.
+    if (screenCount > 1) {
+      touchMovedBeyondTapSlop = true;
+      touchMovedBeyondTapReleaseSlop = true;
+    }
+    touchPressed = true;
+  } else {
+    updateMultiTouchGesture(touchSnapshot, now);
+    releaseTouch(now);
+  }
+
+  // Mask for the three key zones, from the board's own raw-Y split.
+  return BoardReadPico::keyStripHook();
+}
+#endif  // FREEINK_DEVICE_READPICO
 
 // --- FT5x06 / FT6336 (M5Stack Paper Mono) ----------------------------------
 

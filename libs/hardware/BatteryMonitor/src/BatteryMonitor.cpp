@@ -11,6 +11,15 @@
 #include <algorithm>
 #include <cmath>
 
+namespace {
+// Board-supplied PMU battery source (GaugeType::Cw32L010Pmu). Kept outside the
+// FREEINK_BATTERY_I2C_GAUGE guard so a capability-off build still links the
+// setter the board support library calls from its own begin().
+BatteryMonitor::PmuBatteryHook g_pmuBatteryHook = nullptr;
+}  // namespace
+
+void BatteryMonitor::setPmuBatteryHook(const PmuBatteryHook hook) { g_pmuBatteryHook = hook; }
+
 #if FREEINK_BATTERY_I2C_GAUGE
 #include <Wire.h>
 #if FREEINK_DEVICE_WS397
@@ -205,9 +214,40 @@ bool cw2017EnsureProfile(const uint8_t addr) {
   return cw2017WaitUntilReady(addr);
 }
 
+// --- CW32L010 PMU (Read Pico) ------------------------------------------------
+// Not a register map: battery mV / SoC / charge state arrive over the PMU's own
+// length-prefixed CRC frame protocol, which the board support library implements
+// (BoardReadPico::pmuBattery) and registers through setPmuBatteryHook(). Every
+// caller below reads a failed hook as "field unknown" — a PMU that does not
+// respond must not abort, and must not be turned into a fabricated level.
+bool readPmuBattery(uint16_t& millivolts, uint16_t& socPermille, uint8_t& chargeState) {
+  if (g_pmuBatteryHook == nullptr) return false;
+  millivolts = 0;
+  socPermille = 0;
+  chargeState = 0;
+  return g_pmuBatteryHook(millivolts, socPermille, chargeState);
+}
+
 // SoC (0..100) from the active gauge, dispatched by type. false on I2C failure.
 bool readGaugeSoc(uint16_t& out) {
   const auto& g = BoardConfig::ACTIVE.batteryGauge;
+  if (g.gaugeType == BoardConfig::GaugeType::Cw32L010Pmu) {
+    uint16_t mv = 0;
+    uint16_t permille = 0;
+    uint8_t charge = 0;
+    if (!readPmuBattery(mv, permille, charge)) return false;
+    if (permille > 0 && permille <= 1000) {
+      out = static_cast<uint16_t>(permille / 10);
+      return true;
+    }
+    // permille 0 is the board's "unknown" (the protocol's 0xFFFF sentinel is
+    // reported as 0), so it cannot be read as an empty pack. Resolve it from the
+    // pack voltage the PMU did report, off the same 1S Li-ion curve as the ADC
+    // path, rather than asserting a level nobody measured.
+    if (mv == 0) return false;
+    out = BatteryMonitor::percentageFromMillivolts(mv);
+    return true;
+  }
 #if FREEINK_DEVICE_WS397
   if (g.gaugeType == BoardConfig::GaugeType::Axp2101) {
     uint8_t soc = 0;
@@ -252,6 +292,17 @@ bool readGaugeSoc(uint16_t& out) {
 // Battery voltage (mV) from the active gauge, dispatched by type. false on failure.
 bool readGaugeMillivolts(uint16_t& out) {
   const auto& g = BoardConfig::ACTIVE.batteryGauge;
+  if (g.gaugeType == BoardConfig::GaugeType::Cw32L010Pmu) {
+    uint16_t mv = 0;
+    uint16_t permille = 0;
+    uint8_t charge = 0;
+    if (!readPmuBattery(mv, permille, charge)) return false;
+    // The PMU reports the pack voltage directly (no ADC divider) and 0 when it
+    // flags the value invalid, which is a failed read, not 0 mV.
+    if (mv == 0) return false;
+    out = mv;
+    return true;
+  }
 #if FREEINK_DEVICE_WS397
   if (g.gaugeType == BoardConfig::GaugeType::Axp2101) return freeink::axp2101::batteryMillivolts(out);
 #endif
@@ -290,6 +341,33 @@ bool readGaugeCharging(bool& known) {
   if (g.gaugeType == BoardConfig::GaugeType::Cw2017) {
     known = false;
     return false;
+  }
+  if (g.gaugeType == BoardConfig::GaugeType::Cw32L010Pmu) {
+    uint16_t mv = 0;
+    uint16_t permille = 0;
+    uint8_t charge = 0;
+    if (!readPmuBattery(mv, permille, charge)) {
+      known = false;
+      return false;
+    }
+    // pmu_charge_state values (read_pico_pmu_protocol.h): CHARGING = 2,
+    // FULL_INFERRED = 3. A full pack still on the charger counts as charging,
+    // matching this project's other externally-powered gauge boards (Paper Mono:
+    // external supply present means charging). UNKNOWN stays unknown so a caller
+    // can fall back to a STAT pin instead of being told "not charging".
+    switch (charge) {
+      case 2:  // PMU_CHARGE_CHARGING
+      case 3:  // PMU_CHARGE_FULL_INFERRED
+        known = true;
+        return true;
+      case 1:  // PMU_CHARGE_NOT_CHARGING
+      case 4:  // PMU_CHARGE_FAULT
+        known = true;
+        return false;
+      default:  // PMU_CHARGE_UNKNOWN
+        known = false;
+        return false;
+    }
   }
   if (g.chargerAddr != 0) {
     uint8_t status = 0;

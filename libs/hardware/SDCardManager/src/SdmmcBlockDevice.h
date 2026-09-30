@@ -12,6 +12,9 @@
 // Hardware-validated in 1-bit mode on the Xteink X4 Pro (ESP32-S3, SSD1677 build);
 // also matches the de-link board's 4-bit native-SDMMC FsFile path. The X4 Pro mount
 // needs an active-LOW power-enable power-cycle per attempt (see SdmmcBlockDevice.cpp).
+// A board with no SD power gate — Read Pico, 1-bit CLK38/CMD42/D0 44 — has nothing
+// to power-cycle, so its retries settle between attempts instead; the clock and
+// retry pacing are selected per target in the .cpp.
 
 #include <BoardConfig.h>
 

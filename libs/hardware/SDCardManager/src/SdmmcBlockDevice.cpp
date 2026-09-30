@@ -14,6 +14,28 @@
 
 namespace freeink {
 
+namespace {
+// Card clock and retry pacing are board properties that the SdmmcPins profile has
+// no field for, so they are selected here per target and nothing changes for the
+// boards that already mount:
+//   * Read Pico runs the slot at high speed and needs a settle between attempts.
+//     Its reference firmware sets `host.max_freq_khz = SDMMC_FREQ_HIGHSPEED` and
+//     notes that 20 MHz "is too slow for random small reads" on this 1-bit slot,
+//     then re-runs the WHOLE mount once after 200 ms because "the first clock
+//     negotiation after power-up often times out"
+//     (read_pico_firmware components/read_pico/read_pico_sd.c mount_card()).
+//     Unlike the X4 Pro/X4C this board has no SD power gate, so the existing
+//     power-cycle-and-wait path below never waits at all.
+//   * Every other SDMMC target keeps SDMMC_FREQ_DEFAULT and the previous pacing.
+#if FREEINK_DEVICE_READPICO
+constexpr uint32_t kSdmmcMaxFreqKhz = SDMMC_FREQ_HIGHSPEED;  // 40 MHz
+constexpr uint32_t kSdmmcRetrySettleMs = 200;
+#else
+constexpr uint32_t kSdmmcMaxFreqKhz = SDMMC_FREQ_DEFAULT;  // 20 MHz
+constexpr uint32_t kSdmmcRetrySettleMs = 0;
+#endif
+}  // namespace
+
 bool SdmmcBlockDevice::begin(const BoardConfig::SdmmcPins& pins) {
   if (pins.busWidth == 0) return false;
 
@@ -22,7 +44,7 @@ bool SdmmcBlockDevice::begin(const BoardConfig::SdmmcPins& pins) {
   // only, and the data clock at 40 MHz. The read timeouts we chased earlier were a
   // mount-sequencing problem, not a clock-margin one — see the retry loop below.
   sdmmc_host_t host = SDMMC_HOST_DEFAULT();
-  host.max_freq_khz = SDMMC_FREQ_DEFAULT;  // 40 MHz
+  host.max_freq_khz = kSdmmcMaxFreqKhz;
 
   // Slot pin map. The ESP32-S3 routes SDMMC through the GPIO matrix, so the data
   // and clock/command lines are assignable (unlike the classic ESP32's fixed slot).
@@ -42,11 +64,28 @@ bool SdmmcBlockDevice::begin(const BoardConfig::SdmmcPins& pins) {
     return false;
   }
 
-  // NOTE: we used to force gpio_pullup_en() on CMD/DAT0 here (the slot's
-  // INTERNAL_PULLUP flag doesn't always engage on GPIO-matrix SDMMC pins). It proved
-  // redundant once the GPIO5 power-cycle below was in place — old-batch units mount
-  // fine without it — and it deviated from the OEM (slot flag only), a suspected
-  // cause of "no card in" on newer socket revisions. Removed.
+  // Re-apply the pull-ups AFTER the slot is initialised. This is not belt-and-braces:
+  // on IDF 5.x sdmmc_host_init_slot() honours SDMMC_SLOT_FLAG_INTERNAL_PULLUP by
+  // calling gpio_pullup_en(cmd)/(d0) and then immediately calls configure_pin(),
+  // whose configure_pin_gpio_matrix() starts with gpio_reset_pin() — which resets the
+  // pad and therefore CLEARS those pull-ups again. On any GPIO-matrix-routed slot
+  // (every S3 board here) the flag is effectively a no-op and CMD/D0 are left
+  // floating, so the card never answers CMD1 and sdmmc_card_init() fails with
+  // "sdmmc_init_ocr: send_op_cond (1) returned 0x107" (ESP_ERR_TIMEOUT).
+  //
+  // Boards with an SD power gate (X4 Pro / X4C, sd.powerEnable >= 0) are left exactly
+  // as they were: their gate pulse already produced a working data path and this port
+  // has no hardware evidence for changing them. Boards without a gate have nothing to
+  // compensate, which is why Read Pico failed here.
+  if (BoardConfig::ACTIVE.sd.powerEnable < 0) {
+    gpio_pullup_en(static_cast<gpio_num_t>(pins.cmd));
+    gpio_pullup_en(static_cast<gpio_num_t>(pins.d0));
+    if (pins.busWidth >= 4) {
+      gpio_pullup_en(static_cast<gpio_num_t>(pins.d1));
+      gpio_pullup_en(static_cast<gpio_num_t>(pins.d2));
+      gpio_pullup_en(static_cast<gpio_num_t>(pins.d3));
+    }
+  }
 
   auto* card = static_cast<sdmmc_card_t*>(malloc(sizeof(sdmmc_card_t)));
   if (!card) {
@@ -89,6 +128,11 @@ bool SdmmcBlockDevice::begin(const BoardConfig::SdmmcPins& pins) {
       delay(80);
       digitalWrite(sdPwr, LOW);  // run with the enable held LOW
       delay(120);
+    } else if (attempt > 0 && kSdmmcRetrySettleMs != 0) {
+      // No gate to power-cycle (Read Pico): let the card finish its power-on
+      // negotiation before the next attempt, which is what the reference
+      // firmware's 200 ms re-mount does (read_pico_sd.c mount_card()).
+      delay(kSdmmcRetrySettleMs);
     }
     esp_err_t e = sdmmc_card_init(&host, card);
     if (e != ESP_OK && card->csd.capacity == 0) {

@@ -3,11 +3,13 @@
 #include <BoardConfig.h>
 
 #include <cstring>
+#include <new>  // std::nothrow
 
 #if FREEINK_DRIVER_LGFX_EPD
 #include <M5GFX.h>  // pulls LovyanGFX; added to lib_deps only on the LilyGo env
 #include <esp_heap_caps.h>
 #include <lgfx/v1/platforms/esp32/Bus_EPD.h>
+
 #include <lgfx/v1/platforms/esp32/Panel_EPD.hpp>
 #endif
 
@@ -133,8 +135,10 @@ bool lastPushUsedCleanBank();
 lgfx::epd_mode::epd_mode_t epdModeFor(RefreshMode m) {
   switch (m) {
     case RefreshMode::Full:
-    case RefreshMode::Half: return lgfx::epd_mode::epd_text;
-    default: return lgfx::epd_mode::epd_fast;
+    case RefreshMode::Half:
+      return lgfx::epd_mode::epd_text;
+    default:
+      return lgfx::epd_mode::epd_fast;
   }
 }
 
@@ -152,14 +156,35 @@ void allocCanvas(uint16_t w, uint16_t h) {
   g_h = h;
   g_wb = w / 8;
   if (!g_canvas) {
-    g_canvas = new lgfx::LGFX_Sprite(&g_dev);
-    g_canvas->setPsram(true);
-    g_canvas->setColorDepth(lgfx::color_depth_t::grayscale_8bit);
-    g_canvas->createSprite(w, h);
+    // Not a bare `new`: this SDK is built with -fno-exceptions, so a failing `new`
+    // calls abort() rather than returning nullptr and the board would reset with
+    // no diagnostic at all. Nothrow gives us a value we can actually test. This
+    // canvas is the single largest allocation on the Lgfx path (w*h at 8 bpp, in
+    // PSRAM), so an OOM is a real possibility on a board whose PSRAM already
+    // carries the panel step framebuffer and _buf.
+    g_canvas = new (std::nothrow) lgfx::LGFX_Sprite(&g_dev);
+    if (!g_canvas) {
+      Serial.printf("[LgfxEpd] canvas alloc failed (%ux%u); grayscale unavailable\n", w, h);
+    } else {
+      g_canvas->setPsram(true);
+      g_canvas->setColorDepth(lgfx::color_depth_t::grayscale_8bit);
+      g_canvas->createSprite(w, h);
+      if (!g_canvas->getBuffer()) {
+        // createSprite() failed, so the sprite owns no pixels. Drop it rather than
+        // keep a non-null canvas whose buffer is null: the callers below guard on
+        // `!g_canvas` and would otherwise dereference a null buffer.
+        delete g_canvas;
+        g_canvas = nullptr;
+        Serial.printf("[LgfxEpd] canvas sprite buffer alloc failed (%ux%u)\n", w, h);
+      }
+    }
   }
   const size_t planeBytes = static_cast<size_t>(g_wb) * h;
   if (!g_lsb) g_lsb = static_cast<uint8_t*>(heap_caps_malloc(planeBytes, MALLOC_CAP_SPIRAM));
   if (!g_msb) g_msb = static_cast<uint8_t*>(heap_caps_malloc(planeBytes, MALLOC_CAP_SPIRAM));
+  if (!g_lsb || !g_msb) {
+    Serial.printf("[LgfxEpd] grayscale plane alloc failed (%u B each)\n", static_cast<unsigned>(planeBytes));
+  }
 }
 
 // Expand a 1-bpp B/W frame (bit set = white) into the 8-bit gray canvas.
@@ -412,7 +437,8 @@ PanelDriver& lgfxEpdDriver() {
   return instance;
 }
 #elif FREEINK_DRIVER_LGFX_EPD
-#error "FREEINK_DRIVER_LGFX_EPD requires a board config: define `const LgfxEpdConfig& yourConfig();` in namespace freeink and build with -DFREEINK_LGFX_EPD_CONFIG=yourConfig"
+#error \
+    "FREEINK_DRIVER_LGFX_EPD requires a board config: define `const LgfxEpdConfig& yourConfig();` in namespace freeink and build with -DFREEINK_LGFX_EPD_CONFIG=yourConfig"
 #else
 // Driver not selected in this build: provide a stub so the accessor still links if
 // referenced. Never called (the facade only selects it under FREEINK_DRIVER_LGFX_EPD).

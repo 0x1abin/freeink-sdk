@@ -1,12 +1,18 @@
 #pragma once
 
 // FreeInk inertial measurement unit (LSM6DS3TR-C or QMI8658, 6-axis accel +
-// gyro).
+// gyro; SC7A20H, 3-axis accelerometer only).
 //
 // Reads acceleration (g) and angular rate (deg/s) from the I2C IMU described by
 // BoardConfig::ACTIVE.sensors (imuAddr / sensor bus). Dependency-free Wire
 // access, mirroring BatteryMonitor. Boards without an IMU (FREEINK_CAP_IMU off,
 // or imuAddr == 0) link stub bodies and present() returns false.
+//
+// ImuType::Sc7a20h (Read Pico) has NO gyroscope: read() still succeeds and still
+// fills ax/ay/az, but gx/gy/gz are always 0. The Sample shape is deliberately
+// unchanged, so a consumer that derives a gesture from angular rate (e.g.
+// lib/hal/HalTiltSensor.cpp, whose tilt page turn needs ~270 dps) simply never
+// fires on such a board — see docs/engineering/read-pico.md for that gap.
 
 #include <Arduino.h>
 

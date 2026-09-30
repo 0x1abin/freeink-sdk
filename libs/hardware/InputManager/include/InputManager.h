@@ -138,8 +138,9 @@ class InputManager {
 
   // True if this board has a touch controller configured.
   bool hasTouch() const;
-  // True only while a GT911 controller is present. Other touch controllers
-  // retain their existing single-contact contract.
+  // True only while a controller that reports more than one simultaneous
+  // contact is present: GT911, or the CST836U's two points. Other touch
+  // controllers retain their existing single-contact contract.
   bool supportsMultiTouch() const;
   // Latest GT911 contacts, capped at MAX_TOUCH_CONTACTS. Gesture consumers
   // should check reportedCount for the exact cardinality they support.
@@ -375,7 +376,7 @@ class InputManager {
   bool readChsc6xPoint(TouchPoint& point);
   bool decodeChsc6xFrame(const uint8_t* data, size_t len, TouchPoint& point) const;
   uint16_t mapTouchAxis(uint16_t raw, uint16_t rawMin, uint16_t rawMax, uint16_t outMax) const;
-#if FREEINK_DEVICE_EEGO_A4 || FREEINK_DEVICE_MURPHY_M4 || FREEINK_DEVICE_METALIO_EINK4
+#if FREEINK_DEVICE_EEGO_A4 || FREEINK_DEVICE_MURPHY_M4 || FREEINK_DEVICE_METALIO_EINK4 || FREEINK_DEVICE_READPICO
   TouchPoint mapTouchPoint(uint16_t rawX, uint16_t rawY, unsigned long now) const;
   void updateTouchContact(const TouchPoint& point);
   void releaseTouch(unsigned long now);
@@ -438,6 +439,16 @@ class InputManager {
   static void ft6336uTaskTrampoline(void* self);
   void ft6336uTaskLoop();
   freeink::MurphyM4Batch murphyM4Batch = freeink::defaultMurphyM4Batch();
+#endif
+#if FREEINK_DEVICE_READPICO
+  // CST836U (2-point self-capacitive touch + the three capacitive key zones).
+  // The frame decode is in the .cpp; the board owns the reset line, the deep
+  // sleep command and the key-strip hit test.
+  void beginCst836u();
+  uint8_t pollCst836u(unsigned long now);
+  bool cst836uReadReg(uint8_t reg, uint8_t* out, uint8_t len);
+  uint8_t cst836uReadFrame(uint8_t* out);
+  uint8_t cst836uDecodeFrame(const uint8_t* data, unsigned long now);
 #endif
 
   uint8_t currentState;
@@ -528,6 +539,31 @@ class InputManager {
   TaskHandle_t ft6336uTask = nullptr;
   StaticTask_t ft6336uTaskTcb{};
   StackType_t ft6336uTaskStack[FT6336U_TASK_STACK_BYTES]{};
+#endif
+
+#if FREEINK_DEVICE_READPICO
+  // CST836U frame geometry, quoted from read_pico_firmware
+  // components/cst836u/include/cst836u.h: the touch-data register, the 15-byte
+  // frame with up to 2 points, and the info register used as the bring-up probe.
+  static constexpr uint8_t CST836U_REG_TOUCH_DATA = 0x00;
+  static constexpr uint8_t CST836U_REG_INFO = 0xA6;
+  static constexpr uint8_t CST836U_RAW_LEN = 15;
+  static constexpr uint8_t CST836U_MAX_POINTS = 2;
+  // cst836u_read() re-reads while the frame's count nibble is >= 3: 1 or 2 points
+  // is all a legal frame can carry, so a larger value means the read landed
+  // mid-update. CST836U_FRAME_INVALID is "no legal frame".
+  static constexpr uint8_t CST836U_FRAME_ATTEMPTS = 3;
+  static constexpr uint8_t CST836U_FRAME_INVALID = 0xFF;
+  // Poll pacing. While a contact is tracked the frame cadence follows
+  // TOUCH_SAMPLE_DELAY_MS; with no contact the backend only reads on INT# or on
+  // this heartbeat, so a stuck-high INT# cannot freeze touch for the session.
+  // Both are chosen bounds, not measured values.
+  static constexpr unsigned long CST836U_IDLE_HEARTBEAT_MS = 500;
+  // Back-off after a failed frame read. The chip ignores I2C entirely while it is
+  // in its own deep sleep, so without this the main loop would hammer a dead bus.
+  static constexpr unsigned long CST836U_RETRY_MS = 2000;
+  unsigned long cst836uReadAt = 0;
+  unsigned long cst836uRetryAt = 0;
 #endif
 
   static constexpr int NUM_BUTTONS_1 = 4;
