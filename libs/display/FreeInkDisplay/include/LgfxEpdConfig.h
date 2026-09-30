@@ -59,21 +59,6 @@ struct LgfxEpdConfig {
   // behaviour exactly: Half and Full both take the clean bank, with no
   // normalizing pass.
   bool cleanBankNeedsFreshBackground = false;
-  // --- appended: 16-bit data bus (Read Pico / E0470A01) ---------------------
-  // These two are LAST on purpose. The struct is brace-initialized positionally
-  // by every board (BoardT5S3/src/LilyGoT5S3LgfxConfig.cpp,
-  // BoardPaperS3/src/M5PaperS3LgfxConfig.cpp), so a new member may only be
-  // appended with a default: an existing initializer that stops before it keeps
-  // compiling and keeps its meaning. Widening dataPins[] to 16 in place would
-  // have silently re-mapped those two boards' pins.
-  //
-  // High data lines D8..D15, driven only when busWidth == 16. -1 == unassigned
-  // (BoardConfig.h's PIN_UNASSIGNED), which Bus_EPD's config_t already uses as
-  // its own default and never touches past bus_width.
-  int8_t dataPinsHigh[8] = {-1, -1, -1, -1, -1, -1, -1, -1};
-  // 8 = the existing boards. 16 = a 16-bit i80 bus, whose low half is
-  // dataPins[0..7] and whose high half is dataPinsHigh[0..7].
-  uint8_t busWidth = 8;
 };
 
 }  // namespace freeink

@@ -119,9 +119,9 @@ const EpdiyLcdConfig& readPicoEpdiyConfig() {
   // / Members are positional in EpdiyLcdConfig declaration order. At 18 MHz this
   // solves to L_SL=6, L_BL=15, L_DL=152, L_EL=115, CKV=134 (0.1 µs).
   static const EpdiyLcdConfig cfg = {
-      {READPICO_EP_D0, READPICO_EP_D1, READPICO_EP_D2, READPICO_EP_D3, READPICO_EP_D4, READPICO_EP_D5,
-       READPICO_EP_D6, READPICO_EP_D7, READPICO_EP_D8, READPICO_EP_D9, READPICO_EP_D10, READPICO_EP_D11,
-       READPICO_EP_D12, READPICO_EP_D13, READPICO_EP_D14, READPICO_EP_D15},
+      {READPICO_EP_D0, READPICO_EP_D1, READPICO_EP_D2, READPICO_EP_D3, READPICO_EP_D4, READPICO_EP_D5, READPICO_EP_D6,
+       READPICO_EP_D7, READPICO_EP_D8, READPICO_EP_D9, READPICO_EP_D10, READPICO_EP_D11, READPICO_EP_D12,
+       READPICO_EP_D13, READPICO_EP_D14, READPICO_EP_D15},
       READPICO_EP_XCL,   // pinClock     -> LCD_CAM pclk 输出 / pclk out
       READPICO_EP_CKV,   // pinCkv       -> RMT 产生的栅极钟 / gate clock from RMT
       READPICO_EP_XSTL,  // pinStartPulse-> LCD 的 DE（参考固件 board_poweron 的同一根线）
@@ -132,9 +132,9 @@ const EpdiyLcdConfig& readPicoEpdiyConfig() {
       kPclkMhz,
       {kScan.lineStart, kScan.lineBackPorch, kScan.lineEnd, kScan.ckvHigh01us},
       kPrefillLines,
-      // 电源序列复用 LgfxEpd 那三个钩子（ReadPicoLgfxConfig.cpp）：它们已经是
+      // 电源序列复用 板级电源钩子（ReadPicoPower.cpp）：它们已经是
       // §1.4 验证过的 board_poweron() 顺序，且 VCOM 门在升任何轨之前。
-      // / Reuse the three LgfxEpd hooks (ReadPicoLgfxConfig.cpp): they already
+      // / Reuse the board power hooks (ReadPicoPower.cpp): they already
       // implement the verified board_poweron() order with the VCOM gate before any
       // rail comes up.
       {&BoardReadPico::epdPrepare, &BoardReadPico::epdPowerOn, &BoardReadPico::epdPowerOff, nullptr},

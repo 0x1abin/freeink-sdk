@@ -9,6 +9,7 @@
 #include <M5GFX.h>  // pulls LovyanGFX; added to lib_deps only on the LilyGo env
 #include <esp_heap_caps.h>
 #include <lgfx/v1/platforms/esp32/Bus_EPD.h>
+
 #include <lgfx/v1/platforms/esp32/Panel_EPD.hpp>
 #endif
 
@@ -57,14 +58,6 @@ class FreeInkLgfxEpd : public lgfx::LGFX_Device {
     auto bc = _bus.config();
     bc.bus_speed = c.busHz;
     for (int i = 0; i < 8; ++i) bc.pin_data[i] = c.dataPins[i];
-    // Bus_EPD::init() walks `bus_config.data_gpio_nums[i]` for i < bus_width and
-    // hands the count to esp_lcd_new_i80_bus, so a 16-bit panel needs both the
-    // high half of pin_data and the width. The i80 peripheral only supports 8 or
-    // 16, and an unsupported value makes init() fail silently (a dead panel), so
-    // anything else falls back to 8. pin_data[8..15] stay at Bus_EPD's own -1
-    // default when busWidth == 8, for the existing boards.
-    const uint8_t busWidth = (c.busWidth == 16) ? 16 : 8;
-    for (int i = 8; i < busWidth; ++i) bc.pin_data[i] = c.dataPinsHigh[i - 8];
     bc.pin_pwr = c.pinPwr;
     bc.pin_sph = c.pinSph;
     bc.pin_spv = c.pinSpv;
@@ -72,7 +65,7 @@ class FreeInkLgfxEpd : public lgfx::LGFX_Device {
     bc.pin_le = c.pinLe;
     bc.pin_cl = c.pinCl;
     bc.pin_ckv = c.pinCkv;
-    bc.bus_width = busWidth;
+    bc.bus_width = 8;
     _bus.config(bc);
 
     _panel.setBus(&_bus);
@@ -142,8 +135,10 @@ bool lastPushUsedCleanBank();
 lgfx::epd_mode::epd_mode_t epdModeFor(RefreshMode m) {
   switch (m) {
     case RefreshMode::Full:
-    case RefreshMode::Half: return lgfx::epd_mode::epd_text;
-    default: return lgfx::epd_mode::epd_fast;
+    case RefreshMode::Half:
+      return lgfx::epd_mode::epd_text;
+    default:
+      return lgfx::epd_mode::epd_fast;
   }
 }
 
@@ -442,7 +437,8 @@ PanelDriver& lgfxEpdDriver() {
   return instance;
 }
 #elif FREEINK_DRIVER_LGFX_EPD
-#error "FREEINK_DRIVER_LGFX_EPD requires a board config: define `const LgfxEpdConfig& yourConfig();` in namespace freeink and build with -DFREEINK_LGFX_EPD_CONFIG=yourConfig"
+#error \
+    "FREEINK_DRIVER_LGFX_EPD requires a board config: define `const LgfxEpdConfig& yourConfig();` in namespace freeink and build with -DFREEINK_LGFX_EPD_CONFIG=yourConfig"
 #else
 // Driver not selected in this build: provide a stub so the accessor still links if
 // referenced. Never called (the facade only selects it under FREEINK_DRIVER_LGFX_EPD).

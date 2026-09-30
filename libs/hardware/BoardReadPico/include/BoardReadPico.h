@@ -10,8 +10,7 @@
 // the SD card detect and the buzzer idle state.
 //
 // This header is the interface the SDK seams call. It is deliberately NOT a full
-// driver set: the panel bus lives in ReadPicoLgfxConfig.cpp (the board's
-// freeink::LgfxEpdConfig), the touch read lives in InputManager, and the IMU/RTC
+// driver set: the panel bus lives in ReadPicoEpdiyConfig.cpp, the touch read lives in InputManager, and the IMU/RTC
 // backends live in the Imu / Rtc libraries. The board only owns what has to be
 // sequenced in hardware order and what sits on the expander or the PMU.
 //
@@ -118,14 +117,7 @@ bool pmuPowerOff();
 // power the panel". Nothing in this port ever writes VCOM back to the PMU.
 int pmuVcomMv();
 
-// --- freeink::LgfxEpdPowerHooks bodies --------------------------------------
-// Defined in ReadPicoLgfxConfig.cpp next to the config that references them, but
-// declared here because §3.4 freezes them at namespace scope.
-//
-// These REPLACE LovyanGFX's stock Bus_EPD::powerControl() sequence entirely
-// (LgfxEpdDriver.cpp `FreeInkBusEPD::powerControl`, which delegates to the hooks
-// whenever one is supplied), so they own every rail line — including SPV, which
-// the stock sequence would otherwise drive.
+// Board rail sequencing, implemented in ReadPicoPower.cpp.
 bool epdPrepare();
 bool epdPowerOn();
 void epdPowerOff();

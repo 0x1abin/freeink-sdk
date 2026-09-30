@@ -5,7 +5,7 @@
 
 #pragma once
 
-// Internal transport shared by BoardReadPico.cpp and ReadPicoLgfxConfig.cpp.
+// Internal transport shared by BoardReadPico.cpp and ReadPicoPower.cpp.
 // Not part of the public API: only include/BoardReadPico*.h is installed, and
 // none of this is declared there on purpose (see docs/engineering/read-pico.md
 // §3.4 for the frozen public symbol list).

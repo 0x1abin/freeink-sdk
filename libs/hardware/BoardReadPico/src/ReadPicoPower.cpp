@@ -5,8 +5,6 @@
 
 #include <BoardConfig.h>
 #include <BoardReadPico.h>
-#include <LgfxEpdConfig.h>
-#include <LgfxEpdWaveforms.h>
 
 #include <cstdarg>
 
@@ -16,10 +14,7 @@
 
 #include "BoardReadPicoInternal.h"
 
-// Read Pico's LgfxEpdConfig plus the three freeink::LgfxEpdPowerHooks bodies.
-// The build injects this through -DFREEINK_LGFX_EPD_CONFIG=readPicoLgfxConfig
-// (platformio.ini [readpico_hardware]); LgfxEpdDriver.cpp takes the generic
-// `#elif defined(FREEINK_LGFX_EPD_CONFIG)` branch, so the driver needs zero diff.
+// Board power hooks shared by the epdiy LCD adapter.
 //
 // Evidence for every pin, register and delay: MindReset/read_pico_firmware @ main
 // components/{read_pico/read_pico_board.c, sy7636a/sy7636a.c, fca9555/*} — quoted
@@ -53,8 +48,8 @@ constexpr uint8_t kSyRegOperation = 0x00;
 constexpr uint8_t kSyRegVldo = 0x03;
 constexpr uint8_t kSyRegDelay = 0x06;
 constexpr uint8_t kSyRegFault = 0x07;
-constexpr uint8_t kSyOpOn = 0x80;      // pack_op(on = true)
-constexpr uint8_t kSyOpVcomCtl = 0x40; // cfg.vcom_manual = true -> external VCOM_EN
+constexpr uint8_t kSyOpOn = 0x80;       // pack_op(on = true)
+constexpr uint8_t kSyOpVcomCtl = 0x40;  // cfg.vcom_manual = true -> external VCOM_EN
 // pack_vldo(SY7636A_VLDO_1500 = 3) = (3 << 5) | VLDO_RESERVED(0x06) = 0x66
 constexpr uint8_t kSyVldo1500Packed = 0x66;
 // pack_delay({2,2,2,2}): dly_enc(2) = 2, so (2 << 6) | (2 << 4) | (2 << 2) | 2
@@ -142,10 +137,10 @@ bool epdPrepare() {
   digitalWrite(READPICO_EP_XSTL, LOW);
 
   // 16-bit data bus, all LOW.
-  const int8_t dataPins[16] = {
-      READPICO_EP_D0,  READPICO_EP_D1,  READPICO_EP_D2,  READPICO_EP_D3,  READPICO_EP_D4,  READPICO_EP_D5,
-      READPICO_EP_D6,  READPICO_EP_D7,  READPICO_EP_D8,  READPICO_EP_D9,  READPICO_EP_D10, READPICO_EP_D11,
-      READPICO_EP_D12, READPICO_EP_D13, READPICO_EP_D14, READPICO_EP_D15};
+  const int8_t dataPins[16] = {READPICO_EP_D0,  READPICO_EP_D1,  READPICO_EP_D2,  READPICO_EP_D3,
+                               READPICO_EP_D4,  READPICO_EP_D5,  READPICO_EP_D6,  READPICO_EP_D7,
+                               READPICO_EP_D8,  READPICO_EP_D9,  READPICO_EP_D10, READPICO_EP_D11,
+                               READPICO_EP_D12, READPICO_EP_D13, READPICO_EP_D14, READPICO_EP_D15};
   for (const int8_t pin : dataPins) {
     pinMode(pin, OUTPUT);
     digitalWrite(pin, LOW);
@@ -276,80 +271,3 @@ void epdPowerOff() {
 }
 
 }  // namespace BoardReadPico
-
-namespace freeink {
-
-const LgfxEpdConfig& readPicoLgfxConfig() {
-  // Member order is the LgfxEpdConfig declaration order (LgfxEpdConfig.h): the
-  // 8 low data pins, the 7 control pins, bus speed, line padding, rotation, the
-  // power hooks, the four LUT pairs, then the appended 16-bit members. Members
-  // are POSITIONAL — never reorder or widen, every board brace-initializes this.
-  static const LgfxEpdConfig cfg = {
-      // dataPins[8] = D0..D7 (read_pico_board.c D0..D7 = GPIO 4..11)
-      {READPICO_EP_D0, READPICO_EP_D1, READPICO_EP_D2, READPICO_EP_D3, READPICO_EP_D4, READPICO_EP_D5,
-       READPICO_EP_D6, READPICO_EP_D7},
-      READPICO_EP_XSTL,  // pinSph (XSTL) -> i80 CS
-      READPICO_EP_SPV,   // pinSpv (SPV)  -> plain GPIO, pulsed per transaction
-      // pinOe: -1, NOT the dummy pin. XOE is FCA9555 P0.1 and is owned by the
-      // hooks above, so LovyanGFX needs no OE of its own — and -1 is PROVEN safe:
-      // lgfx::pinMode() returns early for `(size_t)(gpio_num_t)pin >= GPIO_NUM_MAX`
-      // (m5stack/M5GFX @ 0.2.20, src/lgfx/v1/platforms/esp32/common.cpp:361-364)
-      // and gpio_hi/gpio_lo are guarded on `pin >= 0` (common.hpp:187-188).
-      // pin_oe is never handed to the i80 driver, so unlike pinPwr it does not
-      // have to be a real GPIO. BoardT5S3 ships the same choice.
-      BoardConfig::PIN_UNASSIGNED,
-      READPICO_EP_XLE,  // pinLe  (XLE) -> latch enable
-      READPICO_EP_XCL,  // pinCl  (XCL) -> i80 WR
-      READPICO_EP_CKV,  // pinCkv (CKV) -> plain GPIO, raised per scan line
-      // pinPwr: MUST be a real GPIO >= 0. It reaches the i80 driver as
-      // `dc_gpio_num` (Bus_EPD.cpp:129, "dummy setting") and IDF rejects a
-      // negative one: esp_lcd_panel_io_i80.c:661
-      //   `bool valid_gpio = (wr_gpio_num >= 0) && (dc_gpio_num >= 0);
-      //    if (!valid_gpio) return ESP_ERR_INVALID_ARG;`
-      // which makes Bus_EPD::init() fail — a silent, dead panel. The board's
-      // real EN is FCA9555 P0.3, so this is a sacrificial GPIO; see
-      // READPICO_EP_LGX_DUMMY_PIN for why it is GPIO0 and what it costs.
-      READPICO_EP_LGX_DUMMY_PIN,
-      READPICO_PCLK_HZ,  // busHz = 18 MHz (read_pico_init.c READ_PICO_PCLK_MHZ 18)
-      // linePadding — STARTING VALUE, re-tune on hardware (read-pico.md B1). 8 is
-      // M5GFX's PaperS3 value and the only precedent in-tree; Panel_EPD uses it
-      // as `dma_len = memory_w / 4 + line_padding` (Panel_EPD.cpp:238), so it is
-      // extra DMA bytes per scan line, not a panel timing parameter.
-      8,
-      // rotation — STARTING VALUE. The panel mount transform is unknown
-      // (read-pico.md B1): 0 keeps the SDK's native scan convention like LilyGo
-      // and PaperS3. The reference firmware ends at
-      // epd_set_rotation(EPD_ROT_INVERTED_PORTRAIT).
-      0,
-      // All three hooks are supplied, so FreeInkBusEPD::powerControl() never
-      // falls through to the stock Bus_EPD sequence — these own every line,
-      // including SPV, which the stock sequence would otherwise drive.
-      {&BoardReadPico::epdPrepare, &BoardReadPico::epdPowerOn, &BoardReadPico::epdPowerOff},
-      // LUTs. Panel_EPD::init() substitutes a built-in table for any null
-      // pointer (Panel_EPD.cpp:181-196), so "null" does NOT mean "no steps": the
-      // built-ins still cost lut_eraser 4 + lut_quality 32 + lut_fastest 7 steps
-      // of internal DMA. Only epd_text (Full/Half) and epd_fast (the default for
-      // everything else) are ever selected by LgfxEpdDriver::epdModeFor(), so
-      // only those two carry the vendor tables.
-      nullptr, 0,                     // lutQuality — epd_quality is never selected
-      kE0470Gc16, kE0470Gc16Step,     // lutText    <- epd_text  = Full/Half refresh
-      kE0470Du, kE0470DuStep,         // lutFast    <- epd_fast  = Fast refresh
-      nullptr, 0,                     // lutFastest — never selected
-      // cleanBankNeedsFreshBackground = false. Upstream added this member
-      // between the LUT block and the two Read Pico members, so it has to be
-      // given a value here or the braced array below lands on a bool. False is
-      // both the struct default and the right answer for this board: the
-      // shipping build drives the panel through the epdiy LCD backend, and this
-      // Lgfx config is the fallback, not a clean-bank-normalizing setup.
-      false,
-      // dataPinsHigh[8] = D8..D15 (GPIO 12..18, 45). A braced array, not a
-      // pointer: `nullptr, 0` would not compile.
-      {READPICO_EP_D8, READPICO_EP_D9, READPICO_EP_D10, READPICO_EP_D11, READPICO_EP_D12, READPICO_EP_D13,
-       READPICO_EP_D14, READPICO_EP_D15},
-      16  // busWidth = 16 (the i80 peripheral accepts only 8 or 16; the driver
-          // falls back to 8 for anything else)
-  };
-  return cfg;
-}
-
-}  // namespace freeink

@@ -52,61 +52,12 @@
 
 // --- EPD control lines ------------------------------------------------------
 // read_pico_board.c: EPD_XLE/EPD_XSTL/EPD_XCL/EPD_SPV/EPD_CKV.
-// These are the reference firmware's pins. How they are DRIVEN depends on the
-// display path that is linked:
-//   * the epdiy LCD path (what readpico builds today, FREEINK_DRIVER_EPDIY_LCD):
-//     XLE/XSTL/XCL are LCD_CAM peripheral outputs (hsync / DE / pclk, routed by
-//     lcd_driver.c:423-426) and CKV comes from RMT.
-//   * the historical LovyanGFX i80 path (ReadPicoLgfxConfig.cpp): XSTL was the
-//     i80 CS and XCL the i80 WR, with XLE/CKV/SPV as plain GPIOs. That mapping is
-//     what produced the wrong line start; see BoardConfig.h
-//     FREEINK_DRIVER_EPDIY_LCD and docs/engineering/read-pico.md §2.4 / B4.
-#define READPICO_EP_XLE 3   // XLE  (latch enable)   -> LCD_CAM HSYNC
-#define READPICO_EP_XSTL 46 // XSTL (start pulse, horizontal) -> LCD_CAM DE
-#define READPICO_EP_XCL 21  // XCL  (pixel clock)    -> LCD_CAM PCLK
-#define READPICO_EP_SPV 47  // SPV  (start pulse, vertical)
-#define READPICO_EP_CKV 48  // CKV  (gate clock)     -> RMT
-
-// --- The two LovyanGFX "dummy" pins (blocker B2, resolved in this round) -----
-// Bus_EPD::init() (m5stack/M5GFX @ 0.2.20, src/lgfx/v1/platforms/esp32/Bus_EPD.cpp)
-// touches two config pins this board has no GPIO for:
-//
-//   * pin_oe  — only ever passed to `lgfx::pinMode(pin_oe, output)` and to
-//     `lgfx::gpio_hi/gpio_lo` (Bus_EPD.cpp:120, :83, :93; common.hpp:187-188).
-//     `lgfx::pinMode` (common.cpp:361-364) is
-//         auto gpio_num = (gpio_num_t)pin;
-//         if ((size_t)gpio_num >= GPIO_NUM_MAX) return;
-//     so -1 (== (size_t)SIZE_MAX) returns immediately, and gpio_hi/gpio_lo are
-//     guarded on `pin >= 0`. PASSING -1 IS THEREFORE SAFE, and the real XOE is
-//     FCA9555 P0.1, driven by epdPowerOn()/epdPowerOff(). This is the same choice
-//     BoardT5S3 already ships (LilyGoT5S3LgfxConfig.cpp, `pinOe: -1, not a dummy
-//     pin`), so it is verified twice over.
-//
-//   * pin_pwr — is ALSO handed to the i80 driver as `dc_gpio_num`
-//     (Bus_EPD.cpp:129 `bus_config.dc_gpio_num = (gpio_num_t)_config.pin_pwr;
-//     //<= dummy setting.`), and IDF rejects a negative one:
-//     framework-espidf/components/esp_lcd/i80/esp_lcd_panel_io_i80.c:661
-//         bool valid_gpio = (wr_gpio_num >= 0) && (dc_gpio_num >= 0);
-//         if (!valid_gpio) return ESP_ERR_INVALID_ARG;
-//     which makes `Bus_EPD::init()` return false — a silent, dead panel. So
-//     pin_pwr MUST be a real GPIO >= 0.
-//
-// READPICO_EP_LGX_DUMMY_PIN is therefore used for pinPwr ONLY, and pinOe is left
-// at PIN_UNASSIGNED (-1) in ReadPicoLgfxConfig.cpp. That is the one deliberate
-// deviation from the §3.4 sketch, which showed the same macro for both.
-//
-// Why GPIO0: read_pico_board.c, read_pico_sd.c, read_pico_buzzer.c and
-// read_pico_init.c claim GPIO 1, 2, 3, 4-18, 21 and 38-48; GPIO 19/20 are the S3
-// native USB pair and 26-37 are flash/octal PSRAM. GPIO0 is the only number the
-// reference firmware never touches (grep for GPIO_NUM_0/GPIO0/BOOT across the
-// fetched sources: no hit). The consequence to carry forward: Bus_EPD::init()
-// ends with `lgfx::pinMode(_config.pin_pwr, output)` (Bus_EPD.cpp:143), which
-// leaves the pin a plain GPIO output holding the reset-default output register
-// value (0) — i.e. GPIO0 is held LOW for the whole run. Boot-mode strapping is
-// sampled only at reset, so this cannot re-enter download mode, but the pin is
-// claimed as an EPD artefact and nothing else may use it. UNVERIFIED ON
-// HARDWARE: whether GPIO0 is NC or carries a BOOT button/pad on this revision.
-#define READPICO_EP_LGX_DUMMY_PIN 0
+// LCD_CAM generates HSYNC/DE/PCLK; CKV uses RMT.
+#define READPICO_EP_XLE 3    // XLE  (latch enable)   -> LCD_CAM HSYNC
+#define READPICO_EP_XSTL 46  // XSTL (start pulse, horizontal) -> LCD_CAM DE
+#define READPICO_EP_XCL 21   // XCL  (pixel clock)    -> LCD_CAM PCLK
+#define READPICO_EP_SPV 47   // SPV  (start pulse, vertical)
+#define READPICO_EP_CKV 48   // CKV  (gate clock)     -> RMT
 
 // --- Shared I2C bus ---------------------------------------------------------
 // read_pico_firmware/README.md (Pinout) + read_pico_board.c `board_init`:
@@ -138,11 +89,11 @@
 #define READPICO_BUZZER 2
 
 // --- I2C device addresses (7-bit) -------------------------------------------
-#define READPICO_IOE_ADDR 0x24   // FCA9555_ADDR_DEFAULT (A2=1 A1=0 A0=0)
-#define READPICO_PMU_ADDR 0x2A   // PMU_I2C_ADDR (CW32L010)
-#define READPICO_SY_ADDR 0x62    // SY7636A_ADDR_DEFAULT (EPD PMIC)
-#define READPICO_TP_ADDR 0x15    // CST836U_ADDR_DEFAULT
-#define READPICO_ACCEL_ADDR 0x19 // SC7A20H (WHO_AM_I 0x11, VERSION 0x28)
+#define READPICO_IOE_ADDR 0x24    // FCA9555_ADDR_DEFAULT (A2=1 A1=0 A0=0)
+#define READPICO_PMU_ADDR 0x2A    // PMU_I2C_ADDR (CW32L010)
+#define READPICO_SY_ADDR 0x62     // SY7636A_ADDR_DEFAULT (EPD PMIC)
+#define READPICO_TP_ADDR 0x15     // CST836U_ADDR_DEFAULT
+#define READPICO_ACCEL_ADDR 0x19  // SC7A20H (WHO_AM_I 0x11, VERSION 0x28)
 
 // --- FCA9555 register map ---------------------------------------------------
 // fca9555.h: FCA9555_REG_IN0 0 / IN1 1 / OUT0 2 / OUT1 3 / INV0 4 / INV1 5 /
@@ -154,14 +105,14 @@
 
 // FCA9555 Port-0 bit offsets (read_pico_board.c `1U << n`; the names match
 // main/apps/app_ioe.c IOE_BIT_*).
-#define READPICO_IOE_MODE 0      // OUT: EPD MODE pin, held HIGH by init/poweron/poweroff
-#define READPICO_IOE_XOE 1       // OUT: EPD output enable, LOW while powering up
-#define READPICO_IOE_CW_INT 2    // IN : CW32L010 PMU interrupt (light-sleep wake)
-#define READPICO_IOE_SY_EN 3     // OUT: SY7636A enable; LOW resets every PMIC register
-#define READPICO_IOE_VCOM_EN 4   // OUT: external VCOM enable, raised last by sy7636a_power_on()
-#define READPICO_IOE_PGOOD 5     // IN : SY7636A power good
-#define READPICO_IOE_SD_CD 6     // IN : TF card detect, ACTIVE-LOW (0 = present)
-#define READPICO_IOE_TP_RST 7    // OUT: CST836U ACTIVE-LOW reset
+#define READPICO_IOE_MODE 0     // OUT: EPD MODE pin, held HIGH by init/poweron/poweroff
+#define READPICO_IOE_XOE 1      // OUT: EPD output enable, LOW while powering up
+#define READPICO_IOE_CW_INT 2   // IN : CW32L010 PMU interrupt (light-sleep wake)
+#define READPICO_IOE_SY_EN 3    // OUT: SY7636A enable; LOW resets every PMIC register
+#define READPICO_IOE_VCOM_EN 4  // OUT: external VCOM enable, raised last by sy7636a_power_on()
+#define READPICO_IOE_PGOOD 5    // IN : SY7636A power good
+#define READPICO_IOE_SD_CD 6    // IN : TF card detect, ACTIVE-LOW (0 = present)
+#define READPICO_IOE_TP_RST 7   // OUT: CST836U ACTIVE-LOW reset
 // read_pico_board.c: `#define IOE_CONFIG_PORT0 0x64` — bits 2, 5, 6 as inputs and
 // everything else as output. Port 1 is unused (CFG1 = 0xFF). app_ioe.c shows the
 // same 0x64 as IOE_CFG0_EXPECT and deliberately treats CFG/INV as read-only:
