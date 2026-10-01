@@ -581,7 +581,18 @@ class InputManager {
   // Touch timing / protocol constants (ported from the Murphy M3 CHSC6x
   // driver).
   static constexpr unsigned long TOUCH_IRQ_PULSE_MS = 120;   // release hold-over after last valid read
+#if FREEINK_DEVICE_READPICO
+  // Read Pico's CST836U is polled from the main loop only -- nothing in this
+  // tree calls beginAsync(), so this constant is the hard ceiling on the touch
+  // frame rate whenever the loop is free. 4 ms is 250 Hz, twice the previous
+  // 125 Hz; one 15-byte I2C frame at 400 kHz costs well under 1 ms, so the bus
+  // keeps up and this is a real rate increase, not a value the read cannot
+  // honour. It does NOT help while the panel push holds the loop blocked for
+  // most of a page turn -- that needs the sampling moved off the loop.
+  static constexpr unsigned long TOUCH_SAMPLE_DELAY_MS = 4;  // I2C poll cadence
+#else
   static constexpr unsigned long TOUCH_SAMPLE_DELAY_MS = 8;  // I2C poll cadence
+#endif
   static constexpr int TOUCH_TAP_SLOP_PX = 28;
   static constexpr int TOUCH_SWIPE_MIN_PX = 60;
   static constexpr int TOUCH_TAP_RELEASE_SLOP_PX = TOUCH_SWIPE_MIN_PX - 1;
