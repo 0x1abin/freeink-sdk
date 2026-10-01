@@ -2058,7 +2058,7 @@ constexpr BoardProfile READ_PICO = {
     1.2f,  // uiScale: touch device — STARTING VALUE, pending on-hardware measurement
     {},    // power: no latch, no charge enable — the PMU owns the host enable rail
     0,     // displayControllerVariant: not probed on this panel
-    {9, 3, 24, 3},  // portrait TRBL: provisional bottom clearance; measure the CNC bezel
+    {5, 5, 8, 5},  // portrait TRBL: 8 px bottom, 5 px other edges
     false,         // default charge-status polarity
     NO_I2C_FRONTLIGHT,
     16             // native GL16 image output
