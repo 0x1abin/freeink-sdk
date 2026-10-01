@@ -987,7 +987,31 @@ void FreeInkDisplay::copyGrayscaleBuffers(const uint8_t* lsbBuffer, const uint8_
   _driver->copyGrayscaleMsb(_bus, msbBuffer);
 }
 
+uint8_t* FreeInkDisplay::beginGrayscale16() {
+  if (_nativeGrayActive || _buildLent || !frameBuffer || _inverted || getGrayscaleLevels() != 16 || !_driver)
+    return nullptr;
+  cancelGrayscalePass();
+  syncPendingAsync();
+  uint8_t* buffer = _driver->beginGrayscale16();
+  _nativeGrayActive = buffer != nullptr;
+  return buffer;
+}
+
+bool FreeInkDisplay::commitGrayscale16() {
+  if (!_nativeGrayActive || !_driver) return false;
+  _nativeGrayActive = false;
+  _shadowValid = false;
+  _redRamSynced = false;
+  return _driver->commitGrayscale16(frameBuffer);
+}
+
+void FreeInkDisplay::cancelGrayscale16() {
+  if (_nativeGrayActive && _driver) _driver->cancelGrayscale16();
+  _nativeGrayActive = false;
+}
+
 void FreeInkDisplay::cancelGrayscalePass() {
+  cancelGrayscale16();
   if (_grayscaleMode == GrayscaleMode::Overlay) return;
   if (_driver) _driver->requestResync(1);
   _grayscaleMode = GrayscaleMode::Overlay;

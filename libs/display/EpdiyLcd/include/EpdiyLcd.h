@@ -78,6 +78,12 @@ bool epdiyLcdBegin(const EpdiyLcdConfig& cfg, uint16_t width, uint16_t height, b
 /// 释放总线与帧缓冲。/ Release the bus and the framebuffer.
 void epdiyLcdEnd();
 
+// Borrow the existing front framebuffer. No allocation. Commit uses GL16 and
+// promotes an unknown baseline to GC16; cancellation never changes the glass.
+uint8_t* epdiyLcdBeginGrayscale16();
+bool epdiyLcdCommitGrayscale16(const uint8_t* bwProxy);
+void epdiyLcdCancelGrayscale16();
+
 /// 推一帧。`fb` 是 1bpp、MSB 在前、每行 width/8 字节、height 行；位约定由
 /// epdiyLcdBegin 的 `blackIsOne` 给定。
 /// / Push one frame. `fb` is 1 bpp MSB-first, width/8 bytes per row, height rows;

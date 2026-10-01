@@ -99,6 +99,10 @@ class FreeInkDisplay {
   uint16_t getDisplayHeight() const { return displayHeight; }
   uint16_t getDisplayWidthBytes() const { return displayWidthBytes; }
   uint32_t getBufferSize() const { return bufferSize; }
+  uint8_t getGrayscaleLevels() const { return BoardConfig::ACTIVE.grayscaleLevels; }
+  uint8_t* beginGrayscale16();
+  bool commitGrayscale16();
+  void cancelGrayscale16();
 
   // Frame buffer operations
   void clearScreen(uint8_t color = 0xFF) const;
@@ -451,6 +455,7 @@ class FreeInkDisplay {
   GrayscaleMode _grayscaleMode = GrayscaleMode::Overlay;
   uint16_t _grayRows[2] = {0, 0};
   bool _grayPassFailed = false;
+  bool _nativeGrayActive = false;
   void cancelGrayscalePass();
   bool acceptGrayscaleRows(unsigned plane, const uint8_t* data, uint16_t y, uint16_t rows);
   bool _refreshPending = false;

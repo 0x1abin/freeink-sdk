@@ -854,6 +854,8 @@ struct BoardProfile {
   // I2C frontlight (LM3630A). Defaulted so existing profiles need no change;
   // a board with one sets it (EEGO A4).
   I2cFrontlightConfig i2cFrontlight = NO_I2C_FRONTLIGHT;
+  // Native image grayscale capability; omitted by legacy aggregate profiles.
+  uint8_t grayscaleLevels = 4;
 };
 
 constexpr TouchConfig NO_TOUCH = {TouchController::None,
@@ -2056,9 +2058,15 @@ constexpr BoardProfile READ_PICO = {
     1.2f,  // uiScale: touch device — STARTING VALUE, pending on-hardware measurement
     {},    // power: no latch, no charge enable — the PMU owns the host enable rail
     0,     // displayControllerVariant: not probed on this panel
-    {9, 3, 24, 3}  // portrait TRBL: provisional bottom clearance; measure the CNC bezel
+    {9, 3, 24, 3},  // portrait TRBL: provisional bottom clearance; measure the CNC bezel
+    false,         // default charge-status polarity
+    NO_I2C_FRONTLIGHT,
+    16             // native GL16 image output
 };
 
+static_assert(READ_PICO.grayscaleLevels == 16, "Read Pico exposes native sixteen-level image output");
+static_assert(XTEINK_X4.grayscaleLevels == 4 && XTEINK_X3.grayscaleLevels == 4,
+              "Legacy profiles retain four-level output");
 static_assert(READ_PICO.displayWidth / 8 * READ_PICO.displayHeight == 103968,
               "Read Pico must use one 103,968-byte framebuffer (1216/8 x 684)");
 static_assert(READ_PICO.displayController == DisplayController::LgfxEpd &&

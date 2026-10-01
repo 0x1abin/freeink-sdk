@@ -116,6 +116,32 @@ void checkGrayPacking(freeink::EpdiyLcdDriver& driver, freeink::EpdBus& bus) {
   }
 }
 
+void checkNativeGray(freeink::EpdiyLcdDriver& driver) {
+  const int allocations = allocation_calls;
+  uint8_t proxy[4] = {0xFF, 0xFF, 0xFF, 0xFF};
+  uint8_t* frame = driver.beginGrayscale16();
+  assert(frame != nullptr && driver.beginGrayscale16() == nullptr);
+  const int beforeCancel = draws;
+  memset(frame, 0, 16);
+  driver.cancelGrayscale16();
+  assert(draws == beforeCancel && !driver.commitGrayscale16(proxy));
+  frame = driver.beginGrayscale16();
+  for (int p = 0; p < 32; p += 2) frame[p / 2] = (p & 15) | (((p + 1) & 15) << 4);
+  assert(driver.commitGrayscale16(proxy) && lastMode == MODE_GL16);
+  for (int p = 0; p < 32; ++p) assert(lastTo[p] == (p & 15));
+  assert(!driver.commitGrayscale16(proxy));
+  frame = driver.beginGrayscale16();
+  memset(frame, 0, 16);
+  failDraw = true;
+  assert(!driver.commitGrayscale16(proxy));
+  driver.cancelGrayscale16();
+  failDraw = false;
+  frame = driver.beginGrayscale16();
+  memset(frame, 0, 16);
+  assert(driver.commitGrayscale16(proxy) && lastMode == MODE_GC16);
+  assert(allocation_calls == allocations);
+}
+
 void checkHighlevel() {
   // Exercise both real highlevel copy paths without the wrapper's recovery.
   auto hl = epd_hl_init(&E0470_WAVEFORM);
@@ -145,6 +171,7 @@ int main(int argc, char** argv) {
     freeink::EpdiyLcdDriver driver(freeink::testConfig());
     driver.begin(bus);
     assert(!freeink::epdiyLcdReady());
+    assert(driver.beginGrayscale16() == nullptr);
     fail_allocation = 0;
     driver.begin(bus);
     assert(freeink::epdiyLcdReady());
@@ -173,6 +200,7 @@ int main(int argc, char** argv) {
     fb[0] ^= 1;
   }
   checkGrayPacking(driver, bus);
+  checkNativeGray(driver);
   const int before = draws;
   assert(freeink::epdiyLcdDraw(fb, freeink::EpdiyLcdRefresh::Full, true));
   assert(freeink::epdiyLcdDraw(fb, freeink::EpdiyLcdRefresh::Full, true));

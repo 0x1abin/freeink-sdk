@@ -5,6 +5,7 @@ namespace BoardConfig {
 enum class Board { XteinkX3, XteinkX3Uc8279, XteinkX4, XteinkX4Pro, Sticky, WsEpaper397, WaveshareEpaper397, MetalioEink4 };
 enum class DisplayController { SSD1677, UC8179, UC8279 };
 struct ActiveProfile {
+  uint8_t grayscaleLevels = 4;
   uint16_t displayWidth=800, displayHeight=480;
   uint32_t displaySpiHz=10000000;
   struct { bool mirrorX=false, mirrorY=false; } orientation;
