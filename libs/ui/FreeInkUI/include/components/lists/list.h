@@ -3,6 +3,9 @@
 #include "../../FreeInkUICore.h"
 
 #include <atomic>
+#if __has_include(<BoardConfig.h>)
+#include <BoardConfig.h>
+#endif
 
 namespace freeink {
 namespace ui {
@@ -30,6 +33,13 @@ struct ListItem {
 };
 
 struct ListNav;
+
+struct ListRevealAction {
+  int16_t index = -1;
+  ActionId action = NO_ACTION;
+  BitmapRef icon{};
+  int16_t width = 0;
+};
 
 enum class SelectionMarker : uint8_t {
   None,      // selection shown by the row's selected BoxStyle
@@ -79,6 +89,8 @@ struct ListProps {
   int16_t selectedIndex = -1;
   ActionId action = NO_ACTION;
   uint16_t inputMask = InputDefault | InputPrev | InputNext;
+  // Optional trailing action exposed for one row after a completed swipe.
+  const ListRevealAction *reveal = nullptr;
   TextStyle labelText{};
   TextStyle emphasizedText{};
   TextStyle subtitleText{};
@@ -176,6 +188,8 @@ struct ListProps {
   // Explicit vertical content padding. -1 preserves legacy row-height-derived
   // padding; non-negative values make rowHeight a minimum, growing to content.
   int16_t rowPaddingY = -1;
+  // Draw toggle rows as outlined boxes with an inset fill when checked.
+  bool toggleCheckbox = false;
 };
 
 // Stateful companion to the immediate-mode list helpers in FreeInkUICore.h:
@@ -674,6 +688,20 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
       if (hugW < row.width)
         row.width = hugW;
     }
+    const ListRevealAction *reveal = props.reveal;
+#if defined(FREEINK_CAP_TOUCH) && !FREEINK_CAP_TOUCH
+    constexpr bool revealed = false;
+#else
+    const bool revealed = !partial && reveal && reveal->index == i;
+#endif
+    Rect actionRect{};
+    if (revealed) {
+      const int16_t actionW = reveal->width < row.width / 2
+                                  ? reveal->width
+                                  : static_cast<int16_t>(row.width / 2);
+      actionRect = Rect{static_cast<int16_t>(row.right() - actionW), row.y,
+                        actionW, row.height};
+    }
     State state = partial ? static_cast<State>(item.state & ~(StateSelected | StateFocused | StateActive))
                           : item.state;
     if (!partial && props.selectedIndex == static_cast<int16_t>(i))
@@ -706,6 +734,9 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
         hit.height = row.height;
       }
       frame.hit(hit, props.action, item.actionValue, props.inputMask, hitState);
+      if (revealed)
+        frame.hit(actionRect, reveal->action, item.actionValue,
+                  InputTouch, StateNormal);
     }
     if (!partial)
       state = frame.stateFor(props.action, item.actionValue, state);
@@ -713,10 +744,10 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
         props.rowStyles.unset() ? defaultListRowStyles() : props.rowStyles;
     if (props.rowRadius > 0)
       setStyleRadius(styles, props.rowRadius);
-    // A disabled bit carried by an enabled item is visual-only dimming. Keep
-    // it while idle, but let the selected style stay visible for navigation.
+    // INX's theme grid keeps a selected, visually dimmed row visible. Content
+    // layout retains the upstream disabled styling.
     State visualState = state;
-    if (item.enabled && hasState(visualState, StateSelected))
+    if (props.layoutPolicy == ListLayoutPolicy::ThemeRow && item.enabled && hasState(visualState, StateSelected))
       visualState = static_cast<State>(
           static_cast<int>(visualState) & ~static_cast<int>(StateDisabled));
     const BoxStyle &style = styles.resolve(visualState);
@@ -800,38 +831,39 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
       // The switch draws in row-foreground ink with the foreground's opposite
       // as "paper", so it inverts along with the row when selected.
       const Paint fg = style.foreground;
-      const bool fgWhite =
-          fg.kind == PaintKind::Solid && fg.color == Color::White;
+      const bool fgWhite = fg.kind == PaintKind::Solid && fg.color == Color::White;
       const Paint paper = Paint::solid(fgWhite ? Color::Black : Color::White);
-      const uint8_t trackRadius = static_cast<uint8_t>(
-          props.toggleRadius > togH / 2 ? togH / 2 : props.toggleRadius);
-      frame.target().fill(toggleRect, item.toggleChecked ? fg : paper,
-                          trackRadius);
-      if (props.toggleBorderWidth > 0) {
-        frame.target().stroke(toggleRect, fg, props.toggleBorderWidth,
-                              trackRadius);
+      if (props.toggleCheckbox) {
+        const int16_t size = static_cast<int16_t>((togW < togH ? togW : togH) - 6);
+        const Rect box{static_cast<int16_t>(toggleRect.right() - size - 3),
+                       static_cast<int16_t>(toggleRect.y + (togH - size) / 2), size, size};
+        frame.target().stroke(box, fg, 2, 2);
+        if (item.toggleChecked) {
+          const int16_t inset = static_cast<int16_t>(size / 4);
+          const Rect inner = box.inset(Insets{inset, inset, inset, inset});
+          frame.target().fill(inner, fg, 2);
+        }
+      } else {
+        const uint8_t trackRadius = static_cast<uint8_t>(props.toggleRadius > togH / 2 ? togH / 2 : props.toggleRadius);
+        frame.target().fill(toggleRect, item.toggleChecked ? fg : paper, trackRadius);
+        if (props.toggleBorderWidth > 0) {
+          frame.target().stroke(toggleRect, fg, props.toggleBorderWidth, trackRadius);
+        }
+        const int16_t knobInset = props.toggleKnobInset < 0 ? 0 : props.toggleKnobInset;
+        const int16_t knobH = static_cast<int16_t>(togH - knobInset * 2);
+        if (knobH > 0) {
+          Rect knob{static_cast<int16_t>(item.toggleChecked ? toggleRect.right() - knobInset - knobH
+                                                            : toggleRect.x + knobInset),
+                    static_cast<int16_t>(toggleRect.y + knobInset), knobH, knobH};
+          const uint8_t knobRadius =
+              static_cast<uint8_t>(props.toggleKnobRadius > knobH / 2 ? knobH / 2 : props.toggleKnobRadius);
+          frame.target().fill(knob, item.toggleChecked ? paper : fg, knobRadius);
+        }
       }
-      const int16_t knobInset =
-          props.toggleKnobInset < 0 ? 0 : props.toggleKnobInset;
-      const int16_t knobH = static_cast<int16_t>(togH - knobInset * 2);
-      if (knobH > 0) {
-        Rect knob{
-            static_cast<int16_t>(item.toggleChecked
-                                     ? toggleRect.right() - knobInset - knobH
-                                     : toggleRect.x + knobInset),
-            static_cast<int16_t>(toggleRect.y + knobInset), knobH, knobH};
-        const uint8_t knobRadius = static_cast<uint8_t>(
-            props.toggleKnobRadius > knobH / 2 ? knobH / 2
-                                               : props.toggleKnobRadius);
-        frame.target().fill(knob, item.toggleChecked ? paper : fg, knobRadius);
-      }
-      availW = static_cast<int16_t>(availW - togW - props.valueInset -
-                                    props.textGap);
-      if (props.rtl)
-        labelX = static_cast<int16_t>(band.x + band.width - availW);
+      availW = static_cast<int16_t>(availW - togW - props.valueInset - props.textGap);
+      if (props.rtl) labelX = static_cast<int16_t>(band.x + band.width - availW);
     } else if (item.value) {
-      TextStyle valueStyle =
-          textStyleWithForeground(props.valueText, style.foreground);
+      TextStyle valueStyle = textStyleWithForeground(props.valueText, style.foreground);
       valueStyle.align = props.rtl ? TextAlign::Left : TextAlign::Right;
       const int16_t valueW = layout.valueWidth;
       const int16_t valueX = props.rtl
@@ -910,6 +942,16 @@ void list(Frame<MaxInteractions> &frame, Rect rect, const ListProps &props) {
         frame.target(),
         Rect{rect.x, static_cast<int16_t>(row.bottom() - 1), rect.width, 1},
         props.separator);
+    if (revealed) {
+      const int16_t inset = sidePad / 2;
+      const Rect button = actionRect.inset(Insets{inset, inset, inset, inset});
+      frame.target().fill(button, Paint::solid(Color::White), props.rowRadius);
+      frame.target().stroke(button, Paint::solid(Color::Black), 1, props.rowRadius);
+      if (reveal->icon)
+        frame.target().bitmap(centeredRect(button, Size{static_cast<int16_t>(reveal->icon.width),
+                                                       static_cast<int16_t>(reveal->icon.height)}),
+                              reveal->icon, BitmapMode::Contain, Paint::solid(Color::Black));
+    }
     // A preview uses the same row geometry and paint path, clipped at the fold.
     if (partial) {
       frame.target().setClipRect(previousClip);
