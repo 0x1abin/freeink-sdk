@@ -71,6 +71,25 @@ extern const EpdWaveform E0470_GRAY8_WAVEFORM;
 #define E0470_WAVEFORM_FRAME_US 11090
 extern const EpdWaveform E0470_WAVEFORM;
 
+/// 文字转页表：裁剪后的 GL16（37 相）**左对齐**，对角线（to == from）整条置为保持。
+/// 两件事各自对应一种可见的闪：
+///   1. 原地重推一个黑像素会先擦白再推黑 —— 对角线清零后不再发生。
+///   2. e0470_waveform_trim() 把序列右对齐到保持相之前，于是「新文字推黑」13 相比
+///      「旧文字擦白」18 相晚 5 相开始，中间整页是白的；左对齐后两者同起拍，是交叉
+///      淡化，没有白场，相数仍是 37（比未裁剪的 48 相快约 120ms）。
+/// 静止内容的刷新交给周期性 GC16，与原厂 APP_GC16_EVERY 同一分工。
+/// / Text-turn table: the trimmed GL16 (37 phases) **left-aligned**, with the whole
+/// `to == from` diagonal held. Two things each account for a visible flash:
+///   1. Re-driving a black pixel in place erases it white first; clearing the diagonal
+///      stops that.
+///   2. e0470_waveform_trim() right-aligns sequences against the hold phases, so the
+///      13-phase write of the new text starts 5 phases after the 18-phase erase of the old
+///      one and the page is blank white in between; left-aligned they start together, a
+///      cross-fade with no white field, still 37 phases (~120 ms faster than untrimmed).
+/// Static content is refreshed by the periodic GC16 instead, the same division of labour as
+/// the vendor's APP_GC16_EVERY.
+extern const EpdWaveform E0470_TEXTTURN_WAVEFORM;
+
 /// 触摸笔迹跟手用的 8 帧短 DU，走 FAST 扫描（帧周期约 7ms）。
 /// 推动次数按 |to-from| 比例分配，满幅迁移往黑推 7 相、往白推 8 相。
 /// / 8-frame short DU for touch ink, FAST scan (~7 ms/frame). Push count

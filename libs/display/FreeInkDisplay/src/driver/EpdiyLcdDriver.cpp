@@ -148,8 +148,24 @@ void EpdiyLcdDriver::displayGray(EpdBus& bus, const uint8_t* fb, bool turnOff, c
   // EpdiyLcd kept the base image during display().
   (void)fb;
 
-  // DU cannot present mid tones. Promote Fast to GL16; retain explicit GC16.
-  const EpdiyLcdRefresh grayMode = _lastBaseMode == EpdiyLcdRefresh::Fast ? EpdiyLcdRefresh::Half : _lastBaseMode;
+  // DU 灰阶太少，实测不可用（文字中间调不到位）。抗锯齿文字页的灰阶推送一律走文字转页档：
+  // GL16 加全保持对角线，没变化的像素完全不驱动——原地重推一个黑像素会先把它擦白，那正是
+  // 每次翻页白闪的来源。只有 GC16 清屏档原样穿过，因为它本来就要整帧重写，插图页也由阅读器
+  // 强制走清屏档保住中间调。
+  // / DU carries too few gray levels to be usable (text mid-tones miss). Every
+  // anti-aliased text page's gray push goes out as the text turn: GL16 with an all-hold
+  // diagonal, so a pixel that did not change is not driven at all -- re-driving a black
+  // pixel in place erases it white first, which is what made every turn flash. Only a
+  // GC16 clean passes through, because it rewrites the whole frame by design and the
+  // reader forces image pages onto it so an illustration keeps its mid-tones.
+  //
+  // 判据是"不是清屏档"而不是"是 Fast 档"：阅读器在 Read Pico 上把普通翻页提升成了 GL16
+  // (Half)，只认 Fast 会让这张表永远挂不上，无闪就失效。
+  // / The test is "not the clean profile" rather than "is Fast": the reader promotes an
+  // ordinary page turn to GL16 (Half) on Read Pico, so keying on Fast alone would leave
+  // the table uninstalled and silently lose the flicker-free turn.
+  const EpdiyLcdRefresh grayMode = _lastBaseMode == EpdiyLcdRefresh::Full ? EpdiyLcdRefresh::Full
+                                                                         : EpdiyLcdRefresh::TextTurn;
   epdiyLcdDrawGray(_lsb, _msb, grayMode, turnOff);
 }
 

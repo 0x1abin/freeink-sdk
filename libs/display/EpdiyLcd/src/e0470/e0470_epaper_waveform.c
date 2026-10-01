@@ -135,6 +135,26 @@ static void e0470_gl16_white_tick(uint8_t (*data)[16][4], int frames) {
     lut_or(data, tick, 15, 15, 2);
 }
 
+// 把每条 (to, from) 的活跃段搬到从第 0 相开始，即左对齐。e0470_waveform_trim() 交出来的
+// 是右对齐的（序列都贴到保持相之前），所以不等长的方向起拍时间不同；左对齐让它们同起拍。
+// / Move each (to, from) active run to start at phase 0, i.e. left-align it.
+// e0470_waveform_trim() hands back right-aligned sequences pinned to the hold phases, so
+// directions of unequal length start on different beats; left-aligning puts them together.
+static void e0470_left_align(const uint8_t (*src)[16][4], int frames, uint8_t (*dst)[16][4]) {
+    memset(dst, 0, (size_t)frames * 16 * 4);
+    for (int to = 0; to < 16; to++) {
+        for (int from = 0; from < 16; from++) {
+            uint8_t seq[64];
+            for (int f = 0; f < frames; f++) seq[f] = (uint8_t)lut_get(src, f, to, from);
+            int a = 0;
+            while (a < frames && seq[a] == 0) a++;
+            int z = frames;
+            while (z > a && seq[z - 1] == 0) z--;
+            for (int f = a; f < z; f++) lut_or(dst, f - a, to, from, seq[f]);
+        }
+    }
+}
+
 /* ---- 完整表 / Full tables ---- */
 // DU 20 相，GC16 48 相；GL16 用 RAM 副本以便白底补 1 帧。
 // / DU 20, GC16 48; GL16 uses a RAM copy so the white-bg tick can be added.
@@ -215,6 +235,39 @@ const EpdWaveform E0470_WAVEFORM = {
     .temp_intervals = e0470_intervals,
 };
 
+/* ---- 文字转页表 / Text-turn table ---- */
+// 取裁剪后的 GL16（37 相，快），但把每条 (to, from) 序列**左对齐**，让所有方向同一起拍。
+// e0470_waveform_trim() 是右对齐的：它把不等长的序列都贴到保持相之前，于是「新文字推黑」
+// 13 相比「旧文字擦白」18 相晚 5 相开始，中间那几相整页是白的 —— 翻页可见的白闪。
+// 左对齐后两者同时开始，是交叉淡化，没有白场；相数仍是 37，不比裁剪表慢。
+// 对角线再清零：未变化的像素完全不驱动（原地重推一个黑像素会先擦白再推黑）。
+// / Take the trimmed GL16 (37 phases, fast) but **left-align** every (to, from) sequence so
+// all directions start on the same beat. e0470_waveform_trim() right-aligns instead, pinning
+// unequal sequences to the hold phases, so the 13-phase write of the new text starts 5 phases
+// after the 18-phase erase of the old one and the page is blank white in between -- the flash
+// a turn shows. Left-aligned they begin together, a cross-fade with no white field, still 37
+// phases. The diagonal is then cleared so unchanged pixels are not driven at all.
+static uint8_t e0470_textturn_gl16_data[E0470_GL16_FRAMES][16][4];
+static const EpdWaveformPhases e0470_textturn_gl16_phases = {
+    .phases = E0470_GL16_FRAMES,
+    .phase_times = NULL,
+    .luts = (const uint8_t*)&e0470_textturn_gl16_data[0],
+};
+static const EpdWaveformPhases* e0470_textturn_gl16_ranges[] = { &e0470_textturn_gl16_phases };
+static const EpdWaveformMode e0470_textturn_gl16_mode = {
+    .type = 5, .temp_ranges = 1, .range_data = &e0470_textturn_gl16_ranges[0],
+};
+static const EpdWaveformMode* e0470_textturn_modes[] = {
+    &e0470_textturn_gl16_mode,
+};
+
+const EpdWaveform E0470_TEXTTURN_WAVEFORM = {
+    .num_modes = 1,
+    .num_temp_ranges = 1,
+    .mode_data = e0470_textturn_modes,
+    .temp_intervals = e0470_intervals,
+};
+
 const EpdWaveformPhases* e0470_waveform_phases(const EpdWaveform* waveform, int mode) {
     if (waveform == NULL) return NULL;
     const int type = mode & 0x3F;
@@ -250,4 +303,24 @@ void e0470_waveform_init(void) {
     memcpy(e0470_full_gl16_live, e0470_full_gl16_data, sizeof(e0470_full_gl16_live));
     e0470_gl16_white_tick(e0470_full_gl16_live, E0470_FULL_GL16_FRAMES);
     e0470_gl16_white_tick(e0470_gl16_data, E0470_GL16_FRAMES);
+
+    // 文字转页表 = 裁剪后的 GL16 左对齐（各方向同起拍，擦白与推黑重叠、无白场）。
+    //
+    // 这里**不能**再清 to == from 的对角线。GL16 是"整帧重写"波形：每个像素都会被
+    // 擦到白再推到目标色，所以一帧结束后屏上的真实状态就是这张 1 bit 图。一旦把
+    // to == from 跳过，它就从整帧重写退化成局部更新，而"未变化"只是相对上一帧的
+    // 1 bit 图而言——上一帧是抗锯齿帧，屏上真实留着的是灰度，于是这些像素得不到
+    // 任何驱动，上一页字形的灰度残影就留了下来，看起来像字被挪了位。残影还会让
+    // 屏的真实基线与控制器以为的基线越差越远，后面的差分帧（本页或别的界面）都
+    // 按错误的基线算，整屏就散了。左对齐本身已经消掉了白场，不需要靠清对角线。
+    // / Text-turn table = the trimmed GL16, left-aligned so every direction starts on the
+    // same beat and the erase overlaps the write with no white field, then with every
+    // to == from action cleared. An unchanged pixel is therefore not driven at all, which
+    // is what removes the erase-to-white step that reads as a white flash on every turn.
+    e0470_left_align(e0470_gl16_data, E0470_GL16_FRAMES, e0470_textturn_gl16_data);
+    for (int f = 0; f < E0470_GL16_FRAMES; f++) {
+        for (int v = 0; v < 16; v++) {
+            e0470_textturn_gl16_data[f][v][v / 4] &= (uint8_t)~(3u << (6 - 2 * (v % 4)));
+        }
+    }
 }
