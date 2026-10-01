@@ -8,8 +8,8 @@
 
 #include <cstdio>
 #include <cstring>
-#include <thread>
 #include <initializer_list>
+#include <thread>
 
 namespace {
 
@@ -734,6 +734,60 @@ void testListVirtualization() {
     }
   }
   CHECK(sawThumb);
+}
+
+void testListRevealActionTargetsOneRow() {
+  FakeDrawTarget draw;
+  DeviceContext device = makeDevice();
+  InputSnapshot input;
+  InteractionBuffer<8> hits;
+  Frame<8> frame(draw, device, input, hits);
+  ListItem items[3]{};
+  for (int i = 0; i < 3; ++i) {
+    items[i].label = "Book";
+    items[i].actionValue = static_cast<int16_t>(i);
+  }
+  static const uint8_t iconBits[72]{};
+  items[1].icon = BitmapRef{iconBits, 24, 24};
+  ListRevealAction reveal;
+  reveal.index = 1;
+  reveal.action = 9;
+  reveal.icon = items[1].icon;
+  reveal.width = 80;
+  ListProps props;
+  props.items = items;
+  props.count = 3;
+  props.action = 5;
+  props.inputMask = InputTouch;
+  props.rowHeight = 40;
+  props.rowRadius = 6;
+  props.scrollIndicator = false;
+  props.reveal = &reveal;
+  list(frame, Rect{0, 0, 160, 120}, props);
+
+  bool rowIconVisible = false;
+  bool roundedButton = false;
+  for (size_t i = 0; i < draw.opCount; ++i) {
+    const auto& op = draw.ops[i];
+    if (op.rect.y < 40 || op.rect.y >= 80) continue;
+    if (op.kind == FakeDrawTarget::Op::Bitmap && op.rect.x >= 0 && op.rect.x < 80) rowIconVisible = true;
+    if (op.kind == FakeDrawTarget::Op::Fill && op.rect.x >= 80 && op.radius == props.rowRadius) roundedButton = true;
+  }
+  CHECK(rowIconVisible);
+  CHECK(roundedButton);
+  CHECK_EQ(draw.countKind(FakeDrawTarget::Op::Text), 3u);
+  CHECK_EQ(hits.count(), 4u);
+  Interaction hit;
+  CHECK(hits.hitPublished(120, 60, 9, hit));
+  CHECK_EQ(hit.value, 1);
+  CHECK(!hits.hitPublished(120, 20, 9, hit));
+  InputSnapshot tap;
+  tap.touchReleased = true;
+  tap.touchX = 120;
+  tap.touchY = 60;
+  CHECK_EQ(hits.route(tap).action, 9);
+  tap.touchX = 20;
+  CHECK_EQ(hits.route(tap).action, 5);
 }
 
 void testListClampsBadTopIndex() {
@@ -1884,35 +1938,38 @@ void testInxListPrimitivesStayOptIn() {
 }
 
 void testSelectedVisualOnlyDisabledListRow() {
-  FakeDrawTarget draw;
-  DeviceContext device = makeDevice(100, 40);
-  InputSnapshot input;
-  InteractionBuffer<4> interactions;
-  Frame<4> frame(draw, device, input, interactions);
-  ListItem item{};
-  item.label = "Installed";
-  item.state = StateDisabled;
-  item.actionValue = 7;
+  for (const auto policy : {ListLayoutPolicy::Content, ListLayoutPolicy::ThemeRow}) {
+    FakeDrawTarget draw;
+    DeviceContext device = makeDevice(100, 40);
+    InputSnapshot input;
+    InteractionBuffer<4> interactions;
+    Frame<4> frame(draw, device, input, interactions);
+    ListItem item{};
+    item.label = "Installed";
+    item.state = StateDisabled;
+    item.actionValue = 7;
 
-  ListProps props;
-  props.items = &item;
-  props.count = 1;
-  props.selectedIndex = 0;
-  props.action = 9;
-  props.rowHeight = 20;
-  list(frame, Rect{0, 0, 100, 20}, props);
+    ListProps props;
+    props.layoutPolicy = policy;
+    props.items = &item;
+    props.count = 1;
+    props.selectedIndex = 0;
+    props.action = 9;
+    props.rowHeight = 20;
+    list(frame, Rect{0, 0, 100, 20}, props);
 
-  bool sawSelectedFill = false;
-  for (size_t i = 0; i < draw.opCount; ++i) {
-    const auto &op = draw.ops[i];
-    if (op.kind == FakeDrawTarget::Op::Fill && op.paint == PaintKind::Solid &&
-        op.color == Color::Black && op.rect.x == 0 && op.rect.y == 0 &&
-        op.rect.width == 100 && op.rect.height == 20)
-      sawSelectedFill = true;
+    bool sawSelectedFill = false;
+    for (size_t i = 0; i < draw.opCount; ++i) {
+      const auto &op = draw.ops[i];
+      if (op.kind == FakeDrawTarget::Op::Fill && op.paint == PaintKind::Solid &&
+          op.color == Color::Black && op.rect.x == 0 && op.rect.y == 0 &&
+          op.rect.width == 100 && op.rect.height == 20)
+        sawSelectedFill = true;
+    }
+    CHECK_EQ(sawSelectedFill, policy == ListLayoutPolicy::ThemeRow);
+    CHECK_EQ(interactions.count(), 1u);
+    CHECK(!hasState(interactions.data()[0].state, StateDisabled));
   }
-  CHECK(sawSelectedFill);
-  CHECK_EQ(interactions.count(), 1u);
-  CHECK(!hasState(interactions.data()[0].state, StateDisabled));
 }
 
 // RTL mirrors list()'s row layout: icon and label move to the trailing
@@ -2016,6 +2073,47 @@ void testListRtlMirrorsToggleSide() {
   CHECK_EQ(rtlDraw.ops[1].kind, FakeDrawTarget::Op::Fill);
   CHECK_EQ(ltrDraw.ops[1].rect.x, 480 - 38 - 4);  // right edge in LTR
   CHECK_EQ(rtlDraw.ops[1].rect.x, 4);             // left edge (band.x + valueInset) in RTL
+}
+
+void testListCheckboxPaintAndHit() {
+  for (bool checked : {false, true}) {
+    for (bool rtl : {false, true}) {
+      FakeDrawTarget draw;
+      DeviceContext device = makeDevice();
+      InputSnapshot input;
+      InteractionBuffer<4> interactions;
+      Frame<4> frame(draw, device, input, interactions);
+      ListItem item{};
+      item.label = "Enabled";
+      item.toggle = true;
+      item.toggleChecked = checked;
+      ListProps props;
+      props.items = &item;
+      props.count = 1;
+      props.action = 9;
+      props.rowHeight = 40;
+      props.sidePadding = 0;
+      props.valueInset = 4;
+      props.toggleCheckbox = true;
+      props.toggleWidth = props.toggleHeight = 28;
+      props.rtl = rtl;
+      list(frame, Rect{0, 0, 480, 40}, props);
+      const int boxX = rtl ? 7 : 451;
+      bool box = false, inset = false;
+      for (size_t i = 0; i < draw.opCount; ++i) {
+        const auto& op = draw.ops[i];
+        if (op.rect.x == boxX && op.rect.width == 22 && op.rect.height == 22) box = true;
+        if (op.rect.x == boxX + 5 && op.rect.width == 12 && op.rect.height == 12) inset = true;
+      }
+      CHECK(box);
+      CHECK_EQ(inset, checked);
+      InputSnapshot tap;
+      tap.touchReleased = true;
+      tap.touchX = boxX + 10;
+      tap.touchY = 20;
+      CHECK_EQ(interactions.route(tap).action, 9);
+    }
+  }
 }
 
 void testButtonRegistersExpandedHit() {
@@ -3810,6 +3908,23 @@ void testKeyboardAltCaseFlip() {
   CHECK(keyboardAltOutputFor(en, QWERTY_KEY_BACKSPACE) == nullptr);
 }
 
+void testSpanishKeyboardPreservesClassicKeys() {
+  const char* accents[] = {"á", "é", "í", "ó", "ú", "ü", "Á", "É", "Í", "Ó", "Ú", "Ü"};
+  const char keys[] = "aeiougAEIOUG";
+  for (int i = 0; i < 12; ++i) {
+    for (int variant = 0; variant < 4; ++variant) {
+      const bool shifted = i >= 6;
+      const auto& current = builtinKeyboardLayout(KeyboardLayoutId::SpanishEs, shifted, false,
+                                                  variant & 1, variant & 2);
+      const auto& classic = builtinKeyboardLayout(KeyboardLayoutId::SpanishEs, shifted, false,
+                                                  variant & 1, variant & 2, KeyboardGeometry::Classic);
+      CHECK(std::strcmp(keyboardAltOutputFor(current, keys[i]), accents[i]) == 0);
+      const char expected[] = {keys[(i + 6) % 12], '\0'};
+      CHECK(std::strcmp(keyboardAltOutputFor(classic, keys[i]), expected) == 0);
+    }
+  }
+}
+
 void testTouchTapQueue() {
   TouchTapQueue<2> taps;
   CHECK(taps.empty());
@@ -5468,6 +5583,7 @@ int main() {
   testPublishCycleIsolatesReaders();
   testListHelpers();
   testListVirtualization();
+  testListRevealActionTargetsOneRow();
   testListClampsBadTopIndex();
   testListItemsWindow();
   testListRowProvider();
@@ -5493,6 +5609,7 @@ int main() {
   testSelectedVisualOnlyDisabledListRow();
   testListRtlMirrorsIconAndValueSides();
   testListRtlMirrorsToggleSide();
+  testListCheckboxPaintAndHit();
   testButtonRegistersExpandedHit();
   testProgressBarClamps();
   testBatteryIndicator();
@@ -5530,6 +5647,7 @@ int main() {
   testNumberRowLayouts();
   testKeyboardEntryLongPressAlt();
   testKeyboardAltCaseFlip();
+  testSpanishKeyboardPreservesClassicKeys();
   testTouchTapQueue();
   testKeyboardNavigatorAndActivation();
   testTouchHoldRouter();
