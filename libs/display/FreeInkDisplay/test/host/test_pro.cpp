@@ -181,6 +181,43 @@ class CombinedGrayDriver : public BwOnlyDriver {
   }
 };
 
+static void testNativeTransaction() {
+  class NativeDriver : public BwOnlyDriver {
+   public:
+    uint8_t frame[64]{};
+    int finishes = 0, cancels = 0;
+    bool fail = false;
+    PanelGeometry geometry() const override { return {16, 8, 2, 16}; }
+    void displayFinish(EpdBus&, const uint8_t*) override { ++finishes; }
+    uint8_t* beginGrayscale16() override { assert(finishes == 1); return frame; }
+    bool commitGrayscale16(const uint8_t* proxy) override { assert(proxy); return !fail; }
+    void cancelGrayscale16() override { ++cancels; }
+  } driver;
+  FreeInkDisplay display(1, 2, 3, 4, 5, 6);
+  display._driver = &driver;
+  display.begin();
+  assert(display.getGrayscaleLevels() == 4 && display.beginGrayscale16() == nullptr);
+  BoardConfig::ACTIVE.grayscaleLevels = 16;
+  display._refreshPending = true;
+  assert(display.beginGrayscale16() == driver.frame && !display.isRefreshPending());
+  assert(display.beginGrayscale16() == nullptr);
+  assert(display.commitGrayscale16() && !display.commitGrayscale16());
+  assert(display.beginGrayscale16() == driver.frame);
+  display.cancelGrayscale16();
+  display.cancelGrayscale16();
+  assert(driver.cancels == 1);
+  display._inverted = true;
+  assert(display.beginGrayscale16() == nullptr);
+  display._inverted = false;
+  assert(display.beginGrayscale16() == driver.frame);
+  driver.fail = true;
+  assert(!display.commitGrayscale16());
+  assert(display.beginGrayscale16() == driver.frame);
+  display.deepSleep();
+  assert(driver.cancels == 2);
+  BoardConfig::ACTIVE.grayscaleLevels = 4;
+}
+
 static void testCapabilities() {
   FreeInkDisplay display(1, 2, 3, 4, 5, 6);
   assert(!display.grayscaleCapabilities().supported());
@@ -550,6 +587,7 @@ int main(int argc, char**) {
   }
   testAbsolutePipeline();
   testCapabilities();
+  testNativeTransaction();
   testStream<Uc8179Driver>(true,0);
   testStream<Uc8279X4Driver>(false,120);
   testSsd();

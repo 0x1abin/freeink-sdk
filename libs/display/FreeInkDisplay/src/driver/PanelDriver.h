@@ -110,6 +110,15 @@ class PanelDriver {
     (void)buf;
   }
 
+  // Borrow native 4bpp storage: even pixels in the low nibble, 0 black / 15 white.
+  // Unsupported drivers do not allocate or emulate a native frame.
+  virtual uint8_t* beginGrayscale16() { return nullptr; }
+  virtual bool commitGrayscale16(const uint8_t* bwProxy) {
+    (void)bwProxy;
+    return false;
+  }
+  virtual void cancelGrayscale16() {}
+
   // --- grayscale (dual-plane LSB/MSB) ---
   virtual GrayscaleCapabilities grayscaleCapabilities(GrayscaleMode mode = GrayscaleMode::Overlay) const {
     (void)mode;

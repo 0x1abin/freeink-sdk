@@ -122,3 +122,42 @@ and wake, alongside the existing X3/Pro transfer and lifecycle checks. CrossPoin
 tests the four-tone pixel encoding and the separate image/AA quantizers. On hardware, compare AA page turns,
 image pages, inverted reading, and the first page after wake. Include Paper Mono
 for combined-base behavior; the capability refactor changes no waveform tables.
+
+## Native image level count and sixteen-level transactions
+
+`BoardProfile::grayscaleLevels` is a trailing `uint8_t` with default `4`, so old
+aggregate profiles keep their initialization and behavior. Only `READ_PICO`
+sets `16`. `FreeInkDisplay::getGrayscaleLevels()` reports that board capability;
+HalDisplay and GfxRenderer expose it to the application. This does not change
+Overlay/Absolute encoding or reader text AA. The simulator still reports four.
+
+`beginGrayscale16()` drains an existing asynchronous refresh, rejects inversion
+and duplicate loans, and borrows the driver's existing front framebuffer. A null
+pointer means unavailable; other PanelDrivers default to unsupported and allocate
+nothing. Storage contains two pixels per byte: even X in the low nibble, odd X in
+the high nibble, `0` black through `15` white. Physical dimensions come from the
+active profile. The application owns the exclusive loan until commit/cancel and
+must maintain its existing 1bpp B/W proxy; no other drawing/display transaction
+may run during the loan.
+
+`commitGrayscale16()` consumes the loan and returns the actual backend refresh
+result. EpdiyLcd uses GL16 for ordinary image commits. Unknown baselines and failed
+refresh recovery retain the existing clear/GC16 policy. Successful commits stash
+the B/W proxy for later four-level AA. `cancelGrayscale16()` makes no panel write,
+restores a known front baseline from the existing back buffer, and leaves an
+unknown baseline unknown. Sleep/end release the loan with the existing buffers.
+No additional full-screen native buffer is allocated.
+
+`libs/display/EpdiyLcd/test/host/test_transactions.py` was run on Linux for this
+change (diagnostics on/off). It covers native nibble packing, zero allocations
+while borrowing, cancellation, GL16, draw failure/GC16 retry, existing seven
+allocation failures, sleep/reinitialization, queues and concurrent PMU operations.
+The macOS linker does not support the harness's `--wrap=calloc`. This software
+result is separate from optical/electrical acceptance. CrossMux's 2026-10-01
+Read Pico app0 image SHA-256 is
+`e01c746963db6df1053cff8eb3018d7c6a8f90da9ef3c24010677d77736f0cba`;
+write verification passed. Idle internal free heap was 75,679 bytes with a
+31,732-byte largest block. The user confirmed sixteen distinguishable tones,
+normal polarity, the saved sleep cover, modal dismissal and wake. All four
+orientations, repeated sleep/wake cycles and long-term ghosting still require
+separate physical checks; this is user observation, not optical measurement.

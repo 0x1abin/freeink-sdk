@@ -63,6 +63,9 @@ class EpdiyLcdDriver : public PanelDriver {
   // pushes the B/W frame through display() before the grey commit overlays it.
   GrayscaleCapabilities grayscaleCapabilities(GrayscaleMode mode = GrayscaleMode::Overlay) const override;
 
+  uint8_t* beginGrayscale16() override { return _ready ? epdiyLcdBeginGrayscale16() : nullptr; }
+  bool commitGrayscale16(const uint8_t* bwProxy) override { return _ready && epdiyLcdCommitGrayscale16(bwProxy); }
+  void cancelGrayscale16() override { epdiyLcdCancelGrayscale16(); }
   void begin(EpdBus& bus) override;
   void deepSleep(EpdBus& bus) override;
   void display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) override;
@@ -85,8 +88,7 @@ class EpdiyLcdDriver : public PanelDriver {
   // screen-wide negative. LgfxEpdDriver.cpp:187-201 records the same trap.
   void copyGrayscaleLsb(EpdBus& bus, const uint8_t* lsb) override;
   void copyGrayscaleMsb(EpdBus& bus, const uint8_t* msb) override;
-  void displayGray(EpdBus& bus, const uint8_t* fb, bool turnOff, const unsigned char* lut,
-                   bool factoryMode) override;
+  void displayGray(EpdBus& bus, const uint8_t* fb, bool turnOff, const unsigned char* lut, bool factoryMode) override;
 
   // Combined base: the B/W page is only STASHED here, and the grey commit presents
   // base + mid tones together in one waveform. Pushing the base first would cost a

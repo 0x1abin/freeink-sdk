@@ -41,6 +41,7 @@ uint8_t* g_fb4 = nullptr;
 // needs it as a base because the caller's buffer then holds a selector plane.
 uint8_t* g_base = nullptr;
 bool g_started = false;
+bool g_nativeGrayActive = false;
 bool g_initialized = false;
 bool g_powerReady = false;
 bool g_baselineKnown = false;
@@ -244,6 +245,7 @@ void epdiyLcdEnd() {
   g_base = nullptr;
   g_fb4 = nullptr;
   g_started = false;
+  g_nativeGrayActive = false;
   g_initialized = false;
   g_baselineKnown = false;
 }
@@ -323,6 +325,29 @@ bool pushFrame(EpdiyLcdRefresh mode, bool turnOff) {
 }
 
 }  // namespace
+
+uint8_t* epdiyLcdBeginGrayscale16() {
+  if (!epdiyLcdReady() || g_nativeGrayActive) return nullptr;
+  g_nativeGrayActive = true;
+  memset(g_fb4, 0xFF, static_cast<size_t>(epd_width()) / 2 * epd_height());
+  return g_fb4;
+}
+
+bool epdiyLcdCommitGrayscale16(const uint8_t* bwProxy) {
+  if (!g_nativeGrayActive || !epdiyLcdReady() || bwProxy == nullptr) return false;
+  g_nativeGrayActive = false;
+  if (!pushFrame(EpdiyLcdRefresh::Half, true)) return false;
+  epdiyLcdStashBase(bwProxy);
+  return true;
+}
+
+void epdiyLcdCancelGrayscale16() {
+  if (!g_nativeGrayActive) return;
+  g_nativeGrayActive = false;
+  if (epdiyLcdReady() && g_baselineKnown) {
+    memcpy(g_fb4, g_hl.back_fb, static_cast<size_t>(epd_width()) / 2 * epd_height());
+  }
+}
 
 bool epdiyLcdDraw(const uint8_t* fb, EpdiyLcdRefresh mode, bool turnOff) {
   if (!g_started || fb == nullptr || g_fb4 == nullptr || g_cfg == nullptr) return false;

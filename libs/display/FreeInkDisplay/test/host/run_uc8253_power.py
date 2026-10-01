@@ -33,7 +33,7 @@ inline int digitalRead(int) { return 0; }
 ''')
     (root / "BoardConfig.h").write_text('''#pragma once
 namespace BoardConfig {
-inline struct { unsigned short displayWidth=792, displayHeight=528; unsigned displaySpiHz=0; } ACTIVE;
+inline struct { unsigned short displayWidth=792, displayHeight=528; unsigned displaySpiHz=0; unsigned char grayscaleLevels=4; } ACTIVE;
 }
 ''')
     (root / "bus/EpdBus.h").write_text('''#pragma once
