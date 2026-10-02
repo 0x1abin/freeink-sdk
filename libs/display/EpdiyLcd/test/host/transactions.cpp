@@ -45,6 +45,13 @@ const EpdWaveform E0470_WAVEFORM{};
 const EpdWaveform E0470_TEXTTURN_WAVEFORM{};
 const EpdDisplay_t E0470_DISPLAY{16, 2, 16, 18, &E0470_WAVEFORM};
 void e0470_waveform_init() {}
+// EpdiyLcd.cpp prints its per-frame diagnostics through the ESP-IDF rom console, and the
+// host has no such header. It declares the entry point itself under
+// !defined(ESP_PLATFORM); this is the definition it needs to link.
+extern "C" int esp_rom_printf(const char* format, ...) {
+  (void)format;
+  return 0;
+}
 void epd_set_board(const EpdBoardDefinition* b) { board = b; }
 const EpdDisplay_t* epd_get_display() { return &E0470_DISPLAY; }
 int epd_width() { return 16; }
