@@ -11,9 +11,12 @@
 #include <esp_heap_caps.h>
 #if FREEINK_READPICO_DIAGNOSTICS
 #include <esp_timer.h>
+// rom console rather than ESP_LOGI: on this build ESP_LOG does not reach the serial
+// port. The header is ESP-IDF-only and the host transaction test builds this file with
+// a plain c++, so it stays inside the same guard as the code that uses it.
+#include <esp_rom_sys.h>
 #endif
 #include <esp_log.h>
-#include <esp_rom_sys.h>
 
 #include <cstring>
 
