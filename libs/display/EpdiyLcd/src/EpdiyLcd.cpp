@@ -11,6 +11,15 @@
 #include <esp_heap_caps.h>
 #if FREEINK_READPICO_DIAGNOSTICS
 #include <esp_timer.h>
+// rom console rather than ESP_LOGI: on this build ESP_LOG does not reach the serial
+// port. The header is ESP-IDF-only, and the host transaction test builds this file
+// twice -- once with diagnostics on -- so it cannot be included unconditionally.
+// Declare the entry point instead and let the test supply the definition.
+#if defined(ESP_PLATFORM)
+#include <esp_rom_sys.h>
+#else
+extern "C" int esp_rom_printf(const char* format, ...);
+#endif
 #endif
 #include <esp_log.h>
 
@@ -257,11 +266,22 @@ enum EpdDrawMode drawModeFor(EpdiyLcdRefresh mode) {
     case EpdiyLcdRefresh::Full:
       return static_cast<enum EpdDrawMode>(MODE_GC16 | PREVIOUSLY_WHITE);
     case EpdiyLcdRefresh::Half:
+    case EpdiyLcdRefresh::TextTurn:
       return static_cast<enum EpdDrawMode>(MODE_GL16 | PREVIOUSLY_WHITE);
     case EpdiyLcdRefresh::Fast:
     default:
       return static_cast<enum EpdDrawMode>(MODE_DU | PREVIOUSLY_WHITE);
   }
+}
+
+// 文字转页换用对角线全保持的那张表：未变化的像素完全不驱动，所以不会把黑像素先擦白
+// 再推回黑——那一下擦白就是翻页看到的闪。其余档位沿用 epd_hl_init 挂上的默认表。
+// / The text turn swaps in the table whose to == from diagonal is entirely held, so a
+// pixel that did not change is not driven at all. Driving it would erase it white first
+// and push it back to black, and that erase is the flash a turn shows. Every other
+// profile keeps the table epd_hl_init attached.
+const EpdWaveform* waveformFor(EpdiyLcdRefresh mode) {
+  return mode == EpdiyLcdRefresh::TextTurn ? &E0470_TEXTTURN_WAVEFORM : &E0470_WAVEFORM;
 }
 
 // 1bpp 页 -> epdiy 4bpp。展开表把调用方的位约定翻成 epdiy 的灰度级；本玻璃实测
@@ -307,16 +327,33 @@ bool pushFrame(EpdiyLcdRefresh mode, bool turnOff) {
     mode = EpdiyLcdRefresh::Full;
   }
   const int temperature = static_cast<int>(panelTemperature());
+  // 文字转页表只在这次推送期间挂上，推完还原，避免影响后续档位的历史与差分基准。
+  // / The text-turn table is attached only for this push; it is swapped back afterwards
+  // so later profiles keep the waveform the rest of the code expects.
+  const EpdWaveform* waveform = waveformFor(mode);
+  const bool swapWaveform = waveform != g_hl.waveform;
+  if (swapWaveform) epd_hl_waveform(&g_hl, waveform);
+  // Full 档要走"所有行列都脏"的整帧路径；其余档位按差分推送——只有差分推送配合
+  // 全保持的对角线，未变化的像素才真的不被驱动。
+  // / Full takes the all-lines-and-columns-dirty path; every other profile is pushed
+  // differentially, and it is only a differential push that lets the held diagonal
+  // actually skip a pixel.
   const auto err = mode == EpdiyLcdRefresh::Full ? epd_hl_update_screen_full(&g_hl, drawModeFor(mode), temperature)
                                                  : epd_hl_update_screen(&g_hl, drawModeFor(mode), temperature);
+  if (swapWaveform) epd_hl_waveform(&g_hl, &E0470_WAVEFORM);
 #if FREEINK_READPICO_DIAGNOSTICS
   int diffMs, drawMs, copyMs;
   epd_hl_last_timing(&diffMs, &drawMs, &copyMs);
   ++g_frameTiming.frames;
-  ESP_LOGI("EpdiyLcd", "frame #%u mode=%u result=%u convert=%uus max_convert=%uus diff=%dms scan=%dms copy=%dms",
-           static_cast<unsigned>(g_frameTiming.frames), static_cast<unsigned>(mode), static_cast<unsigned>(err),
-           static_cast<unsigned>(g_frameTiming.convertUs), static_cast<unsigned>(g_frameTiming.maxConvertUs), diffMs,
-           drawMs, copyMs);
+  // 走 ROM 控制台，而不是 ESP_LOGI：这个构建里 ESP_LOG 不到串口，板级日志用
+  // esp_rom_vprintf 才出得来。诊断只在开发构建里开。
+  // / Print through the ROM console rather than ESP_LOGI: ESP_LOG does not reach the
+  // serial port in this build, while the board libraries' esp_rom_vprintf does. Only
+  // compiled in development builds.
+  esp_rom_printf("[EPDF] frame #%u mode=%u result=%u convert=%uus max_convert=%uus diff=%dms scan=%dms copy=%dms\r\n",
+                 static_cast<unsigned>(g_frameTiming.frames), static_cast<unsigned>(mode),
+                 static_cast<unsigned>(err), static_cast<unsigned>(g_frameTiming.convertUs),
+                 static_cast<unsigned>(g_frameTiming.maxConvertUs), diffMs, drawMs, copyMs);
 #endif
   g_baselineKnown = err == EPD_DRAW_SUCCESS;
   if (!g_baselineKnown) ESP_LOGE("EpdiyLcd", "Frame failed (%u); clean retry required", static_cast<unsigned>(err));
@@ -412,6 +449,9 @@ bool epdiyLcdDrawGray(const uint8_t* lsb, const uint8_t* msb, EpdiyLcdRefresh mo
       const uint8_t low = toneFor((base & mask) == 0, (l & mask) != 0, (m & mask) != 0);
       const uint8_t high = toneFor((base & (mask >> 1)) == 0, (l & (mask >> 1)) != 0, (m & (mask >> 1)) != 0);
       // Both nibbles are known: one PSRAM store, without reading the old byte.
+      // 这个逐字节的写法实测比「按源字节拼 32 位字」的写法快 66%，不要再改回去。
+      // / Both nibbles are known: one store, without reading the old byte. Measured 66%
+      // faster than assembling a 32-bit word per source byte; do not "optimize" it back.
       drow[x >> 1] = static_cast<uint8_t>(low | (high << 4));
     }
   }

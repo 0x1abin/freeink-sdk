@@ -61,7 +61,15 @@ struct EpdiyLcdConfig {
 };
 
 /// 刷新档位，映射到 epdiy 的 MODE_*。/ Refresh profile, mapped onto epdiy MODE_*.
-enum class EpdiyLcdRefresh : uint8_t { Full, Half, Fast };
+///
+/// TextTurn 与 Half 同为 GL16，但用 E0470_TEXTTURN_WAVEFORM：对角线全保持，未变化的
+/// 像素完全不驱动。原地重推一个黑像素会先擦白再推黑，那正是翻页可见的白闪；抗锯齿
+/// 文字页的常规翻页用它，静止内容的刷新交给周期性 GC16。
+/// / TextTurn is GL16 like Half but drives E0470_TEXTTURN_WAVEFORM, whose diagonal is
+/// entirely held so unchanged pixels are not driven at all. Re-driving a black pixel in
+/// place erases it white first, which is the white flash a turn shows; ordinary
+/// anti-aliased text turns use it, and static content is refreshed by the periodic GC16.
+enum class EpdiyLcdRefresh : uint8_t { Full, Half, Fast, TextTurn };
 
 /// 初始化总线并挂上波形。width/height 是面板扫描尺寸（本板 1216x684）。
 ///
