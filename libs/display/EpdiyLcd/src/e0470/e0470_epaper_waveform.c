@@ -323,4 +323,26 @@ void e0470_waveform_init(void) {
             e0470_textturn_gl16_data[f][v][v / 4] &= (uint8_t)~(3u << (6 - 2 * (v % 4)));
         }
     }
+
+    // 目标为黑的像素不再先擦白，直接把黑压上去；目标为白的像素保留擦白驱动。
+    // 新文字进来时是"白 → 黑"，源表给的是先擦白再压黑，那 18 相擦白就是字形先闪一下白
+    // 的来源。删掉这段只留压黑，新字直接叠上去。反过来，目标为白的像素必须留着擦白，
+    // 那是把旧字真正清掉的那一段，删了会糊成一片。
+    // / A pixel whose target is black no longer erases to white first: it is driven
+    // straight to black, so a glyph arriving as white-to-black stops flashing white on
+    // its way in. A pixel whose target is white keeps its erase, because that erase is
+    // what actually clears the old glyph; dropping it would smear the page.
+    //
+    // to == 15 is white and to != 15 is black (see sat_cut, the black-saturation head cut
+    // that applies to to != 15 in e0470_waveform_trim.h). Action 2 is the erase-to-white
+    // action, 1 is darken, 0 is hold.
+    for (int to = 0; to < 15; to++) {
+        for (int from = 0; from < 16; from++) {
+            int f = 0;
+            while (f < E0470_GL16_FRAMES && lut_get(e0470_textturn_gl16_data, f, to, from) == 2) {
+                e0470_textturn_gl16_data[f][to][from / 4] &= (uint8_t)~(3u << (6 - 2 * (from % 4)));
+                ++f;
+            }
+        }
+    }
 }
