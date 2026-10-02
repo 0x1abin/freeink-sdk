@@ -40,6 +40,9 @@ void delay(unsigned long) {}
 extern "C" {
 int allocation_calls = 0, fail_allocation = 0;
 const EpdWaveform E0470_WAVEFORM{};
+// The text-turn table lives in e0470_epaper_waveform.c, which this host test does not
+// compile, so it needs a stub here too -- EpdiyLcd.cpp references it by name.
+const EpdWaveform E0470_TEXTTURN_WAVEFORM{};
 const EpdDisplay_t E0470_DISPLAY{16, 2, 16, 18, &E0470_WAVEFORM};
 void e0470_waveform_init() {}
 void epd_set_board(const EpdBoardDefinition* b) { board = b; }
