@@ -2,7 +2,7 @@
 
 #include <BoardConfig.h>
 #if FREEINK_DEVICE_METALIO_EINK4
-#include <MetalioEink4Board.h>
+#include <MetalioEInk4Board.h>
 #endif
 #include <SPI.h>
 #include <driver/gpio.h>
@@ -33,7 +33,7 @@ SDCardManager::SDCardManager() {}
 bool SDCardManager::begin() {
   if (initialized) return true;
 #if FREEINK_DEVICE_METALIO_EINK4
-  if (!freeink::metalio::begin()) return false;
+  if (!freeink::metalio::ensureBooted()) return false;
 #endif
 
   // Native SDMMC: SdFat can't drive SDIO, so mount a plain FsVolume on the esp-idf
@@ -69,7 +69,17 @@ bool SDCardManager::begin() {
     return false;
   }
   if (!_vol.begin(_dev)) {
-    if (Serial) Serial.printf("[%lu] [SD] SDMMC volume mount failed\n", millis());
+    if (Serial) {
+      // Which read failed: the MBR, or the first partition's boot sector.
+      static uint8_t sec[512];
+      const bool mbrOk = _dev->readSector(0, sec);
+      const uint32_t lba = mbrOk ? (sec[454] | sec[455] << 8 | sec[456] << 16 | uint32_t(sec[457]) << 24) : 0;
+      const uint8_t type = mbrOk ? sec[450] : 0;
+      const bool sig = mbrOk && sec[510] == 0x55 && sec[511] == 0xAA;
+      const bool bootOk = mbrOk && lba != 0 && _dev->readSector(lba, sec);
+      Serial.printf("[%lu] [SD] SDMMC volume mount failed (mbr read=%d sig=%d p1 type=0x%02X lba=%lu read=%d)\n",
+                    millis(), mbrOk, sig, type, static_cast<unsigned long>(lba), bootOk);
+    }
     initialized = false;
     cachedTotalBytes = 0;
     cachedUsedBytesValid = false;
@@ -348,20 +358,36 @@ bool SDCardManager::readFileToStream(const char* path, Print& out, const size_t 
   const bool watchdogWatchesThisTask = (esp_task_wdt_status(nullptr) == ESP_OK);
   uint32_t lastYieldMs = millis();
 
-  while (f.available()) {
-    const int r = f.read(buf, toRead);
+  uint64_t remaining = f.fileSize();
+  while (remaining > 0) {
+    const size_t want = remaining < toRead ? static_cast<size_t>(remaining) : toRead;
+    const int r = f.read(buf, want);
     if (r <= 0) {
-      break;
+      if (Serial) Serial.printf("SDCardManager: incomplete read of %s\n", path);
+      f.close();
+      return false;
     }
-    out.write(buf, static_cast<size_t>(r));
 
-    if (millis() - lastYieldMs >= yieldIntervalMs) {
-      if (watchdogWatchesThisTask) {
-        esp_task_wdt_reset();
+    const size_t count = static_cast<size_t>(r);
+    size_t sent = 0;
+    while (sent < count) {
+      const size_t written = out.write(buf + sent, count - sent);
+      if (written == 0 || written > count - sent) {
+        if (Serial) Serial.printf("SDCardManager: incomplete write while streaming %s\n", path);
+        f.close();
+        return false;
       }
-      vTaskDelay(1);  // let every other task on this core run
-      lastYieldMs = millis();
+      sent += written;
+
+      if (millis() - lastYieldMs >= yieldIntervalMs) {
+        if (watchdogWatchesThisTask) {
+          esp_task_wdt_reset();
+        }
+        vTaskDelay(1);  // let every other task on this core run
+        lastYieldMs = millis();
+      }
     }
+    remaining -= count;
   }
 
   f.close();

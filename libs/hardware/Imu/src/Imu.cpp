@@ -55,6 +55,22 @@ constexpr uint8_t CTRL_ODR_POWER_DOWN = 0x00;
 constexpr float QMI8658_ACCEL_G_PER_LSB = 1.0f / 16384.0f;  // ±2 g
 constexpr float QMI8658_GYRO_DPS_PER_LSB = 1.0f / 64.0f;    // ±512 dps
 
+// SC7A20H datasheet v1.1, sections 11.1 / 13. Unlike LIS3DH, HR is
+// CTRL0 bit 0 (0x1F), not CTRL4 bit 3 (which is a low-pass filter bit).
+constexpr uint8_t SC7_ID = 0x11;
+constexpr uint8_t SC7_VERSION_REG = 0x70;
+constexpr uint8_t SC7_VERSION = 0x28;
+constexpr uint8_t SC7_CTRL0 = 0x1F;
+constexpr uint8_t SC7_CTRL1 = 0x20;
+constexpr uint8_t SC7_CTRL4 = 0x23;
+constexpr uint8_t SC7_STATUS = 0x27;
+constexpr uint8_t SC7_OUT = 0x28 | 0x80;  // I2C auto-increment burst
+constexpr uint8_t SC7_POWER_DOWN = 0x07;
+constexpr uint8_t SC7_100HZ = 0x57;  // XYZ on, LPen off
+constexpr uint8_t SC7_DIG_CTRL = 0x57;
+constexpr float SC7_G_PER_RAW_LSB = 1.0f / 16384.0f;  // section 13.13: 0x4000 = 1 g at ±2 g
+
+#if FREEINK_DEVICE_READPICO
 // SC7A20H register map (Silan; LIS2DH-compatible layout with CTRL0 at 0x1F).
 // Values quoted from read_pico_firmware components/sc7a20h/sc7a20h.c and
 // include/sc7a20h.h.
@@ -95,10 +111,12 @@ constexpr uint8_t SC7A20H_CTRL1_ODR_POWER_DOWN = 0x00;
 constexpr uint8_t SC7A20H_OUT_SHIFT = 4;
 constexpr float SC7A20H_MG_PER_LSB = 1.0f;  // ±2 g (SC7A20H_FS_2G)
 
+#endif
+
 bool g_wireReady[2] = {false, false};
 TwoWire& sensorWire() {
-  const auto& s = BoardConfig::ACTIVE.sensors;
 #if SOC_I2C_NUM > 1
+  const auto& s = BoardConfig::ACTIVE.sensors;
   return s.i2cBus == 1 ? Wire1 : Wire;
 #else
   return Wire;
@@ -145,6 +163,29 @@ bool qmi8658PresentAt(uint8_t addr) {
   return readRegs(addr, QMI8658_REG_WHO_AM_I, &who, 1) && who == QMI8658_WHO_AM_I_VALUE;
 }
 
+bool sc7a20hPresentAt(uint8_t addr) {
+  uint8_t who = 0, version = 0;
+  return readRegs(addr, REG_WHO_AM_I, &who, 1) && who == SC7_ID &&
+         readRegs(addr, SC7_VERSION_REG, &version, 1) && version == SC7_VERSION;
+}
+
+bool configureSc7a20h(uint8_t addr) {
+  // Disable sampling while configuring. No FIFO, high-pass filter or IRQ
+  // routing: gravity remains available for tilt/orientation consumers.
+  if (!writeReg(addr, SC7_CTRL1, SC7_POWER_DOWN)) return false;
+  if (!writeReg(addr, SC7_CTRL0, 0x01) || !writeReg(addr, 0x21, 0x00) ||
+      !writeReg(addr, 0x22, 0x00) || !writeReg(addr, SC7_CTRL4, 0x80) ||
+      !writeReg(addr, 0x24, 0x00) || !writeReg(addr, 0x25, 0x00) ||
+      !writeReg(addr, 0x2E, 0x00)) return false;
+  if (addr == 0x18) {
+    // SA0 low: disable its internal pull-up to avoid leakage, preserving the
+    // separate SDA/SCL pull-up setting (section 13.30).
+    uint8_t dig = 0;
+    if (!readRegs(addr, SC7_DIG_CTRL, &dig, 1) || !writeReg(addr, SC7_DIG_CTRL, dig | 0x08)) return false;
+  }
+  return writeReg(addr, SC7_CTRL1, SC7_100HZ);
+}
+
 bool powerDownQmi8658(uint8_t addr) {
   // Do not short-circuit these writes: even if disabling the sensor engines
   // fails, still try to stop the internal oscillator. This is also used as the
@@ -158,12 +199,16 @@ bool powerDownQmi8658(uint8_t addr) {
 
 bool Imu::begin() {
   begun_ = false;
+  sleeping_ = false;
   addr_ = 0;
 
   const auto& s = BoardConfig::ACTIVE.sensors;
   const uint8_t configuredAddr = s.imuAddr;
   if (configuredAddr == 0) return false;
   if (s.i2cSda < 0 || s.i2cScl < 0 || s.i2cHz == 0) return false;
+#if FREEINK_DEVICE_METALIO_EINK4
+  if (BoardConfig::isMetalioEInk4() && !metalio::ensureBooted()) return false;
+#endif
   ensureWire();
   uint8_t who = 0;
   switch (s.imuType) {
@@ -201,6 +246,7 @@ bool Imu::begin() {
       }
       break;
     }
+#if FREEINK_DEVICE_READPICO
     case BoardConfig::ImuType::Sc7a20h: {
       // Bring-up order from sc7a20h.c bring_up(): soft reset, then identity, then
       // CTRL5.BOOT, then the sensor config. The reset is what makes the following
@@ -224,6 +270,22 @@ bool Imu::begin() {
       addr_ = configuredAddr;
       break;
     }
+#else
+    case BoardConfig::ImuType::Sc7a20h: {
+      if (configuredAddr != 0x18 && configuredAddr != 0x19) return false;
+      const uint8_t alternate = configuredAddr == 0x19 ? 0x18 : 0x19;
+      if (sc7a20hPresentAt(configuredAddr)) addr_ = configuredAddr;
+      else if (sc7a20hPresentAt(alternate)) addr_ = alternate;
+      else return false;
+      if (!configureSc7a20h(addr_)) {
+        writeReg(addr_, SC7_CTRL1, SC7_POWER_DOWN);
+        addr_ = 0;
+        return false;
+      }
+      delay(10);  // one 100 Hz sample period, also exceeds the 1 ms startup time
+      break;
+    }
+#endif
     case BoardConfig::ImuType::None:
       return false;
   }
@@ -231,10 +293,30 @@ bool Imu::begin() {
   return true;
 }
 
+bool Imu::hasGyroscope() const {
+  const auto type = BoardConfig::ACTIVE.sensors.imuType;
+  return begun_ && (type == BoardConfig::ImuType::Lsm6ds3 || type == BoardConfig::ImuType::Qmi8658);
+}
+
 bool Imu::read(Sample& out) {
   const uint8_t addr = addr_;
   if (!begun_ || addr == 0) return false;
   const auto& s = BoardConfig::ACTIVE.sensors;
+#if !FREEINK_DEVICE_READPICO
+  if (s.imuType == BoardConfig::ImuType::Sc7a20h) {
+    if (sleeping_) return false;
+    uint8_t status = 0, raw[6] = {};
+    if (!readRegs(addr, SC7_STATUS, &status, 1) || !(status & 0x08)) return false;
+    if (!readRegs(addr, SC7_OUT, raw, sizeof(raw))) return false;
+    // 12-bit two's complement, left-aligned; low four bits are not data.
+    const int16_t ax = static_cast<int16_t>((raw[0] & 0xF0) | (uint16_t(raw[1]) << 8));
+    const int16_t ay = static_cast<int16_t>((raw[2] & 0xF0) | (uint16_t(raw[3]) << 8));
+    const int16_t az = static_cast<int16_t>((raw[4] & 0xF0) | (uint16_t(raw[5]) << 8));
+    out = {ax * SC7_G_PER_RAW_LSB, ay * SC7_G_PER_RAW_LSB, az * SC7_G_PER_RAW_LSB, 0, 0, 0};
+    return true;
+  }
+#endif
+#if FREEINK_DEVICE_READPICO
   uint8_t g[6] = {};
   uint8_t a[6] = {};
   float accelScale = ACCEL_G_PER_LSB;
@@ -276,6 +358,37 @@ bool Imu::read(Sample& out) {
   out.gy = gy * gyroScale;
   out.gz = gz * gyroScale;
 
+#else
+  uint8_t g[6] = {};
+  uint8_t a[6] = {};
+  if (s.imuType == BoardConfig::ImuType::Lsm6ds3) {
+    if (!readRegs(addr, REG_OUTX_L_G, g, sizeof(g))) return false;
+    if (!readRegs(addr, REG_OUTX_L_XL, a, sizeof(a))) return false;
+  } else if (s.imuType == BoardConfig::ImuType::Qmi8658) {
+    if (!readRegs(addr, QMI8658_REG_GX_L, g, sizeof(g))) return false;
+    if (!readRegs(addr, QMI8658_REG_AX_L, a, sizeof(a))) return false;
+  } else {
+    return false;
+  }
+
+  const int16_t gx = static_cast<int16_t>(g[0] | g[1] << 8);
+  const int16_t gy = static_cast<int16_t>(g[2] | g[3] << 8);
+  const int16_t gz = static_cast<int16_t>(g[4] | g[5] << 8);
+  const int16_t ax = static_cast<int16_t>(a[0] | a[1] << 8);
+  const int16_t ay = static_cast<int16_t>(a[2] | a[3] << 8);
+  const int16_t az = static_cast<int16_t>(a[4] | a[5] << 8);
+
+  const float accelScale = s.imuType == BoardConfig::ImuType::Qmi8658 ? QMI8658_ACCEL_G_PER_LSB : ACCEL_G_PER_LSB;
+  const float gyroScale = s.imuType == BoardConfig::ImuType::Qmi8658 ? QMI8658_GYRO_DPS_PER_LSB : GYRO_DPS_PER_LSB;
+  out.ax = ax * accelScale;
+  out.ay = ay * accelScale;
+  out.az = az * accelScale;
+  out.gx = gx * gyroScale;
+  out.gy = gy * gyroScale;
+  out.gz = gz * gyroScale;
+
+#endif
+
   // Mount correction (see SensorsConfig): swap first, then flip, applied to
   // accel and gyro together so both report the same board frame.
   if (s.imuSwapXY) {
@@ -307,11 +420,18 @@ bool Imu::sleep() {
       // CTRL7 only disables sampling; the internal oscillator keeps running.
       // SensorDisable is required for the QMI8658's full power-down mode.
       return powerDownQmi8658(addr);
+#if FREEINK_DEVICE_READPICO
     case BoardConfig::ImuType::Sc7a20h:
       // CTRL1 ODR = 0000 shuts the sampling engine down (≈0.5 µA) and retains
       // every other config register, which is what wake() re-applies
       // (sc7a20h_power_down in sc7a20h.c).
       return writeReg(addr, SC7A20H_REG_CTRL1, SC7A20H_CTRL1_ODR_POWER_DOWN);
+#else
+    case BoardConfig::ImuType::Sc7a20h:
+      if (!writeReg(addr, SC7_CTRL1, SC7_POWER_DOWN)) return false;
+      sleeping_ = true;
+      return true;
+#endif
     case BoardConfig::ImuType::None:
       return false;
   }
@@ -328,6 +448,7 @@ bool Imu::wake() {
       // Re-enable the internal oscillator before restarting the sensors.
       return writeReg(addr, QMI8658_REG_CTRL1, QMI8658_CTRL1_BASE) &&
              writeReg(addr, QMI8658_REG_CTRL7, QMI8658_CTRL7_ACC_GYRO_ENABLE);
+#if FREEINK_DEVICE_READPICO
     case BoardConfig::ImuType::Sc7a20h:
       // Same config sequence as begin() (sc7a20h_power_up -> apply_config), minus
       // the soft reset: only CTRL1's ODR field was cleared, so the retained
@@ -339,6 +460,13 @@ bool Imu::wake() {
       if (!writeReg(addr, SC7A20H_REG_CTRL1, SC7A20H_CTRL1_12_5HZ_LP_XYZ)) return false;
       delay(20);
       return true;
+#else
+    case BoardConfig::ImuType::Sc7a20h:
+      if (!writeReg(addr, SC7_CTRL1, SC7_100HZ)) return false;
+      delay(10);
+      sleeping_ = false;
+      return true;
+#endif
     case BoardConfig::ImuType::None:
       return false;
   }
@@ -351,6 +479,7 @@ bool Imu::wake() {
 
 namespace freeink {
 bool Imu::begin() { return false; }
+bool Imu::hasGyroscope() const { return false; }
 bool Imu::read(Sample&) { return false; }
 bool Imu::sleep() { return false; }
 bool Imu::wake() { return false; }

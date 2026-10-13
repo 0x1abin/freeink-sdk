@@ -13,46 +13,51 @@ whose `HalDisplay` delegates to the SDK's `EInkDisplay`/`LgfxEpdDriver`.
 
 `LgfxEpdDriver` wraps **LovyanGFX's `Panel_EPD`/`Bus_EPD`** (bundled in
 `m5stack/M5GFX`) and reports `usesExternalBus() == true`. It compiles under
-`FREEINK_DRIVER_LGFX_EPD` (derived from `FREEINK_DEVICE_LILYGO`), so M5GFX links
-only on this device. The driver holds an 8-bit grayscale `LGFX_Sprite` canvas in
-PSRAM:
+`FREEINK_DRIVER_LGFX_EPD` (derived from `FREEINK_DEVICE_LILYGO` or
+`FREEINK_DEVICE_PAPERS3`). Add M5GFX only to builds using that driver. The driver
+holds an 8-bit grayscale `LGFX_Sprite` canvas in PSRAM:
 
 - `display()` expands the 1-bpp framebuffer into the canvas and `pushSprite`s it
-  at the requested `epd_mode` (FULL→quality, HALF→text, FAST→fast).
-- The 16-gray path (`displayGray` + `copyGrayscaleLsb/Msb` +
+  at the requested `epd_mode` (FULL/HALF→text, FAST→fast).
+- The grayscale path (`displayGray` + `copyGrayscaleLsb/Msb` +
   `writeGrayscalePlaneStrip`) combines the B/W base with the LSB/MSB planes into
-  four gray levels in the canvas, then `pushSprite`s at the quality waveform.
+  four gray levels in the canvas, then pushes with the same mode as the B/W base.
+  Keeping that mode avoids re-driving unchanged pixels during the AA overlay.
+
+At 960×540 the canvas occupies 518,400 bytes, and the two 1-bpp selector planes
+occupy 64,800 bytes each: 648,000 bytes of PSRAM allocated once and reused.
+These figures exclude M5GFX's internal panel/DMA buffers and the SDK's 64,800-byte
+single B/W framebuffer. Stack storage is unsuitable for these full-screen
+buffers. The driver keeps its allocation-failure checks; measure both internal
+RAM and PSRAM free space and largest blocks on hardware.
 
 `BoardConfig::LILYGO_T5S3` carries the geometry, `DisplayController::LgfxEpd`, the
-GT911 touch config, the PWM backlight, and the I²C battery gauge.
+GT911 touch config, the PWM backlight, the I²C battery gauge and the PCF8563 RTC.
 
 ## Board configuration
 
 The panel's power comes from the board's PMIC (TPS65185) and a PCA9535 I²C
 IO-expander, which is board-specific, so `LgfxEpdDriver` takes its pins and power
-hooks from a board-supplied `LgfxEpdConfig`:
+hooks from the SDK's
+[BoardT5S3 configuration](../libs/hardware/BoardT5S3/src/LilyGoT5S3LgfxConfig.cpp).
+`FREEINK_DEVICE_LILYGO=1` selects `lilygoT5S3LgfxConfig()` automatically; a
+consumer does not need to duplicate the configuration or define
+`FREEINK_LGFX_EPD_CONFIG`. The configuration uses a 16 MHz bus, line padding 8
+and native landscape rotation 0. Its output-enable is on the expander, so
+`pinOe=-1`. `pinPwr=GPIO46` is required by the i80 driver and also serves as the
+LoRa chip select; the prepare hook deselects LoRa before bus initialization to
+keep the shared SD SPI bus usable.
 
-```cpp
-namespace freeink {
-const LgfxEpdConfig& lilygoT5S3LgfxConfig() {
-  static const LgfxEpdConfig cfg = {
-      {EP_D0,EP_D1,EP_D2,EP_D3,EP_D4,EP_D5,EP_D6,EP_D7},  // 8-bit data bus
-      EP_STH, EP_STV, /*OE dummy*/ T5S3_LORA_CS, EP_LEH, EP_CKH, EP_CKV,
-      /*pwr dummy*/ T5S3_LORA_CS, /*busHz*/ 16'000'000, /*linePadding*/ 8,
-      /*rotation*/ 1,
-      { &prepareEpdPower, &epdPowerOn, &epdPowerOff },  // PCA9535 + TPS65185 glue
-  };
-  return cfg;
-}
-}
-```
+Add the SDK's [BoardT5S3 library](../libs/hardware/BoardT5S3/library.json) and
+`https://github.com/m5stack/M5GFX.git#0.2.20` to the device environment's
+`lib_deps`. The 0.2.20 release is a Git tag; the registry dependency in the
+older sample does not resolve that version. Enable the board's 8 MB OPI PSRAM
+with `BOARD_HAS_PSRAM` and the matching `dio_opi` memory type.
 
-A build sets `-DFREEINK_DEVICE_LILYGO=1 -DFREEINK_LGFX_EPD_CONFIG=lilygoT5S3LgfxConfig`
-and adds `m5stack/M5GFX` to that env's `lib_deps` (see `platformio.sample.ini`). The
-power-hook bodies (PCA9535 expander + TPS65185 PMIC register writes) live in the
-board-support layer. A complete implementation — the real parallel pins and the
-PCA9535/TPS65185 power sequence reusing the board's expander helpers — is in the
-reference port at **`lib/Board_T5S3/FreeInkLgfxConfig.cpp`**.
+Call `BoardConfig::holdPowerRails()` first in setup to assert the GPIO2 latch,
+then `BoardT5S3::begin()` before input, SD or display initialization. The board
+helper initializes I²C, prepares SD SPI, disables GPS/LoRa and installs the
+expander-button hook. In CrossMux this call belongs in `HalGPIO::begin()`.
 
 ## Peripherals
 
@@ -71,15 +76,61 @@ reference port at **`lib/Board_T5S3/FreeInkLgfxConfig.cpp`**.
   with the per-SoC source (`ext1` on the S3). This matches the reference port,
   which wakes on the same BOOT button.
 - **PCA9535 user button** — a second button behind the I²C expander.
-  `InputManager::setButtonHook()` takes a board callback that reads the PCA9535 and
-  returns a `BTN_*` bitmask, so `InputManager` carries no expander code. This
+  `BoardT5S3::begin()` installs an `InputManager::setButtonHook()` callback that
+  reads the PCA9535 and returns `BTN_DOWN`, so `InputManager` carries no expander code. This
   button is not a deep-sleep wake source (neither is it in the reference port).
 
-## Board-support (outside the SDK)
+## SDK board support and sleep
 
 - **PCA9535 expander and TPS65185 PMIC** — the EPD power sequence (via
   `LgfxEpdConfig::power`) and the user-button read (via `setButtonHook`) both drive
-  the same PCA9535, so the board owns the expander and feeds both seams.
+  the same PCA9535 through `BoardT5S3::ScopedI2CLock`.
 - **GT911 home key** — the GT911 backend surfaces the capacitive home-key bit
   (status `0x10`) directly via `InputManager::wasHomeKeyPressed()`.
-- **PCF85063 RTC, LoRa, GPS** — board peripherals the SDK does not cover.
+- **RTC** — the profile selects PCF8563 at 0x51 on SDA39/SCL40. The vendor
+  product table says PCF85063, but the schematic and selected SDK backend use
+  PCF8563.
+- **LoRa and GPS** — disabled by board initialization; this reader integration
+  does not expose them.
+
+Finish rendering and unmount storage before sleep. The display driver's sleep
+path invokes the board's PMIC/expander power-off hook. Keep GPIO2 held high
+through deep sleep, then wait for BOOT to be released and arm GPIO0 wake via
+`PowerManager::deepSleepUntilPowerButton()`. CrossMux already performs the
+latch hold in its HAL power manager.
+
+Physical acceptance remains pending for the CrossMux integration: test USB and
+battery boots, SD access after panel initialization, touch corners and rotation,
+the capacitive Home key and expander button, FAST/HALF/FULL and grayscale pages,
+and at least three BOOT sleep/wake cycles. Record internal/PSRAM heap and largest
+blocks before and after display initialization and repeated reading. A successful
+build or host test does not establish panel quality or sleep current.
+
+
+### Pinned M5GFX allocation audit
+
+The actual Git dependency at tag `0.2.20` resolves to
+`d8074bbac8b75d22149d128d71d55b6a34dbc808`. At 960×540, its
+`LGFX_Sprite.cpp` requests 518,401 bytes for the 8-bit canvas (one guard byte)
+and `common.hpp` rounds this to 518,404 bytes. `SpriteBuffer.cpp` may fall back
+from PSRAM to DMA memory; the SDK checks `esp_ptr_external_ram()` and releases
+the canvas on null or non-PSRAM storage. The two SDK planes still request exactly
+64,800 bytes each. These checked, persistent buffers are reused after initialization.
+
+The pinned `platforms/esp32/Panel_EPD.cpp` additionally allocates:
+
+| Buffer | Requested bytes | Capability |
+| --- | ---: | --- |
+| Step framebuffer | 1,036,800 | PSRAM, 16-byte alignment |
+| Current 4-bit pixels | 259,200 | PSRAM, 16-byte alignment |
+| Two scanline buffers | 248 each | DMA |
+| Pixel-pair LUT | 45,056 | DMA |
+
+The LUT uses 88 steps: eraser 4, quality 32, text 32, and the SDK's fast/fastest
+10 each. This makes the known canvas/planes/panel PSRAM requests 1,944,004 bytes,
+plus the SDK's 64,800-byte single B/W framebuffer (PSRAM-first, checked malloc
+fallback). The display task requests a 4,096-byte stack and an eight-entry update
+queue; allocator overhead, bus-driver state and FreeRTOS control blocks are extra.
+These are source-derived allocation requests, not measured heap margins. Record
+internal/PSRAM free and largest blocks plus task high-water marks on real hardware;
+no runtime margin is claimed by the host or firmware build.

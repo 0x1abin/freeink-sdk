@@ -21,5 +21,14 @@ inline int analogReadMilliVolts(int) { return 3300; }
 inline int analogRead(int) { return 4095; }
 inline int digitalPinToInterrupt(int p) { return p; }
 inline void attachInterrupt(int,void (*f)(),int) { touchIsr=f; }
+inline void (*touchArgIsr)(void*)=nullptr;
+inline void* touchArg=nullptr;
+inline void touchArgThunk() { if (touchArgIsr) touchArgIsr(touchArg); }
+inline void attachInterruptArg(int,void (*f)(void*),void* arg,int) {
+  touchArgIsr=f;
+  touchArg=arg;
+  touchIsr=touchArgThunk;
+}
+inline void detachInterrupt(int) { touchIsr=nullptr; }
 struct SerialStub { explicit operator bool() const { return false; } };
 inline SerialStub Serial;

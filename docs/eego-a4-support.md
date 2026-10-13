@@ -39,7 +39,7 @@ The original pin map and controller details came from stock-firmware analysis
 | Battery | ADC GPIO 10, charge-status GPIO 11, divider ×1.559 |
 | Touch | **GSLX680** — SDA 2, SCL 1, RST 3, addr 0x40. Firmware blob uploaded at boot (`gsl/EegoA4GslFirmware.h`, extracted + hash-verified); backend in InputManager. |
 | Touch mapping | Calibration in `pollGslx680` returns panel-native X 0..767 / Y 0..551; profile swap/flip disabled |
-| Screen key | GSL sentinel `rawX=0x03a0, rawY=0x1020`; short press = Back, 700 ms hold = Home |
+| Screen key | GSL sentinel `rawX=0x03a0, rawY=0x1020`; Home tap/700 ms hold events, with actions selected by Reader settings |
 | RTC | **PCF8563** at 0x51, on the **shared touch I2C bus** (SDA 2 / SCL 1), 400 kHz |
 | Power latch | GPIO 4 (held to stay powered) |
 | Deep sleep | send controller `0xE0 = 0x88`, float SDA/SCL, hold GPIO 3 (touch RST) low |
@@ -48,7 +48,12 @@ The original pin map and controller details came from stock-firmware analysis
 
 ### Refresh behaviour
 
-At most **four** consecutive fast refreshes; the fifth forces a full refresh.
+B/W refresh cadence is controlled by the caller. FAST requests remain fast,
+including after grayscale; HALF and FULL select the full waveform. The first
+B/W paint after initialization uses the full waveform to clear unknown glass state.
+After grayscale, the next B/W paint seeds the old plane with the inverse of the
+target so every pixel is driven with the requested waveform. Each B/W paint then
+copies the displayed frame into the old plane for the next differential update.
 Grayscale is rendered from two lazily-allocated PSRAM planes (LSB/MSB); if
 allocation fails the driver leaves the existing B/W image up and never falls back
 to internal DRAM.
@@ -72,6 +77,8 @@ Build with `-DFREEINK_DEVICE_EEGO_A4=1`; see the `eego_a4` environment in
 - Confirm 768×552 on real glass (ghosting, gray levels). The UC8279C bring-up now
   does the full power/booster/VCOM/PLL setup and uploads external Full/Fast/Gray
   LUTs (hash-verified), so refreshes actually run — validate quality on a unit.
+- Check ghosting during long FAST-only menu navigation and AA page turns without
+  automatic full cleanup after grayscale.
 - Validate the LM3630A frontlight init sequence and brightness curve on a frontlit
   unit, and runtime absence handling on a unit without the chip.
 - Re-verify the whole pin map on hardware: a frontlit-unit dump did NOT contain the

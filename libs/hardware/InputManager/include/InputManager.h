@@ -28,9 +28,12 @@
 #endif
 
 class InputManager {
- public:
+public:
   InputManager();
   void begin();
+  // A4: stop touch and release the shared I2C bus after all other bus users
+  // finish.
+  bool prepareForDeepSleep();
   uint8_t getState();
 
   // Call regularly from the main loop to update button and touch edge state.
@@ -50,7 +53,8 @@ class InputManager {
   // synthesized actions are excluded.
   uint8_t physicalPressedMask() const { return physicalPressedEvents; }
 
-  // One valid touch-surface contact began this frame (screen or Home/Previous/Next).
+  // One valid touch-surface contact began this frame (screen or
+  // Home/Previous/Next).
   bool wasTouchContactPressed() const {
 #if FREEINK_DEVICE_METALIO_EINK4
     return touchContactPressedEvent;
@@ -76,7 +80,8 @@ class InputManager {
   // is dropped.
   bool isDebouncePending() const {
 #if FREEINK_DEVICE_WAVESHARE_EPAPER_397
-    if (BoardConfig::ACTIVE.inputStyle == BoardConfig::InputStyle::DigitalFunctionMultiGesture) {
+    if (BoardConfig::ACTIVE.inputStyle ==
+        BoardConfig::InputStyle::DigitalFunctionMultiGesture) {
       return functionButtonGesture.isDebouncePending();
     }
 #endif
@@ -103,11 +108,12 @@ class InputManager {
   // stay correct.
   static constexpr int BUTTON_ADC_PIN_1 = 1;
   static constexpr int BUTTON_ADC_PIN_2 = 2;
-  static constexpr int POWER_BUTTON_PIN = BoardConfig::DEFAULT_DEVICE.input.power;
+  static constexpr int POWER_BUTTON_PIN =
+      BoardConfig::DEFAULT_DEVICE.input.power;
 
   bool isPowerButtonPressed() const;
 
-  static const char* getButtonName(uint8_t buttonIndex);
+  static const char *getButtonName(uint8_t buttonIndex);
 
   // --- Capacitive touch (inert unless BoardConfig::ACTIVE.touch is configured)
   // ---
@@ -156,51 +162,63 @@ class InputManager {
   // One-shot tap on release. Returns the original touch-down position
   // normalized to 0..1 in the panel's native frame; false when no tap completed
   // this update.
-  bool wasTouchTap(float& nx, float& ny) const;
+  bool wasTouchTap(float &nx, float &ny) const;
   // Press edge with the touch-down position normalized in the panel's native
   // frame.
-  bool wasTouchPressedAt(float& nx, float& ny) const;
+  bool wasTouchPressedAt(float &nx, float &ny) const;
+  // Off-screen capacitive page keys only; physical buttons are excluded.
+  uint8_t capacitivePageButtonMask() const {
+#if FREEINK_CAP_TOUCH && FREEINK_DEVICE_METALIO_EINK4
+    return cstVirtualButtons;
+#else
+    return 0;
+#endif
+  }
   // True while the current touch is still a tap candidate: finger down,
   // movement remains within tap slop. Writes the original touch-down position
   // and held time.
-  bool isTouchTapCandidate(float& nx, float& ny, unsigned long& heldMs) const;
+  bool isTouchTapCandidate(float &nx, float &ny, unsigned long &heldMs) const;
   // True while a touch is down; writes the CURRENT contact position normalized
   // to 0..1 in the panel's native frame. Unlike #isTouchTapCandidate there is
   // no tap-slop gate — the position follows the moving finger, for drag
   // interactions (sliders). Callers own any threshold/hysteresis they need.
-  bool isTouchHeldAt(float& nx, float& ny) const;
+  bool isTouchHeldAt(float &nx, float &ny) const;
   // Duration (ms) of the last touch contact, latched on release.
   unsigned long lastTouchHeldMs() const;
   // Swipe gesture on release. Returns start/end positions normalized in the
   // panel's native frame; callers map orientation and check this before tap.
-  bool wasSwipe(float& nxStart, float& nyStart, float& nxEnd, float& nyEnd) const;
+  bool wasSwipe(float &nxStart, float &nyStart, float &nxEnd,
+                float &nyEnd) const;
   // One-shot 2-4 contact translation gesture. The SDK reports the number of
   // contacts plus their centroid start/end normalized in its panel-native
   // frame; applications opt into the exact counts they support, map display
   // orientation, and decide whether the result is up/down/left/right. Pinches,
   // diagonal motion, delayed gestures, ambiguous contact matching, track-ID
   // replacements, and sequences above MAX_TOUCH_CONTACTS are rejected.
-  bool wasMultiTouchSwipe(uint8_t& contactCount, float& nxStart, float& nyStart, float& nxEnd, float& nyEnd,
-                          unsigned long& durationMs) const;
+  bool wasMultiTouchSwipe(uint8_t &contactCount, float &nxStart, float &nyStart,
+                          float &nxEnd, float &nyEnd,
+                          unsigned long &durationMs) const;
   // One-shot two-contact rotation on release. Positive degrees are clockwise
   // and negative degrees counterclockwise in the corrected panel-native frame,
   // normalized to [-180, 180]. The center is the average of the start/end
   // contact centroids, normalized to 0..1. Pinches and sub-threshold turns are
   // rejected, and an accepted rotation cannot also become a translation.
-  bool wasMultiTouchRotation(float& degrees, float& nxCenter, float& nyCenter, unsigned long& durationMs) const;
+  bool wasMultiTouchRotation(float &degrees, float &nxCenter, float &nyCenter,
+                             unsigned long &durationMs) const;
   // One-shot two-contact pinch/spread on release. `scale` is end separation
   // divided by start separation (<1.0 = pinch in / zoom out, >1.0 = spread /
   // zoom in). The center is the average of the start/end contact centroids,
   // normalized to 0..1. Rotations, tiny scale changes, and ambiguous contacts
   // are rejected, and an accepted pinch cannot also become a translation.
-  bool wasMultiTouchPinch(float& scale, float& nxCenter, float& nyCenter, unsigned long& durationMs) const;
+  bool wasMultiTouchPinch(float &scale, float &nxCenter, float &nyCenter,
+                          unsigned long &durationMs) const;
   // One-shot long-press: fires WHILE the finger is still down, once a
   // stationary contact (within tap slop) has been held TOUCH_LONG_PRESS_MS.
   // Position is the touch-down point, normalized like wasTouchTap. Fires at
   // most once per contact. Detection alone has no side effects; callers that
   // act on it should call suppressTouchContact() so the eventual lift cannot
   // also tap. Cleared each #update().
-  bool wasTouchLongPress(float& nx, float& ny) const;
+  bool wasTouchLongPress(float &nx, float &ny) const;
   // Ignore the remainder of the current contact: tap, swipe, release,
   // tap-candidate and held queries report nothing until the finger lifts and
   // the release edge has passed, then a fresh contact is delivered normally.
@@ -228,14 +246,26 @@ class InputManager {
   // outgoing activity already consumed within the same frame (InputManager
   // clears these in update(), but a pushActivity runs mid-frame).
   void clearTouchTapEvent();
-  // Quiesce board-specific touch activity before deep sleep.
-  void prepareForDeepSleep();
   // Reapply volatile FT6336U registers after Murphy M4 display initialization
   // toggles the reset line shared by the panel and touch controller.
   bool reinitializeTouchAfterSharedReset();
 #if FREEINK_DEVICE_MURPHY_M4
-  void setMurphyM4Batch(const freeink::MurphyM4Batch batch) { murphyM4Batch = batch; }
+  void setMurphyM4Batch(const freeink::MurphyM4Batch batch) {
+    murphyM4Batch = batch;
+  }
 #endif
+
+  // --- Slide switch (inert unless BoardConfig::ACTIVE.input.toggleSwitch is
+  // set)
+  bool hasToggleSwitch() const {
+    return BoardConfig::ACTIVE.input.toggleSwitch >= 0;
+  }
+  // Debounced switch position; begin() latches the boot position without
+  // raising a change event. False on boards without a switch.
+  bool isToggleSwitchOn() const { return toggleSwitchOn; }
+  // True for the one update() in which the debounced position changed. Under
+  // beginAsync() the task consumes this edge; poll isToggleSwitchOn() instead.
+  bool wasToggleSwitchChanged() const { return toggleSwitchChangedEvent; }
 
   // Optional board hook for buttons that aren't direct GPIOs — e.g. a key
   // behind an I2C IO-expander (the LilyGo T5 S3 user button on its PCA9535). It
@@ -262,39 +292,43 @@ class InputManager {
   //
   // When async polling is active the app must NOT call update()/wasPressed()
   // itself; the task owns the edge state. Drain with popPress() instead.
-  void beginAsync(uint8_t taskPriority = 2, uint32_t pollMs = 15, uint8_t queueLen = 32);
+  void beginAsync(uint8_t taskPriority = 2, uint32_t pollMs = 15,
+                  uint8_t queueLen = 32);
 
   // Pop the next latched button index (BTN_*) into `button`. Returns false when
   // no press is pending (or async polling was never started).
-  bool popPress(uint8_t& button);
+  bool popPress(uint8_t &button);
 
   // Pop the next latched touch tap (normalized 0..1 panel-native coordinates,
   // same frame as wasTouchTap). The async task queues every completed tap, so
   // taps that land while the app thread renders or waits are never lost —
   // drain and route them afterwards. Returns false when no tap is pending.
-  bool popTouchTap(float& nx, float& ny);
+  bool popTouchTap(float &nx, float &ny);
 
   // Pop the next latched swipe gesture (normalized 0..1 panel-native start/end
   // coordinates, same frame as wasSwipe). Like taps, async polling queues
   // swipes so gestures that complete during e-paper refreshes are not lost.
-  bool popSwipe(float& nxStart, float& nyStart, float& nxEnd, float& nyEnd);
+  bool popSwipe(float &nxStart, float &nyStart, float &nxEnd, float &nyEnd);
 
   // Pop a queued 2-4 contact translation, in the same normalized panel-native
   // coordinate frame as wasMultiTouchSwipe(). It has a dedicated queue so
   // existing popSwipe() consumers never receive multi-touch gestures. The
   // returned count is captured with the queued event and cannot be confused
   // with a later controller frame.
-  bool popMultiTouchSwipe(uint8_t& contactCount, float& nxStart, float& nyStart, float& nxEnd, float& nyEnd,
-                          unsigned long& durationMs);
+  bool popMultiTouchSwipe(uint8_t &contactCount, float &nxStart, float &nyStart,
+                          float &nxEnd, float &nyEnd,
+                          unsigned long &durationMs);
 
   // Pop a queued completed two-contact rotation. Values use the same signed
   // degrees, normalized center, and duration contract as
   // wasMultiTouchRotation().
-  bool popMultiTouchRotation(float& degrees, float& nxCenter, float& nyCenter, unsigned long& durationMs);
+  bool popMultiTouchRotation(float &degrees, float &nxCenter, float &nyCenter,
+                             unsigned long &durationMs);
 
   // Pop a queued completed two-contact pinch/spread. Values use the same scale,
   // normalized center, and duration contract as wasMultiTouchPinch().
-  bool popMultiTouchPinch(float& scale, float& nxCenter, float& nyCenter, unsigned long& durationMs);
+  bool popMultiTouchPinch(float &scale, float &nxCenter, float &nyCenter,
+                          unsigned long &durationMs);
 
   // --- Diagnostics -----------------------------------------------------------
   // A live sample of one button-group ADC pin: the raw reading plus the BTN_*
@@ -305,17 +339,17 @@ class InputManager {
   // drifted divider whose reading no longer lands in the band the firmware
   // expects — visible from the raw value regardless of how it classifies.
   struct ButtonAdcSample {
-    int pin;     // GPIO sampled (BUTTON_ADC_PIN_1 / BUTTON_ADC_PIN_2)
-    int raw;     // raw analogRead() value, or -1 if this board has no ADC ladder
-    int button;  // classified BTN_* index, or -1 for no match
+    int pin;    // GPIO sampled (BUTTON_ADC_PIN_1 / BUTTON_ADC_PIN_2)
+    int raw;    // raw analogRead() value, or -1 if this board has no ADC ladder
+    int button; // classified BTN_* index, or -1 for no match
   };
 
   // Sample both button-group ADC pins now (synchronous analogRead). Safe to
   // call alongside async polling. On boards without the Xteink ADC ladder both
   // samples report raw = -1, button = -1.
-  void readButtonAdc(ButtonAdcSample& group1, ButtonAdcSample& group2);
+  void readButtonAdc(ButtonAdcSample &group1, ButtonAdcSample &group2);
 
- private:
+private:
   static ButtonHook s_buttonHook;
 
   QueueHandle_t _asyncQueue = nullptr;
@@ -346,7 +380,7 @@ class InputManager {
   QueueHandle_t _asyncMultiTouchPinchQueue = nullptr;
   TaskHandle_t _asyncTask = nullptr;
   uint32_t _asyncPollMs = 15;
-  static void asyncTaskTrampoline(void* self);
+  static void asyncTaskTrampoline(void *self);
   void asyncPoll();
 
   int getButtonFromADC(int adcValue, const int ranges[], int numButtons);
@@ -365,26 +399,31 @@ class InputManager {
   // Touch backend. Compiled only when FREEINK_CAP_TOUCH is set; dispatches on
   // BoardConfig::ACTIVE.touch.controller (CHSC6x, GT911, or FT5x06/FT6336U).
   void beginTouch();
-  uint8_t serviceTouch();  // runs the machine; returns synthesized button mask
+  uint8_t serviceTouch(); // runs the machine; returns synthesized button mask
   void updateTouchFromIrq(unsigned long now,
-                          int irqRaw);  // CHSC6x I2C poll + touch-bit gate
-  void pollGt911(unsigned long now);    // GT911 polled read
+                          int irqRaw); // CHSC6x I2C poll + touch-bit gate
+  void pollGt911(unsigned long now);   // GT911 polled read
   void beginFt5x06();
   void pollFt5x06(unsigned long now);
   bool ft5x06WriteReg(uint8_t reg, uint8_t value);
-  bool ft5x06ReadReg(uint8_t reg, uint8_t* buf, uint8_t len);
-  bool readChsc6xPoint(TouchPoint& point);
-  bool decodeChsc6xFrame(const uint8_t* data, size_t len, TouchPoint& point) const;
-  uint16_t mapTouchAxis(uint16_t raw, uint16_t rawMin, uint16_t rawMax, uint16_t outMax) const;
-#if FREEINK_DEVICE_EEGO_A4 || FREEINK_DEVICE_MURPHY_M4 || FREEINK_DEVICE_METALIO_EINK4 || FREEINK_DEVICE_READPICO
-  TouchPoint mapTouchPoint(uint16_t rawX, uint16_t rawY, unsigned long now) const;
-  void updateTouchContact(const TouchPoint& point);
+  bool ft5x06ReadReg(uint8_t reg, uint8_t *buf, uint8_t len);
+  bool readChsc6xPoint(TouchPoint &point);
+  bool decodeChsc6xFrame(const uint8_t *data, size_t len,
+                         TouchPoint &point) const;
+  uint16_t mapTouchAxis(uint16_t raw, uint16_t rawMin, uint16_t rawMax,
+                        uint16_t outMax) const;
+#if FREEINK_DEVICE_EEGO_A4 || FREEINK_DEVICE_MURPHY_M4 ||                      \
+    FREEINK_DEVICE_METALIO_EINK4 || FREEINK_DEVICE_READPICO
+  TouchPoint mapTouchPoint(uint16_t rawX, uint16_t rawY,
+                           unsigned long now) const;
+  void updateTouchContact(const TouchPoint &point);
   void releaseTouch(unsigned long now);
 #endif
 #if FREEINK_DEVICE_METALIO_EINK4
   void beginCst816s();
   uint8_t pollCst816s(unsigned long now);
   bool touchContactPressedEvent = false;
+  uint8_t cstVirtualButtons = 0;
   freeink::Cst816sContact cstContact;
   freeink::Cst816sFrame cstFrame;
   uint32_t cstReadAt = 0;
@@ -392,7 +431,7 @@ class InputManager {
   volatile bool cstIrqPending = true;
 #endif
   void beginGt911();
-  bool gt911ReadReg(uint16_t reg, uint8_t* buf, uint8_t len);
+  bool gt911ReadReg(uint16_t reg, uint8_t *buf, uint8_t len);
   void gt911ClearStatus();
   enum class MultiTouchGestureState : uint8_t { Idle, Tracking, Blocked };
   struct TrackedTouchContact {
@@ -400,43 +439,46 @@ class InputManager {
     TouchPoint start;
     TouchPoint last;
   };
-  void updateMultiTouchGesture(const TouchSnapshot& snapshot, unsigned long now);
-  void startMultiTouchGesture(const TouchSnapshot& snapshot, unsigned long now);
+  void updateMultiTouchGesture(const TouchSnapshot &snapshot,
+                               unsigned long now);
+  void startMultiTouchGesture(const TouchSnapshot &snapshot, unsigned long now);
   void blockMultiTouchGesture();
   void finishMultiTouchGesture(unsigned long now);
   void resetMultiTouchGesture();
   void cancelMultiTouchGesture();
-  bool matchMultiTouchSnapshot(const TouchSnapshot& snapshot);
-  bool expandMultiTouchGesture(const TouchSnapshot& snapshot, unsigned long now);
-  bool findContactAssignment(const TouchSnapshot& snapshot, uint8_t trackedCount,
+  bool matchMultiTouchSnapshot(const TouchSnapshot &snapshot);
+  bool expandMultiTouchGesture(const TouchSnapshot &snapshot,
+                               unsigned long now);
+  bool findContactAssignment(const TouchSnapshot &snapshot,
+                             uint8_t trackedCount,
                              uint8_t assignment[MAX_TOUCH_CONTACTS]) const;
-  bool isTrackedContact(const MultiTouchPoint& point) const;
+  bool isTrackedContact(const MultiTouchPoint &point) const;
   bool hasStableTranslationGeometry() const;
   bool hasEligibleRotationScale() const;
   bool isMultiTouchTranslation(unsigned long now) const;
   bool classifyMultiTouchRotation(unsigned long now);
   bool classifyMultiTouchPinch(unsigned long now);
-  void normalizeTouchPoint(uint16_t x, uint16_t y, float& nx, float& ny) const;
+  void normalizeTouchPoint(uint16_t x, uint16_t y, float &nx, float &ny) const;
 #if FREEINK_DEVICE_EEGO_A4
   void beginGslx680();
   void pollGslx680(unsigned long now);
-  bool gslx680Read(uint8_t reg, uint8_t* data, uint8_t len);
-  bool gslx680Write(uint8_t reg, const uint8_t* data, uint8_t len);
-  bool gslx680Write32(uint8_t reg, uint32_t value);
-  void gslx680ClearRegisters();
-  void gslx680ResetChip();
-  void gslx680StartChip();
-  bool gslx680LoadFirmware();
-  bool gslx680Check();
+  bool gslWrite(uint8_t reg, const uint8_t *data, uint8_t len);
+  bool gslRead(uint8_t reg, uint8_t *buf, uint8_t len);
+  bool gslUploadFirmware();
+#endif
+#if FREEINK_DEVICE_PICCO
+  void beginPiccoTouch();
+  void pollPiccoTouch(unsigned long now);
 #endif
 #if FREEINK_DEVICE_MURPHY_M4
   bool beginFt6336u(bool powerCycle);
   void pollFt6336u(unsigned long now);
-  bool readFt6336uFrame(freeink::murphy_m4_touch::FrameState& state, uint16_t& rawX, uint16_t& rawY);
-  void applyFt6336uSnapshot(const freeink::murphy_m4_touch::Snapshot& snapshot);
+  bool readFt6336uFrame(freeink::murphy_m4_touch::FrameState &state,
+                        uint16_t &rawX, uint16_t &rawY);
+  void applyFt6336uSnapshot(const freeink::murphy_m4_touch::Snapshot &snapshot);
   bool startFt6336uPolling();
   void pauseFt6336uPolling();
-  static void ft6336uTaskTrampoline(void* self);
+  static void ft6336uTaskTrampoline(void *self);
   void ft6336uTaskLoop();
   freeink::MurphyM4Batch murphyM4Batch = freeink::defaultMurphyM4Batch();
 #endif
@@ -446,10 +488,16 @@ class InputManager {
   // sleep command and the key-strip hit test.
   void beginCst836u();
   uint8_t pollCst836u(unsigned long now);
-  bool cst836uReadReg(uint8_t reg, uint8_t* out, uint8_t len);
-  uint8_t cst836uReadFrame(uint8_t* out);
-  uint8_t cst836uDecodeFrame(const uint8_t* data, unsigned long now);
+  bool cst836uReadReg(uint8_t reg, uint8_t *out, uint8_t len);
+  uint8_t cst836uReadFrame(uint8_t *out);
+  uint8_t cst836uDecodeFrame(const uint8_t *data, unsigned long now);
 #endif
+
+  void updateToggleSwitch(unsigned long now);
+  bool toggleSwitchOn = false;
+  bool toggleSwitchRaw = false;
+  bool toggleSwitchChangedEvent = false;
+  unsigned long toggleSwitchRawSince = 0;
 
   uint8_t currentState;
   uint8_t lastState;
@@ -477,20 +525,26 @@ class InputManager {
   freeink::input::FunctionButtonGesture functionButtonGesture;
 #endif
 
-  bool touchDataEnabled = false;         // I2C up, controller present
-  uint8_t gt911Addr = 0;                 // resolved GT911 address (0 until probed)
-  unsigned long touchIrqPulseUntil = 0;  // synthesized-confirm window after a press
-  unsigned long touchReadAt = 0;         // next scheduled I2C poll
+#if FREEINK_DEVICE_EEGO_A4
+  enum class GslContactOwner : uint8_t { None, Screen, Home, Cancelled };
+  GslContactOwner gslContactOwner = GslContactOwner::None;
+#endif
+  bool touchDataEnabled = false; // I2C up, controller present
+  uint8_t gt911Addr = 0;         // resolved GT911 address (0 until probed)
+  unsigned long touchIrqPulseUntil =
+      0;                         // synthesized-confirm window after a press
+  unsigned long touchReadAt = 0; // next scheduled I2C poll
   unsigned long touchReleaseAt = 0;
   bool touchPressed = false;
   bool touchPressedEvent = false;
   bool touchReleasedEvent = false;
-  bool touchHomeKeyEvent = false;  // GT911 capacitive home key, press edge
+  bool touchHomeKeyEvent = false; // GT911 capacitive home key, press edge
   bool touchHomeKeyDown = false;
-  bool touchHomeKeyTapEvent = false;   // short-press release edge (one-shot)
-  bool touchHomeKeyLongEvent = false;  // held past the long-press threshold (one-shot)
-  bool touchHomeKeyLongFired = false;  // latched for the current hold so long
-                                       // fires once and suppresses the tap
+  bool touchHomeKeyTapEvent = false; // short-press release edge (one-shot)
+  bool touchHomeKeyLongEvent =
+      false; // held past the long-press threshold (one-shot)
+  bool touchHomeKeyLongFired = false; // latched for the current hold so long
+                                      // fires once and suppresses the tap
   unsigned long touchHomeKeyDownAt = 0;
   static constexpr unsigned long HOME_KEY_LONG_PRESS_MS = 700;
   TouchPoint touchPoint = {false, 0, 0, 0};
@@ -498,8 +552,10 @@ class InputManager {
   MultiTouchGestureState multiTouchGestureState = MultiTouchGestureState::Idle;
   TrackedTouchContact multiTouchContacts[MAX_TOUCH_CONTACTS] = {};
   uint8_t trackedTouchContactCount = 0;
-  bool multiTouchRotationEligible = false;  // latched false if any frame leaves the allowed scale band
-  bool touchMultiContactSequence = false;   // suppresses single-contact classifiers until full release
+  bool multiTouchRotationEligible =
+      false; // latched false if any frame leaves the allowed scale band
+  bool touchMultiContactSequence =
+      false; // suppresses single-contact classifiers until full release
   bool multiTouchSwipeEvent = false;
   uint8_t multiTouchSwipeContactCount = 0;
   uint16_t multiTouchSwipeStartX = 0;
@@ -517,16 +573,22 @@ class InputManager {
   uint16_t multiTouchPinchCenterX = 0;
   uint16_t multiTouchPinchCenterY = 0;
   uint16_t multiTouchPinchDurationMs = 0;
-  TouchPoint touchDownPoint = {false, 0, 0, 0};  // first sample of the current contact (tap routing)
-  TouchPoint touchUpPoint = {false, 0, 0, 0};    // last sample before release (swipe routing)
-  unsigned long lastTouchHeldDurationMs = 0;     // contact duration, latched at release
-  bool touchMovedBeyondTapSlop = false;          // cancels stationary hold/long-press classification
-  bool touchMovedBeyondTapReleaseSlop = false;   // cancels tap-on-release once motion reaches swipe distance
-  bool touchLongPressEvent = false;              // one-shot, mirrors touchHomeKeyLongEvent
-  bool touchLongPressFired = false;              // latched for the current contact so long-press fires once
-  bool touchSuppressed = false;                  // suppressTouchContact() latch; holds through
-                                                 // the release-edge frame, cleared in
-                                                 // serviceTouch() once the contact is over
+  TouchPoint touchDownPoint = {
+      false, 0, 0, 0}; // first sample of the current contact (tap routing)
+  TouchPoint touchUpPoint = {false, 0, 0,
+                             0}; // last sample before release (swipe routing)
+  unsigned long lastTouchHeldDurationMs =
+      0; // contact duration, latched at release
+  bool touchMovedBeyondTapSlop =
+      false; // cancels stationary hold/long-press classification
+  bool touchMovedBeyondTapReleaseSlop =
+      false; // cancels tap-on-release once motion reaches swipe distance
+  bool touchLongPressEvent = false; // one-shot, mirrors touchHomeKeyLongEvent
+  bool touchLongPressFired =
+      false; // latched for the current contact so long-press fires once
+  bool touchSuppressed = false; // suppressTouchContact() latch; holds through
+                                // the release-edge frame, cleared in
+                                // serviceTouch() once the contact is over
 
 #if FREEINK_DEVICE_MURPHY_M4
   static constexpr uint32_t FT6336U_POLL_MS = 10;
@@ -544,14 +606,15 @@ class InputManager {
 #if FREEINK_DEVICE_READPICO
   // CST836U frame geometry, quoted from read_pico_firmware
   // components/cst836u/include/cst836u.h: the touch-data register, the 15-byte
-  // frame with up to 2 points, and the info register used as the bring-up probe.
+  // frame with up to 2 points, and the info register used as the bring-up
+  // probe.
   static constexpr uint8_t CST836U_REG_TOUCH_DATA = 0x00;
   static constexpr uint8_t CST836U_REG_INFO = 0xA6;
   static constexpr uint8_t CST836U_RAW_LEN = 15;
   static constexpr uint8_t CST836U_MAX_POINTS = 2;
-  // cst836u_read() re-reads while the frame's count nibble is >= 3: 1 or 2 points
-  // is all a legal frame can carry, so a larger value means the read landed
-  // mid-update. CST836U_FRAME_INVALID is "no legal frame".
+  // cst836u_read() re-reads while the frame's count nibble is >= 3: 1 or 2
+  // points is all a legal frame can carry, so a larger value means the read
+  // landed mid-update. CST836U_FRAME_INVALID is "no legal frame".
   static constexpr uint8_t CST836U_FRAME_ATTEMPTS = 3;
   static constexpr uint8_t CST836U_FRAME_INVALID = 0xFF;
   // Poll pacing. While a contact is tracked the frame cadence follows
@@ -559,8 +622,9 @@ class InputManager {
   // this heartbeat, so a stuck-high INT# cannot freeze touch for the session.
   // Both are chosen bounds, not measured values.
   static constexpr unsigned long CST836U_IDLE_HEARTBEAT_MS = 500;
-  // Back-off after a failed frame read. The chip ignores I2C entirely while it is
-  // in its own deep sleep, so without this the main loop would hammer a dead bus.
+  // Back-off after a failed frame read. The chip ignores I2C entirely while it
+  // is in its own deep sleep, so without this the main loop would hammer a dead
+  // bus.
   static constexpr unsigned long CST836U_RETRY_MS = 2000;
   unsigned long cst836uReadAt = 0;
   unsigned long cst836uRetryAt = 0;
@@ -580,7 +644,8 @@ class InputManager {
 
   // Touch timing / protocol constants (ported from the Murphy M3 CHSC6x
   // driver).
-  static constexpr unsigned long TOUCH_IRQ_PULSE_MS = 120;   // release hold-over after last valid read
+  static constexpr unsigned long TOUCH_IRQ_PULSE_MS =
+      120; // release hold-over after last valid read
 #if FREEINK_DEVICE_READPICO
   // Read Pico's CST836U is polled from the main loop only -- nothing in this
   // tree calls beginAsync(), so this constant is the hard ceiling on the touch
@@ -589,9 +654,9 @@ class InputManager {
   // keeps up and this is a real rate increase, not a value the read cannot
   // honour. It does NOT help while the panel push holds the loop blocked for
   // most of a page turn -- that needs the sampling moved off the loop.
-  static constexpr unsigned long TOUCH_SAMPLE_DELAY_MS = 4;  // I2C poll cadence
+  static constexpr unsigned long TOUCH_SAMPLE_DELAY_MS = 4; // I2C poll cadence
 #else
-  static constexpr unsigned long TOUCH_SAMPLE_DELAY_MS = 8;  // I2C poll cadence
+  static constexpr unsigned long TOUCH_SAMPLE_DELAY_MS = 8; // I2C poll cadence
 #endif
   static constexpr int TOUCH_TAP_SLOP_PX = 28;
   static constexpr int TOUCH_SWIPE_MIN_PX = 60;
@@ -604,11 +669,12 @@ class InputManager {
   static constexpr unsigned long TOUCH_MULTI_SWIPE_MAX_MS = 2000;
   static constexpr int TOUCH_MULTI_CONTACT_SEPARATION_SLOP_PX = 45;
   static constexpr int64_t TOUCH_CONTACT_ASSIGNMENT_AMBIGUITY_PX_SQ = 64;
-  static constexpr unsigned long TOUCH_LONG_PRESS_MS = 500;  // shorter than HOME_KEY_LONG_PRESS_MS: a screen hold has
-                                                             // no button travel to absorb
+  static constexpr unsigned long TOUCH_LONG_PRESS_MS =
+      500; // shorter than HOME_KEY_LONG_PRESS_MS: a screen hold has
+           // no button travel to absorb
   static constexpr uint8_t TOUCH_READ_COMMAND = 0x00;
   static constexpr uint8_t TOUCH_FRAME_SIZE = 16;
 
-  static const char* BUTTON_NAMES[];
+  static const char *BUTTON_NAMES[];
   static bool s_sharedConfirmPowerShortPressEmitsPower;
 };

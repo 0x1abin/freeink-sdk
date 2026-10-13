@@ -100,7 +100,7 @@ int main(int argc, char** argv) {
 #elif FREEINK_DEVICE_WAVESHARE_EPAPER_397
   BoardConfig::ACTIVE.board = BoardConfig::Board::WaveshareEpaper397;
 #elif FREEINK_DEVICE_METALIO_EINK4
-  BoardConfig::ACTIVE.board = BoardConfig::Board::MetalioEink4;
+  BoardConfig::ACTIVE.board = BoardConfig::Board::MetalioEInk4;
 #elif FREEINK_DEVICE_X4CLASSIC
   BoardConfig::ACTIVE.board = BoardConfig::Board::XteinkX4Classic;
 #endif
@@ -213,7 +213,13 @@ int main(int argc, char** argv) {
   d.displayGrayscaleBase(Mode::FAST_REFRESH, false, RefreshContext::TextOnlyAntiAliasing);
   d.copyGrayscaleLsbBuffers(lsb.data());
   d.displayGrayBuffer(false);
-  assert(!last(bus, 0x24).empty() && last(bus, 0x32).empty());
+  assert(!last(bus, 0x24).empty());
+#if FREEINK_DEVICE_METALIO_EINK4
+  // Upstream Metalio B/W fallback uses its external FAST bank.
+  assert(last(bus, 0x32) == Bytes(lut_fast_metalio, lut_fast_metalio + 105));
+#else
+  assert(last(bus, 0x32).empty());
+#endif
   d.cleanupGrayscaleBuffers(bw.data());
   bus.clear();
   stage(Mode::FAST_REFRESH);
@@ -381,7 +387,7 @@ int main(int argc, char** argv) {
 #endif
   assert(d.supportsReaderTransitions() == experiment);
   assert(d.supportsContinuousImageReading() ==
-         (experiment && BoardConfig::ACTIVE.board == BoardConfig::Board::MetalioEink4));
+         (experiment && BoardConfig::ACTIVE.board == BoardConfig::Board::MetalioEInk4));
   const auto transition = [&](Mode::RefreshMode mode = Mode::FAST_REFRESH) {
     std::memcpy(d.getFrameBuffer(), bw.data(), bw.size());
     d.displayGrayscaleBase(mode, false, RefreshContext::TextOnlyAntiAliasing);
