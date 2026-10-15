@@ -26,9 +26,12 @@ inferred from the firmware dump only.
 Call `applyXteinkDisplayController()` from `XteinkDetect.h` before
 `FreeInkDisplay::begin()`. It probes the active profile's display bus and updates
 `BoardConfig::ACTIVE.displayController` for a confirmed UltraChip variant;
-`begin()` then selects the matching driver. An inconclusive probe retains the
-profile's default controller. The OEM NVS `hw_calib/screenType` value is used
-only for diagnostics, because flashing an image from another unit can overwrite it.
+`begin()` then selects the matching driver. On X4 Pro, an inconclusive probe
+retains the profile's default controller; the OEM NVS `hw_calib/screenType` value
+is used only for diagnostics, because flashing an image from another unit can
+overwrite it. [X4 Classic](xteink-x4c-support.md#board-identity) instead reads VER
+with command `0x70` over half-duplex MOSI and falls back to that NVS value when
+the ID is unrecognized, then to UC8279 when the key is absent.
 
 The SSD1677 bring-up notes below describe that controller specifically. See
 [grayscale capabilities](grayscale-capabilities.md) for the current upload

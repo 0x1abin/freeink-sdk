@@ -33,7 +33,7 @@ class Rtc {
     uint8_t weekday = 0;  // 0=Sunday .. 6=Saturday
   };
 
-  // Brings up the I2C bus and disables the RTC's CLKOUT. Returns false when the
+  // Brings up the I2C bus and probes the selected RTC. Returns false when the
   // active board has no RTC or the device doesn't ACK.
   bool begin();
   bool present() const { return begun_; }
@@ -44,6 +44,14 @@ class Rtc {
 
   // Sets the time. Returns false on I2C error.
   bool set(const DateTime& dt);
+
+  // RX8130 countdown only. Above 65535 seconds, round up to whole minutes.
+  // Requires a running, initialized clock and no other enabled RTC interrupt.
+  bool armWakeTimer(uint32_t seconds);
+  // Stops the countdown and clears only its event; verifies TE and TIE are off.
+  bool cancelWakeTimer();
+  // Reads the enabled timer event without clearing it; fired is false on error.
+  bool readWakeTimer(bool& fired);
 
   // Shifts the running clock by a signed number of seconds, calendar-correct
   // across midnight/month/year boundaries (e.g. a time-zone change from

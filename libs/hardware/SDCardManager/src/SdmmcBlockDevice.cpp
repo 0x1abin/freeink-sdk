@@ -4,7 +4,7 @@
 
 #include <Arduino.h>
 #if FREEINK_DEVICE_METALIO_EINK4
-#include <MetalioEink4Board.h>
+#include <MetalioEInk4Board.h>
 #endif
 #include <stdlib.h>
 #include <string.h>
@@ -41,16 +41,35 @@ constexpr uint32_t kSdmmcRetrySettleMs = 0;
 
 bool SdmmcBlockDevice::begin(const BoardConfig::SdmmcPins& pins) {
   if (pins.busWidth == 0) return false;
+  // The sleep path may hold the bus pads (Picco); a held pad ignores the slot setup.
+  for (const int8_t pin : {pins.clk, pins.cmd, pins.d0, pins.d1, pins.d2, pins.d3}) {
+    if (pin >= 0) gpio_hold_dis(static_cast<gpio_num_t>(pin));
+  }
 
 #if FREEINK_DEVICE_METALIO_EINK4
-  // The calibrated BSP releases holds, keeps DAT3/CD input-high, and brings up
-  // the shared screen/SD rail. Reuse its idempotent boot sequence.
-  if (!metalio::begin()) return false;
+  if (BoardConfig::isMetalioEInk4()) {
+    // Keep DAT3/CD input-high during CMD0 even in 1-bit mode, as stock does.
+    gpio_hold_dis(static_cast<gpio_num_t>(metalio::SD_DAT3_GPIO));
+    gpio_config_t dat3 = {};
+    dat3.pin_bit_mask = uint64_t(1) << metalio::SD_DAT3_GPIO;
+    dat3.mode = GPIO_MODE_INPUT;
+    dat3.pull_up_en = GPIO_PULLUP_ENABLE;
+    dat3.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    dat3.intr_type = GPIO_INTR_DISABLE;
+    const esp_err_t err = gpio_config(&dat3);
+    if (err != ESP_OK) {
+      if (Serial) Serial.printf("[%lu] [SD] Metalio DAT3 pull-up failed: %s\n", millis(), esp_err_to_name(err));
+      return false;
+    }
+    delay(1);
+    if (Serial) Serial.printf("[%lu] [SD] Metalio DAT3/CD GPIO46=%d (expected 1)\n", millis(),
+                              gpio_get_level(static_cast<gpio_num_t>(metalio::SD_DAT3_GPIO)));
+  }
 #endif
 
   // Host config matches the OEM (recovered from app1's mountSD via Ghidra): full
   // default capability flags (0x37) with the actual width selected via slot.width
-  // only, and the data clock at 40 MHz. The read timeouts we chased earlier were a
+  // only, and the data clock selected above. The read timeouts we chased earlier were a
   // mount-sequencing problem, not a clock-margin one — see the retry loop below.
   sdmmc_host_t host = SDMMC_HOST_DEFAULT();
   host.max_freq_khz = kSdmmcMaxFreqKhz;
@@ -132,11 +151,13 @@ bool SdmmcBlockDevice::begin(const BoardConfig::SdmmcPins& pins) {
   // block I/O works, and the gate is left in the exact LOW state that read succeeded under.
   esp_err_t mountErr = ESP_FAIL;
   for (int attempt = 0; attempt < 4; attempt++) {
-    if (sdPwr >= 0) {
+    if (sdPwr >= 0 && BoardConfig::ACTIVE.sd.powerCycleOnMount) {
       digitalWrite(sdPwr, HIGH);
       delay(80);
       digitalWrite(sdPwr, LOW);  // run with the enable held LOW
       delay(120);
+    } else if (sdPwr >= 0) {
+      digitalWrite(sdPwr, BoardConfig::ACTIVE.sd.powerActiveHigh ? HIGH : LOW);  // keep the rail on
     } else if (attempt > 0 && kSdmmcRetrySettleMs != 0) {
       // No gate to power-cycle (Read Pico): let the card finish its power-on
       // negotiation before the next attempt, which is what the reference

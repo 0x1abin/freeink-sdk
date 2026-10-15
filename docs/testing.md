@@ -12,6 +12,7 @@ sh libs/book/FreeInkBook/test/host/run.sh
 sh libs/book/ContentProtection/test/host/run.sh
 sh libs/hardware/InputManager/test/host/run.sh
 sh libs/hardware/InputManager/test/host/run_metalio.sh
+sh libs/hardware/InputManager/test/host/run_eego.sh
 sh libs/hardware/HapticManager/test/host/run.sh
 ```
 
@@ -20,6 +21,18 @@ JPEG fixtures and optionally Pillow for progressive JPEG fixtures; the related
 checks skip when those converters are unavailable. It builds layout tests for
 the default, SMALL, and LARGE memory profiles. Build outputs go under the system
 temporary directory.
+
+## Battery gauge
+
+```sh
+sh libs/hardware/BatteryMonitor/test/host/run.sh
+```
+
+Compiles `BatteryMonitor` and the real X3 board profile against a model BQ27220
+that holds the Design Capacity load to TRM SLUUBD4A 6.1: key timing, CONFIG
+UPDATE, checksummed Data Memory writes, and the X3's block re-select. Every
+refused I2C transaction must still leave the gauge out of CONFIG UPDATE and
+sealed, and the next start must finish the load.
 
 ## Fonts
 
@@ -54,14 +67,20 @@ device.
 
 ```sh
 python3 libs/display/FreeInkDisplay/test/host/run_pro.py
+python3 libs/display/FreeInkDisplay/test/host/run_epdiy_contract.py
 python3 libs/display/FreeInkDisplay/test/host/run_uc8279.py
+python3 libs/display/FreeInkDisplay/test/host/run_uc8279c_a4.py
 python3 libs/display/FreeInkDisplay/test/host/run_uc8253_power.py
 ```
 
 These compile production drivers against recording buses. The Pro suite also
 compiles the facade in single- and dual-buffer modes. The checks cover transfer
 sequences, grayscale uploads, refresh lifecycle, and power-state behavior for
-the drivers included in each harness.
+the drivers included in each harness. The ReadPico harness compiles the real
+Epdiy driver and checks Overlay-only capabilities, deferred base, successful
+and failed commits, cancellation, B/W fallback, and allocation failure.
+The Pro harness also checks that unsupported UC8279 LUT 0x67 paths upload
+neither gray planes nor a gray LUT.
 
 For the board-profile and display-probe regression test, follow the
 [XteinkDetect host instructions](../libs/hardware/XteinkDetect/test/host/README.md).

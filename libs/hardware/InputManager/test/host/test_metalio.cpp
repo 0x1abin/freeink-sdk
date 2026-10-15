@@ -1,35 +1,43 @@
+#include <BoardConfig.h>
+#include <Wire.h>
+#include <algorithm>
 #include <cassert>
 #include <cstdio>
-#include <algorithm>
-#include <Wire.h>
-#include <BoardConfig.h>
 #define private public
 #include <InputManager.h>
 #undef private
 
-static void point(InputManager& input, unsigned x, unsigned y, bool down=true) {
-  Wire.touch = {uint8_t(down), uint8_t(x >> 8), uint8_t(x), uint8_t(y >> 8), uint8_t(y)};
+static void point(InputManager &input, unsigned x, unsigned y,
+                  bool down = true) {
+  Wire.touch = {uint8_t(down), uint8_t(x >> 8), uint8_t(x), uint8_t(y >> 8),
+                uint8_t(y)};
   fakeNow += 25;
-  if (touchIsr) touchIsr();
+  if (touchIsr)
+    touchIsr();
   input.update();
 }
 
 int main() {
   static_assert(BoardConfig::MAX_FRAMEBUFFER_BYTES == 48000);
   static_assert(FREEINK_MCU_S3 && FREEINK_DRIVER_SSD1677 && FREEINK_CAP_TOUCH);
-  static_assert(FREEINK_CAP_RTC && FREEINK_SD_SDMMC && FREEINK_BATTERY_I2C_GAUGE);
-  static_assert(!FREEINK_CAP_FRONTLIGHT && FREEINK_CAP_AUDIO && FREEINK_CAP_MIC && FREEINK_CAP_IMU);
+  static_assert(FREEINK_CAP_RTC && FREEINK_SD_SDMMC &&
+                FREEINK_BATTERY_I2C_GAUGE);
+  static_assert(!FREEINK_CAP_FRONTLIGHT && FREEINK_CAP_AUDIO &&
+                FREEINK_CAP_MIC && FREEINK_CAP_IMU);
   static_assert(BoardConfig::METALIO_EINK4.display.dc == 13);
   static_assert(BoardConfig::METALIO_EINK4.display.rst == 18);
   static_assert(BoardConfig::METALIO_EINK4.sdmmc.busWidth == 1);
   static_assert(BoardConfig::METALIO_EINK4.sdmmc.d3 == -1);
   std::fill(std::begin(gpioLevels), std::end(gpioLevels), HIGH);
 
-  // A transient boot failure is retryable. Safe output latches precede direction.
+  // A transient boot failure is retryable. Safe output latches precede
+  // direction.
   Wire.failExpander = true;
   assert(!freeink::metalio::ensureBooted());
   Wire.failExpander = false;
+  gpioHeld[44] = true;
   assert(freeink::metalio::ensureBooted());
+  assert(!gpioHeld[44] && gpioLevels[44] == LOW);
   assert(Wire.writes[0][0] == 2 && Wire.writes[1][0] == 6);
   const unsigned out = Wire.expander[2] | (Wire.expander[3] << 8);
   assert((out & ((1 << 5) | (1 << 6) | (1 << 9) | (1 << 11))) ==
@@ -48,7 +56,8 @@ int main() {
   assert(touchIsr);
   touchIsr(); // latch a pulse that has finished before update()
   point(input, 0, 0);
-  assert(input.touchPressed && input.touchPoint.x == 0 && input.touchPoint.y == 479);
+  assert(input.touchPressed && input.touchPoint.x == 0 &&
+         input.touchPoint.y == 479);
   point(input, 479, 799);
   assert(input.touchPoint.x == 799 && input.touchPoint.y == 0);
   point(input, 479, 799, false);
@@ -71,9 +80,11 @@ int main() {
   point(input, 240, 900);
   point(input, 240, 900);
   assert(input.isPressed(InputManager::BTN_DOWN) && !input.touchPressed);
+  assert(input.capacitivePageButtonMask() == (1u << InputManager::BTN_DOWN));
   point(input, 240, 900, false);
   point(input, 240, 900, false);
   assert(!input.isPressed(InputManager::BTN_DOWN));
+  assert(input.capacitivePageButtonMask() == 0);
   touchIsr();
   point(input, 400, 900);
   point(input, 400, 900);
@@ -83,23 +94,37 @@ int main() {
   input.update();
   fakeNow += 25;
   input.update();
-  assert(!input.isPressed(InputManager::BTN_UP)); // bus loss releases held cover key
+  assert(!input.isPressed(
+      InputManager::BTN_UP)); // bus loss releases held cover key
   Wire.failTouch = false;
+  fakeNow += 2000; // failed contacts retain the fork's retry backoff
+  point(input, 120, 200,
+        false); // a cancelled gesture must release before a new contact
 
   point(input, 120, 200);
   assert(input.touchPressed);
   fakeNow += 150;
-  input.update(); // stale successful frame, IRQ idle
+  input.update(); // a held contact keeps polling until the controller reports
+                  // release
+  assert(input.touchPressed);
+  point(input, 120, 200, false);
   assert(!input.touchPressed);
 
   Wire.expander[0] &= ~(1 << 7);
   fakeNow += 25;
   assert(input.getState() & (1 << InputManager::BTN_DOWN));
+  assert(input.capacitivePageButtonMask() ==
+         0); // physical volume key is excluded
   Wire.failExpander = true;
   fakeNow += 25;
   assert(!(input.getState() & (1 << InputManager::BTN_DOWN)));
   Wire.failExpander = false;
+  assert(input.prepareForDeepSleep());
+  assert(!input.touchDataEnabled && input.capacitivePageButtonMask() == 0);
+  const auto shutdownStarted = fakeNow;
   assert(freeink::metalio::powerOff());
+  assert(fakeNow - shutdownStarted == 5000);
   assert(Wire.expander[2] & (1 << 5)); // shared screen/card rail never cut
-  std::puts("Metalio profile, expander boot/retry, buttons, touch, cover keys and shutdown passed");
+  std::puts("Metalio profile, expander boot/retry, buttons, touch, cover keys "
+            "and shutdown passed");
 }

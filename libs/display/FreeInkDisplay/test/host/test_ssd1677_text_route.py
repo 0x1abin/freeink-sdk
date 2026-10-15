@@ -23,6 +23,7 @@ class TextRoutingTest(unittest.TestCase):
             (stub / "driver").mkdir()
             (stub / "driver/gpio.h").write_text("")
             (stub / "esp_rom_sys.h").write_text("")
+            (stub / "Wire.h").write_text("")
             for board, target, enabled, expected in cases:
                 with self.subTest(board=board, enabled=enabled):
                     result = subprocess.run(

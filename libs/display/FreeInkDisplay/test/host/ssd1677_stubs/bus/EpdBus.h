@@ -7,17 +7,40 @@ namespace freeink {
 enum class BusyPolarity { ActiveHigh };
 class EpdBus {
  public:
+  class Transaction {
+   public:
+    explicit Transaction(EpdBus& bus) : _bus(&bus) {
+      assert(!_bus->transaction);
+      _bus->transaction = true;
+    }
+    ~Transaction() {
+      if (_bus) {
+        assert(_bus->transaction);
+        _bus->transaction = false;
+      }
+    }
+    Transaction(const Transaction&) = delete;
+    Transaction& operator=(const Transaction&) = delete;
+    Transaction(Transaction&& other) noexcept : _bus(other._bus) { other._bus = nullptr; }
+    void writeBytes(const uint8_t* p, uint16_t n) {
+      assert(_bus && _bus->transaction);
+      _bus->data(p, n);
+    }
+
+   private:
+    EpdBus* _bus;
+  };
   struct Event {
     int cmd;
     std::vector<uint8_t> bytes;
   };
   std::vector<Event> events;
-  bool busy = false, stuck = false;
+  bool busy = false, stuck = false, transaction = false;
   int activation = 0, failAt = 0;
   void (*onRefreshComplete)() = nullptr;
   void reset() { busy = false; }
   void cmd(uint8_t c) {
-    assert(!busy);
+    assert(!busy && !transaction);
     events.push_back({c, {}});
     if (c == 0x20) {
       busy = true;
@@ -30,10 +53,9 @@ class EpdBus {
     cmd(c);
     data(p, n);
   }
-  void beginTxn() {}
-  void endTxn() {}
-  void rawWriteBytes(const uint8_t* p, uint16_t n) { data(p, n); }
+  Transaction beginTxn() { return Transaction(*this); }
   void waitBusy(const char*) {
+    assert(!transaction);
     busy = stuck || (failAt != 0 && activation == failAt);
     events.push_back({-1, {}});
   }
@@ -47,7 +69,7 @@ class EpdBus {
     events.back().bytes.assign(h * wb, v);
   }
   void clear() {
-    assert(!busy);
+    assert(!busy && !transaction);
     events.clear();
   }
   std::vector<uint8_t> sequences() const {
