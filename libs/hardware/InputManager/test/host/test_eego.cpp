@@ -123,5 +123,24 @@ int main() {
   feed(Frame{1, 0x03a0, 0x1020}, 1000);
   feed(Frame{0, 0, 0}, 1060);
   assert(input.touchHomeKeyTapEvent);
-  std::puts("A4 firmware bytes, batching, failure handling, touch sleep and wake, home key classification passed");
+  // Stock factory calibration: every table point maps to its own screen pixel,
+  // and samples between them interpolate inside their triangle.
+  struct Cal {
+    uint16_t rx, ry;
+    int16_t sx, sy;
+  };
+  for (const auto& c : {Cal{549, 337, 276, 306}, Cal{720, 94, 80, 168}, Cal{694, 560, 472, 168},
+                        Cal{392, 558, 472, 444}, Cal{374, 97, 80, 444}, Cal{455, 40, 34, 379}}) {
+    int16_t x = -1, y = -1;
+    InputManager::gslCalibrate(c.rx, c.ry, x, y);
+    assert(x == c.sx && y == c.sy && "stock calibration point mismatch");
+  }
+  int16_t edgeX = -1, edgeY = -1;
+  InputManager::gslCalibrate(0, 680, edgeX, edgeY);  // extrapolates to (595, 775)
+  assert(edgeX == 551 && edgeY == 767 && "calibration must clamp to the screen");
+  // A frame lands in the panel-native frame: x = portrait y, y = 551 - portrait x.
+  reset();
+  feed(Frame{1, 549, 0x1000 | 337}, 1000);
+  assert(input.touchPressed && input.touchPoint.x == 306 && input.touchPoint.y == 551 - 276);
+  std::puts("A4 firmware bytes, batching, failure handling, touch sleep and wake, home key classification, stock calibration passed");
 }
