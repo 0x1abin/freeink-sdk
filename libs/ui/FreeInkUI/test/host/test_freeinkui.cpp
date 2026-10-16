@@ -5792,6 +5792,49 @@ void testPublicationPage() {
   }
 }
 
+void testPublicationPageDescriptionPainter() {
+  struct Painted {
+    Rect rect{};
+    bool claim = true;
+  };
+  FakeDrawTarget draw;
+  DeviceContext device;
+  device.width = 480;
+  device.height = 800;
+  InputSnapshot input;
+  InteractionBuffer<16> hits;
+  Frame<16> frame(draw, device, input, hits);
+  PublicationPageProps props;
+  props.book.title = "Title";
+  props.description = "must-not-measure";
+  props.primary.label = "Install";
+  props.primary.action = 91;
+  Painted painted;
+  props.descriptionPainterUserData = &painted;
+  props.descriptionPainter = [](DrawTarget&, Rect rect, const PublicationPageProps&, void* user) {
+    auto* p = static_cast<Painted*>(user);
+    p->rect = rect;
+    return p->claim;
+  };
+  publicationPage(frame, device.screen(), props);
+  CHECK(!draw.drewForbiddenLabel);
+  CHECK(painted.rect.height > 0 && painted.rect.width > 0);
+  CHECK(painted.rect.bottom() <= hits.data()[0].rect.y);  // never under the action button
+
+  // Declining falls back to the plain-text description.
+  painted.claim = false;
+  hits.clear();
+  publicationPage(frame, device.screen(), props);
+  CHECK(draw.drewForbiddenLabel);
+
+  // A painter alone (no text description) still gets the area.
+  props.description = nullptr;
+  painted = Painted{};
+  hits.clear();
+  publicationPage(frame, device.screen(), props);
+  CHECK(painted.rect.height > 0);
+}
+
 void testComponentStyleOverrides() {
   ComponentStyle style;
   style.text.fields = TextStyleOverride::Bold | TextStyleOverride::Alignment;
@@ -5993,6 +6036,7 @@ int main() {
   testCapsuleSlider();
   testSliderRow();
   testPublicationPage();
+  testPublicationPageDescriptionPainter();
   testCatalogShelves();
   testPublicationStylingAndButtons();
   testTileGrid();
