@@ -1952,12 +1952,16 @@ void InputManager::pollGslx680(const unsigned long now) {
   const uint16_t rawYWord = static_cast<uint16_t>(frame[5]) << 8 | frame[4];
   const uint16_t rawXWord = static_cast<uint16_t>(frame[7]) << 8 | frame[6];
 
-  // The capacitive home key below the panel reports a fixed sentinel (not a
-  // coordinate). Route it to the home-key events instead of a screen tap. The
-  // words' top nibble is the contact's track id, which varies between presses,
-  // so only the 12-bit coordinates identify the key.
-  const bool homeKeyDown = count == 1 && (rawXWord & 0x0fff) == 0x03a0 && (rawYWord & 0x0fff) == 0x0020;
-  if (homeKeyDown) {
+  // Classified as the stock firmware does (the words' top nibble is the
+  // contact's track id, so only the 12-bit coordinates count):
+  //  - (0x3a0, 0x20) is the capacitive home key, ignored while a screen touch
+  //    is in progress;
+  //  - any other sample at X >= 920 is past the glass and dropped, leaving all
+  //    touch and key state alone (clamped, it would land on the top edge);
+  //  - an on-glass touch cancels a pending key press without firing it.
+  const uint16_t sampleX = rawXWord & 0x0fff;
+  if (sampleX == 0x03a0 && (rawYWord & 0x0fff) == 0x0020) {
+    if (touchPressed) return;
     if (!touchHomeKeyDown) {
       touchHomeKeyEvent = true;
       touchHomeKeyDown = true;
@@ -1967,11 +1971,11 @@ void InputManager::pollGslx680(const unsigned long now) {
       touchHomeKeyLongEvent = true;
       touchHomeKeyLongFired = true;
     }
-    touchPressed = false;
-    touchPoint.valid = false;
     return;
   }
-  finishHomeKey();
+  if (sampleX >= 920) return;
+  touchHomeKeyDown = false;
+  touchHomeKeyLongFired = false;
 
   // GSLX680 1.2.7 calibration: the digitizer is portrait (raw ~0..920 x 0..680)
   // over a landscape 768x552 framebuffer. Map, swap the axes, then mirror the
