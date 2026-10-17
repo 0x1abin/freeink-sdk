@@ -5662,6 +5662,146 @@ void testScreenControlCenterWrappers() {
   CHECK_EQ(interactions.count(), 6u);
 }
 
+using ScanApp = FreeInkApp<24, 6>;
+struct ScanScene {
+  Rect rect{0, 0, 80, 40};
+  int16_t value = 1;
+  State painted = StateNormal;
+  int actions = 0;
+  static void build(ScanApp::ScreenType& screen, void* user) {
+    auto& scene = *static_cast<ScanScene*>(user);
+    screen.frame().hit(scene.rect, 1, scene.value, InputTouch);
+    scene.painted = screen.frame().stateFor(1, scene.value);
+  }
+  static void action(const ActionEvent&, void* user) { ++static_cast<ScanScene*>(user)->actions; }
+};
+DeviceContext scanDevice() {
+  DeviceContext result;
+  result.width = 480;
+  result.height = 800;
+  result.hasTouch = true;
+  return result;
+}
+void setScanScene(ScanApp& app, ScanScene& scene) {
+  app.on(1, ScanScene::action, &scene);
+  app.setScreen(ScanScene::build, &scene);
+  app.render();
+}
+
+void testScanKeepsPublishedHitTableAndRefreshStateUntilNormalRender() {
+  FakeDrawTarget target;
+  target.charWidth = 8;
+  target.lineH = 16;
+  ScanApp app(target, scanDevice());
+  ScanScene scene;
+  setScanScene(app, scene);
+  const auto lastHint = app.lastRenderRefreshHint();
+  CHECK(!app.invalidated());
+  scene.value = 2;
+  scene.rect.x = 100;
+  for (int i = 0; i < 3; ++i) app.paintForScan();
+  CHECK(!app.invalidated());
+  CHECK_EQ(RefreshHint::None, app.refreshHint());
+  CHECK_EQ(lastHint, app.lastRenderRefreshHint());
+  Interaction hit;
+  CHECK(app.hitPublished(10, 10, 1, hit));
+  CHECK_EQ(1, hit.value);
+  CHECK(!app.hitPublished(110, 10, 1, hit));
+  CHECK_EQ(0, scene.actions);
+  app.render();
+  CHECK(!app.hitPublished(10, 10, 1, hit));
+  CHECK(app.hitPublished(110, 10, 1, hit));
+  CHECK_EQ(2, hit.value);
+}
+
+void testScansPreserveHeldTouchAndTapFlashForExactlyTheNormalFrames() {
+  FakeDrawTarget target;
+  target.charWidth = 8;
+  target.lineH = 16;
+  ScanApp reference(target, scanDevice());
+  ScanApp scanned(target, scanDevice());
+  ScanScene first;
+  ScanScene second;
+  setScanScene(reference, first);
+  setScanScene(scanned, second);
+  InputSnapshot down;
+  down.touchPressed = true;
+  down.touchX = 10;
+  down.touchY = 10;
+  reference.route(down);
+  scanned.route(down);
+  scanned.paintForScan();
+  reference.render();
+  scanned.render();
+  CHECK_EQ(first.painted, second.painted);
+  InputSnapshot up;
+  up.touchReleased = true;
+  up.touchX = 10;
+  up.touchY = 10;
+  CHECK(reference.route(up));
+  CHECK(scanned.route(up));
+  for (int frame = 0; frame < 3; ++frame) {
+    const bool dirty = scanned.invalidated();
+    const auto hint = scanned.refreshHint();
+    const auto event = scanned.lastEvent();
+    for (int i = 0; i < 3; ++i) scanned.paintForScan();
+    CHECK_EQ(dirty, scanned.invalidated());
+    CHECK_EQ(hint, scanned.refreshHint());
+    CHECK_EQ(event.action, scanned.lastEvent().action);
+    reference.render();
+    scanned.render();
+    CHECK_EQ(first.painted, second.painted);
+    CHECK_EQ(1, second.actions);
+  }
+}
+
+void testUnselectedWrappedListKeepsScrollAndHitsWithoutFollowRebuilds() {
+  struct ListScanScene {
+    ListNav nav;
+    int builds = 0;
+    static void build(ScanApp::ScreenType& screen, void* user) {
+      auto& scene = *static_cast<ListScanScene*>(user);
+      ++scene.builds;
+      ListProps props;
+      props.count = 30;
+      props.action = 1;
+      props.inputMask = InputTouch;
+      props.rowProvider = [](void*, uint16_t index, ListItem& item) {
+        item.label = "A long label that wraps across multiple lines in the available row width";
+        item.actionValue = static_cast<int16_t>(index);
+      };
+      screen.syncListViewport(scene.nav, props, props.count);
+      props.selectedIndex = -1;
+      scene.nav.followPending = false;
+      screen.list(props);
+    }
+  } scene;
+  FakeDrawTarget target;
+  target.charWidth = 8;
+  target.lineH = 16;
+  ScanApp app(target, scanDevice());
+  app.setScreen(ListScanScene::build, &scene);
+  app.paintForScan();
+  CHECK(!scene.nav.consumeRebuildNeeded());
+  app.render();
+  CHECK(!scene.nav.consumeRebuildNeeded());
+  CHECK_EQ(2, scene.builds);
+  CHECK_EQ(0, scene.nav.selected.load());
+  CHECK(scene.nav.inputPageRows() > 0);
+  scene.nav.requestScroll(scene.nav.inputPageRows());
+  app.paintForScan();
+  const int top = scene.nav.top;
+  CHECK(top > 0);
+  app.render();
+  CHECK_EQ(top, scene.nav.top);
+  CHECK(!scene.nav.consumeRebuildNeeded());
+  CHECK_EQ(0, scene.nav.selected.load());
+  Interaction hit;
+  CHECK(app.hitPublished(100, 100, 1, hit));
+  CHECK(hit.value >= top);
+  CHECK(hit.value < top + scene.nav.inputPageRows());
+}
+
 }  // namespace
 
 void testPublicationStylingAndButtons() {
@@ -5993,6 +6133,10 @@ void testPublicationPage() {
 }
 
 int main() {
+  testScanKeepsPublishedHitTableAndRefreshStateUntilNormalRender();
+  testScansPreserveHeldTouchAndTapFlashForExactlyTheNormalFrames();
+  testUnselectedWrappedListKeepsScrollAndHitsWithoutFollowRebuilds();
+
   testRect();
   testDisplayTarget();
   testDisplayTargetAlphaFont();

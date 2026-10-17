@@ -892,6 +892,16 @@ public:
   bool handlerOverflowed() const { return handlerOverflowed_; }
   ActionEvent lastEvent() const { return lastEvent_; }
 
+  // Layout-only pass: keep the last complete hit table and input feedback live.
+  void paintForScan() {
+    interactions_.beginPublishCycle();
+    const InputSnapshot input{};
+    Frame<MaxInteractions> frame(target_, device_, input, interactions_, assets_);
+    ScreenType screen(frame, theme());
+    if (screen_)
+      screen_(screen, screenUser_);
+  }
+
   ActionEvent render(const InputSnapshot &input = InputSnapshot{}) {
     lastRenderHint_ = refreshHint_;
     invalidated_ = false;
