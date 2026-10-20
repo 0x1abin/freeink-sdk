@@ -1,6 +1,7 @@
 #define FREEINK_DEVICE_METALIO_EINK4 1
 #include <algorithm>
 #include <array>
+#include <cstdio>
 
 #include "driver/CrossMuxSsd1677Driver.cpp"
 using namespace freeink;
@@ -16,6 +17,61 @@ void parameters(EpdBus& b) {
     if (e.cmd == 0x21) assert(e.bytes.size() == 2);
   assert(b.last(0x18) == std::vector<uint8_t>{0x80});
 }
+
+void testCustomLutTransfer() {
+  alignas(uint32_t) std::array<uint8_t, 111> custom;
+  for (size_t i = 0; i < custom.size(); ++i) custom[i] = static_cast<uint8_t>(i * 37 + 19);
+  const auto original = custom;
+  std::array<uint8_t, 32> fb;
+  fb.fill(0xA5);
+  bool batched = true;
+  for (uint8_t border : {0x00, 0x80}) {
+    auto cfg = crossmuxSsd1677DefaultConfig();
+    cfg.borderWaveformGray = border;
+    for (bool factory : {false, true}) {
+      for (bool turnOff : {false, true}) {
+        for (const auto* lut : {custom.data() + 1, static_cast<uint8_t*>(nullptr)}) {
+          const auto* expected = lut ? lut : (factory ? lut_factory_quality : cfg.grayLut);
+          CrossMuxSsd1677Driver driver(cfg);
+          EpdBus bus;
+          driver.begin(bus);
+          bus.clear();
+          driver.displayGray(bus, fb.data(), turnOff, lut, factory);
+          std::vector<int> commands;
+          for (const auto& e : bus.events)
+            if (e.cmd >= 0) commands.push_back(e.cmd);
+          std::vector<int> expectedCommands{0x32, 0x03, 0x04, 0x2C};
+          if (border) expectedCommands.push_back(0x3C);
+          expectedCommands.insert(expectedCommands.end(), {0x21, 0x22, 0x20});
+          if (factory && turnOff) expectedCommands.insert(expectedCommands.end(), {0x3C, 0x22, 0x20});
+          assert(commands == expectedCommands);
+          assert(bus.events[0].bytes == std::vector<uint8_t>(expected, expected + 105));
+          assert(bus.events[1].bytes == std::vector<uint8_t>{expected[105]});
+          assert(bus.events[2].bytes == std::vector<uint8_t>(expected + 106, expected + 109));
+          assert(bus.events[3].bytes == std::vector<uint8_t>{expected[109]});
+          assert(bus.events[1].dataTransactions == 1 && bus.events[2].dataTransactions == 3 &&
+                 bus.events[3].dataTransactions == 1);
+          if (border) assert(bus.events[4].bytes == std::vector<uint8_t>{border});
+          const size_t control = border ? 5 : 4;
+          assert(bus.events[control].bytes == std::vector<uint8_t>{0x00});
+          assert(bus.events[control + 1].bytes == std::vector<uint8_t>{uint8_t(!factory && turnOff ? 0xCF : 0xCC)});
+          assert(bus.events[control + 2].bytes.empty());
+          if (factory && turnOff) {
+            assert(bus.last(0x3C) == std::vector<uint8_t>{cfg.borderWaveformInit});
+            assert(bus.last(0x22) == std::vector<uint8_t>{0x03});
+          }
+          assert(custom == original);
+          std::fprintf(stderr,
+                       "CrossMux SSD1677 %s factory=%d off=%d border=%02x: LUT bytes=105, data transactions=%u\n",
+                       lut ? "RAM" : "PROGMEM", factory, turnOff, border, bus.events[0].dataTransactions);
+          batched = batched && bus.events[0].dataTransactions == 1;
+        }
+      }
+    }
+  }
+  assert(batched);
+}
+
 // External drivers implementing only the original interface remain compatible.
 struct LegacyDriver : PanelDriver {
   int calls = 0;
@@ -304,6 +360,7 @@ void testImageTransitionPolicy() {
 
 #ifndef CROSSMUX_READER_REFRESH_TEST
 int main() {
+  testCustomLutTransfer();
   testDriverSequences();
   testImageTransitionPolicy();
 }
