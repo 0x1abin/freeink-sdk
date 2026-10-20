@@ -112,7 +112,8 @@ peripheral requires passkey pairing, the host exposes the six-digit code through
   recorded when present. HID is validated at connect time so devices that put
   their name or services in scan response / extended advertising fragments can
   still appear in the pairing UI.
-- **Connect** — runs on a dedicated FreeRTOS task: connect → discover HID →
+- **Connect** — runs on a dedicated FreeRTOS task: connect → discover HID (if a
+  search for the HID UUID finds nothing, all services are listed) →
   `secureConnection()` (bond) → write **Report Protocol** mode → subscribe to
   Input reports, falling back to Boot Keyboard Input (`0x2A22`) for devices that
   only expose the boot characteristic.

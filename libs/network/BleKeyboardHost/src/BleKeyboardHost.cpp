@@ -290,7 +290,16 @@ bool setupHid(NimBLEClient* client) {
 }
 
 bool hasHidService(NimBLEClient* client) {
-  return client && client->getService(NimBLEUUID(kHidService)) != nullptr;
+  if (!client) return false;
+  const NimBLEUUID hid(kHidService);
+  if (client->getService(hid)) return true;
+  // Some peripherals (Flic) return nothing for a search for one service UUID (ATT
+  // Find By Type Value). Android and BlueZ list every service instead; do that too.
+  // setupHid's getService() then finds HID in that list.
+  for (const NimBLERemoteService* svc : client->getServices(true)) {
+    if (svc->getUUID() == hid) return true;
+  }
+  return false;
 }
 
 // Ends an in-flight connection attempt at whatever stage it has reached.

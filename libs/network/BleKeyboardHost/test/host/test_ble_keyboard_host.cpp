@@ -106,6 +106,16 @@ void testKeyboardPressIsOneKeyEvent() {
   CHECK(!host().popKey(ev));
 }
 
+// A peer that returns nothing for a search for the HID service UUID (Flic) still
+// connects: listing all its services finds it.
+void testHidFoundByListingWhenUuidSearchFails() {
+  fakeble::resetWorld();
+  serveRemote(kKeyboardMap, sizeof kKeyboardMap);
+  fakeble::failServiceSearchByUuid(true);
+  CHECK(fakeble::beginHost());
+  CHECK(fakeble::connectTo(kRemote));
+}
+
 // A peer that is pairing or being discovered sits in a NimBLE wait that only a
 // disconnect ends (cancelConnect() covers the GAP connect alone). end() must not
 // delete the connection task inside that wait: NimBLE later completes the wait
@@ -635,6 +645,7 @@ void testRemoteButtonProfiles() {
 int main() {
   testRemoteButtonProfiles();
   testKeyboardPressIsOneKeyEvent();
+  testHidFoundByListingWhenUuidSearchFails();
   testEndDuringPairingDoesNotDeleteTaskInsideNimble(fakeble::Stage::Security);
   testEndDuringPairingDoesNotDeleteTaskInsideNimble(fakeble::Stage::Discovery);
   testScanCancelsReconnectThatIsPairing();
