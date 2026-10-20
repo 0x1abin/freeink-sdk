@@ -205,11 +205,14 @@
 #endif
 
 // --- 4) Derive default capabilities (override with -DFREEINK_CAP_*=0/1) -------
-#ifndef FREEINK_CAP_TOUCH
-#define FREEINK_CAP_TOUCH                                                                               \
+// Every device whose profile has a touch controller. Adding a touch device or
+// controller: follow the checklist in docs/adding-a-touch-controller.md.
+#define FREEINK_TOUCH_DEVICE_SELECTED                                                                   \
   (FREEINK_DEVICE_MURPHY || FREEINK_DEVICE_LILYGO || FREEINK_DEVICE_M5PAPER || FREEINK_DEVICE_STICKY || \
    FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_PAPERMONO || FREEINK_DEVICE_PAPERS3 || FREEINK_DEVICE_MURPHY_M4 || \
    FREEINK_DEVICE_EEGO_A4 || FREEINK_DEVICE_METALIO_EINK4 || FREEINK_DEVICE_PICCO)
+#ifndef FREEINK_CAP_TOUCH
+#define FREEINK_CAP_TOUCH FREEINK_TOUCH_DEVICE_SELECTED
 #endif
 // Touch-controller drivers, one flag per BoardConfig::TouchController. InputManager
 // dispatches on ACTIVE.touch.controller at runtime and selectDevice() can switch
@@ -222,10 +225,7 @@
 // forced on for touchless devices, or a device not classified here yet) keeps
 // every driver, as before; -DFREEINK_TOUCH_ALL_DRIVERS=1 forces that anywhere.
 #ifndef FREEINK_TOUCH_ALL_DRIVERS
-#define FREEINK_TOUCH_ALL_DRIVERS                                                                              \
-  (!(FREEINK_DEVICE_MURPHY || FREEINK_DEVICE_LILYGO || FREEINK_DEVICE_M5PAPER || FREEINK_DEVICE_STICKY ||      \
-     FREEINK_DEVICE_X4PRO || FREEINK_DEVICE_PAPERMONO || FREEINK_DEVICE_PAPERS3 || FREEINK_DEVICE_MURPHY_M4 || \
-     FREEINK_DEVICE_EEGO_A4 || FREEINK_DEVICE_METALIO_EINK4 || FREEINK_DEVICE_PICCO))
+#define FREEINK_TOUCH_ALL_DRIVERS (!FREEINK_TOUCH_DEVICE_SELECTED)
 #endif
 #ifndef FREEINK_TOUCH_CHSC6X  // Murphy M3
 #define FREEINK_TOUCH_CHSC6X (FREEINK_CAP_TOUCH && (FREEINK_TOUCH_ALL_DRIVERS || FREEINK_DEVICE_MURPHY))
@@ -247,8 +247,8 @@
 #ifndef FREEINK_TOUCH_CST816S  // Metalio E-Ink 4
 #define FREEINK_TOUCH_CST816S (FREEINK_CAP_TOUCH && (FREEINK_TOUCH_ALL_DRIVERS || FREEINK_DEVICE_METALIO_EINK4))
 #endif
-#ifndef FREEINK_TOUCH_PICCO_CST  // Onyx Picco
-#define FREEINK_TOUCH_PICCO_CST (FREEINK_CAP_TOUCH && (FREEINK_TOUCH_ALL_DRIVERS || FREEINK_DEVICE_PICCO))
+#ifndef FREEINK_TOUCH_TMA525C  // Onyx Picco
+#define FREEINK_TOUCH_TMA525C (FREEINK_CAP_TOUCH && (FREEINK_TOUCH_ALL_DRIVERS || FREEINK_DEVICE_PICCO))
 #endif
 #ifndef FREEINK_CAP_FRONTLIGHT
 // EEGO A4's frontlight is an I2C LED driver (viaI2cLed), not LEDC PWM — the
@@ -499,8 +499,8 @@ enum class DisplayController : uint8_t {
 };
 
 // Optional capacitive touch controller.
-// PiccoCst: the Onyx Picco's Parade TMA525C (PIP protocol) at I2C 0x24.
-enum class TouchController : uint8_t { None, Chsc6x, Gt911, Ft5x06, Ft6336u, Gslx680, Cst816s, PiccoCst };
+// Tma525c: Parade TMA525C (PIP protocol), Onyx Picco at I2C 0x24.
+enum class TouchController : uint8_t { None, Chsc6x, Gt911, Ft5x06, Ft6336u, Gslx680, Cst816s, Tma525c };
 
 // Optional audio output path. Murphy M3 ships an ES8388-compatible stereo
 // codec (I2S slave, control over the shared touch I2C bus) — the contract was
@@ -1772,10 +1772,10 @@ constexpr BoardProfile PICCO = {
     PIN_UNASSIGNED,  // batteryChargeStatus: no STAT pin; charge state comes from the SGM41562
     2.0f,
     PIN_UNASSIGNED,  // usbDetect
-    // Capacitive touch (PiccoCst @ I2C 0x24 on the shared bus SDA7/SCL8, RST=10,
+    // Capacitive touch (Parade TMA525C @ I2C 0x24 on the shared bus SDA7/SCL8, RST=10,
     // INT=11 active-low). Native digitizer is 480x800 portrait on the 800x480
     // landscape panel, so swapXY maps it to panel axes (like the Sticky).
-    {TouchController::PiccoCst, 7, 8, 11, 10, 0x24, 0, 799, 0, 479, false, 0, true, false, PIN_UNASSIGNED, true,
+    {TouchController::Tma525c, 7, 8, 11, 10, 0x24, 0, 799, 0, 479, false, 0, true, false, PIN_UNASSIGNED, true,
      false, true},  // swapXY; flipX=false; flipY=true (portrait horizontal was reversed on hardware)
     NO_FRONTLIGHT,   // no LEDC pins; the frontlight is the I2C driver in i2cFrontlight below
     NO_AUDIO,
@@ -2151,8 +2151,8 @@ constexpr bool touchDriverCompiled(TouchController c) {
       return FREEINK_TOUCH_GSLX680;
     case TouchController::Cst816s:
       return FREEINK_TOUCH_CST816S;
-    case TouchController::PiccoCst:
-      return FREEINK_TOUCH_PICCO_CST;
+    case TouchController::Tma525c:
+      return FREEINK_TOUCH_TMA525C;
   }
   return false;
 }

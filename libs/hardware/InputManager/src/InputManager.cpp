@@ -267,7 +267,7 @@ bool InputManager::prepareForDeepSleep() {
 #endif
 #if FREEINK_DEVICE_PICCO
   if (const auto& t = BoardConfig::ACTIVE.touch;
-      t.controller == BoardConfig::TouchController::PiccoCst && t.i2cAddress != 0) {
+      t.controller == BoardConfig::TouchController::Tma525c && t.i2cAddress != 0) {
     // Stock FUN_4200c730: SET_POWER(SLEEP) to command register 0x0005, wait
     // for the response, then pull RST/INT/GPIO12 down. deepSleep() floats the
     // digital pad config, so the pulldowns are set in the RTC domain.
@@ -1348,9 +1348,9 @@ void InputManager::beginTouch() {
     return;
   }
 #endif
-#if FREEINK_TOUCH_PICCO_CST
-  if (t.controller == BoardConfig::TouchController::PiccoCst) {
-    beginPiccoTouch();
+#if FREEINK_TOUCH_TMA525C
+  if (t.controller == BoardConfig::TouchController::Tma525c) {
+    beginTma525c();
     return;
   }
 #endif
@@ -1423,9 +1423,9 @@ uint8_t InputManager::serviceTouch() {
       pollGslx680(now);
       break;
 #endif
-#if FREEINK_TOUCH_PICCO_CST
-    case BoardConfig::TouchController::PiccoCst:
-      pollPiccoTouch(now);
+#if FREEINK_TOUCH_TMA525C
+    case BoardConfig::TouchController::Tma525c:
+      pollTma525c(now);
       break;
 #endif
 #if FREEINK_TOUCH_CHSC6X
@@ -2138,7 +2138,7 @@ void InputManager::pollGslx680(const unsigned long now) {
 // rec[1] bits 0-4 = touch ID, bits 5-6 = event (3 = lift-off), rec[2..3] = X,
 // rec[4..5] = Y (LE). Stock inverts both against the native 480x800 portrait
 // digitizer (x = 480 - X, y = 800 - Y).
-#if FREEINK_TOUCH_PICCO_CST
+#if FREEINK_TOUCH_TMA525C
 namespace {
 constexpr uint16_t PICCO_TOUCH_W = 480;
 constexpr uint16_t PICCO_TOUCH_H = 800;
@@ -2177,7 +2177,7 @@ uint16_t piccoCrc(const uint8_t* p, size_t n) {
 }
 }  // namespace
 
-void InputManager::beginPiccoTouch() {
+void InputManager::beginTma525c() {
   const auto& t = BoardConfig::ACTIVE.touch;
   if (t.sda < 0 || t.scl < 0 || t.i2cAddress == 0) return;
 
@@ -2236,7 +2236,7 @@ void InputManager::beginPiccoTouch() {
 #endif
 }
 
-void InputManager::pollPiccoTouch(const unsigned long now) {
+void InputManager::pollTma525c(const unsigned long now) {
   if (!touchDataEnabled) return;
   const auto& t = BoardConfig::ACTIVE.touch;
 
@@ -2305,7 +2305,7 @@ void InputManager::pollPiccoTouch(const unsigned long now) {
   touchPressed = true;
   touchReleaseAt = now + PICCO_TOUCH_STALE_MS;
 }
-#endif  // FREEINK_TOUCH_PICCO_CST
+#endif  // FREEINK_TOUCH_TMA525C
 
 // --- GT911 (LilyGo) ---------------------------------------------------------
 
