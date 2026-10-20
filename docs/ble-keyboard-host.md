@@ -120,6 +120,10 @@ peripheral requires passkey pairing, the host exposes the six-digit code through
 - **Reports** — normalized to `[mod][k0..k5]`, diffed against the previous
   report, then translated (US QWERTY HID usages) into `KeyEvent`s. Page turners
   commonly send arrow or page-up/page-down usages, which arrive as `SpecialKey`.
+  - **Bare key arrays** — if a keyboard's Report Map has one Input item, a
+    Keyboard-page array of 8- or 16-bit slots (the Flic Duo's layout), its
+    reports of that id and length are read slot by slot from byte 0, with no
+    modifier byte.
 - **Auto-repeat** — HID sends one report per state change, so `poll()`
   synthesizes repeats for the held key after an initial delay.
 
