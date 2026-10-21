@@ -35,21 +35,21 @@ void pinMode(uint8_t pin, uint8_t mode) {
 static void IRAM_ATTR isrTrampoline(void* arg) { reinterpret_cast<void (*)(void)>(arg)(); }
 
 void attachInterrupt(uint8_t pin, void (*isr)(void), int mode) {
-  static bool s_isrService;
-  if (!s_isrService) {
-    const esp_err_t err = gpio_install_isr_service(0);
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {  // INVALID_STATE: the firmware installed it
-      ESP_LOGE(TAG, "gpio_install_isr_service: %s", esp_err_to_name(err));
-      return;
-    }
-    s_isrService = true;
-  }
   const gpio_num_t gpio = static_cast<gpio_num_t>(pin);
   gpio_set_intr_type(gpio, mode == RISING    ? GPIO_INTR_POSEDGE
                            : mode == FALLING ? GPIO_INTR_NEGEDGE
                                              : GPIO_INTR_ANYEDGE);
-  gpio_isr_handler_remove(gpio);
-  gpio_isr_handler_add(gpio, isrTrampoline, reinterpret_cast<void*>(isr));
+  // Adding replaces a handler the pin had. The firmware may have installed
+  // the GPIO ISR service already; install it only when adding says it's missing.
+  esp_err_t err = gpio_isr_handler_add(gpio, isrTrampoline, reinterpret_cast<void*>(isr));
+  if (err == ESP_ERR_INVALID_STATE) {
+    err = gpio_install_isr_service(0);
+    if (err == ESP_OK) err = gpio_isr_handler_add(gpio, isrTrampoline, reinterpret_cast<void*>(isr));
+  }
+  if (err != ESP_OK) {
+    ESP_LOGE(TAG, "attachInterrupt(%d): %s", pin, esp_err_to_name(err));
+    return;
+  }
   gpio_intr_enable(gpio);
 }
 

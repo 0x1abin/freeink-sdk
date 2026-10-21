@@ -1,7 +1,7 @@
 # Using FreeInk from ESP-IDF
 
-FreeInk's display (`FreeInkDisplay` + `BoardConfig`) and `FreeInkUI` build as a
-plain ESP-IDF component, without arduino-esp32. The repo root's
+FreeInk's display (`FreeInkDisplay` + `BoardConfig`), `FreeInkUI` and
+`FreeInkFont`'s TTF engine build as a plain ESP-IDF component, without arduino-esp32. The repo root's
 `CMakeLists.txt` registers the component. `idf/` supplies the slice of the
 Arduino API those sources call (`Arduino.h`, `SPI.h`, `Wire.h`), backed by
 `driver/gpio`, `spi_master` and `esp_timer`. The SDK sources are not modified.
@@ -70,8 +70,10 @@ extern "C" void app_main() {
 - **Wire is declared, not implemented.** Boards whose display path talks I2C
   (Paper Mono's PMIC, the Waveshare 3.97's AXP2101) compile but fail to link
   on ESP-IDF until `TwoWire` is backed by `driver/i2c_master`.
-- Only the display and FreeInkUI are in the component. Input, battery, SD,
-  audio and the other managers are still Arduino-only.
+- Only the display, FreeInkUI and FreeInkFont's stb_truetype engine
+  (`TtfFont`, `FontChain`) are in the component; `FreeInkUIRasterFont.h` draws
+  a `FontChain` in a `DisplayTarget` font slot. FreeInkFont's FreeType backend,
+  input, battery, SD, audio and the other managers are still Arduino-only.
 
 ## Validated
 
