@@ -243,14 +243,14 @@ void Ssd2677Driver::copyGrayscaleLsb(EpdBus& bus, const uint8_t* lsb) {
 
 void Ssd2677Driver::beginGrayscale(EpdBus& bus, const uint8_t* fb, GrayscaleMode mode, RefreshMode fallback,
                                    bool turnOff) {
-  _stickyAbsoluteGray = isSticky() && mode != GrayscaleMode::Overlay;
-  if (_stickyAbsoluteGray) return;  // stock gray4 drives every pixel from any prior state: no base
+  _absoluteGray = isSticky() && mode != GrayscaleMode::Overlay;
+  if (_absoluteGray) return;  // stock gray4 drives every pixel from any prior state: no base
   displayGrayscaleBase(bus, fb, fallback, turnOff);
 }
 
 void Ssd2677Driver::copyGrayscaleMsb(EpdBus& bus, const uint8_t* msb) {
   if (!msb || !_lsb) return;
-  if (_stickyAbsoluteGray) {
+  if (_absoluteGray) {
     // Stock gray4 (Seeed_GFX2 Driver_SSD2677): level index on the wire, 00 black,
     // 01 dark, 10 light, 11 white. Absolute planes: LSB = dark bit, MSB = light
     // bit, so MSB goes high.
@@ -270,8 +270,8 @@ void Ssd2677Driver::displayGray(EpdBus& bus, const uint8_t* fb, bool turnOff, co
                                 bool factoryMode) {
   (void)lut;
   (void)factoryMode;
-  if (_stickyAbsoluteGray) {
-    _stickyAbsoluteGray = false;
+  if (_absoluteGray) {
+    _absoluteGray = false;
     if (!_lsb) {
       display(bus, fb, nullptr, RefreshMode::Full, turnOff);
       return;
