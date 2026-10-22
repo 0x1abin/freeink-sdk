@@ -60,8 +60,10 @@ frame (white / middle / black), sent as a per-pixel transition from the
 previous Gray3 frame in a single refresh: unchanged white and middle pixels
 hold, black is re-driven, and only changed pixels are cleared or nudged. A
 cleanup request (non-FAST base) shows the page with black and white swapped,
-then the page itself. Any B/W refresh or four-gray image resets the history,
-so the next Gray3 page drives every pixel from its new level.
+then the page itself. After a B/W screen or four-gray image there is no
+Gray3 history: the next page shows its base with a normal B/W refresh, which
+fully clears the previous screen, and its grays follow as a Gray3 transition
+from that base.
 
 Full images (absolute/direct planes) use the stock four-gray waveform (five
 42-byte records), which drives every pixel from any prior state, with no B/W
