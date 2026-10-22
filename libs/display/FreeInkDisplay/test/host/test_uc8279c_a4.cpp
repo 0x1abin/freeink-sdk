@@ -56,7 +56,8 @@ int main() {
       driver.copyGrayscaleMsb(bus, gray.data());
       const auto before = bus.refreshes;
       driver.displayGray(bus, bw.data(), false, nullptr, false);
-      assert(bus.refreshes == before + 1 && bus.lutBytes == 42 && "gray pass must load the 42-byte gray LUT");
+      assert(bus.refreshes == before + 1 && bus.interval == 0x00 && bus.lutBytes == 49 &&
+             "an AA gray pass must be one Gray3 refresh");
       if (cleanup) driver.cleanupGrayscaleBuffers(bus, bw.data());
       for (auto& b : bw) b = static_cast<uint8_t>(b ^ 0x33);
       driver.display(bus, bw.data(), nullptr, RefreshMode::Fast, page == 2);
@@ -98,39 +99,80 @@ int main() {
     }
   }
 
-  // Overlay masks fold onto their B/W base: black/dark/light/white pixels reach
-  // the panel as 00/01/10/11 in (DTM1, DTM2).
+  // Gray3 (anti-aliased pages, stock's reader path). Byte 0 of row 0, bits 7..0:
+  // base white, base black, dark, light, then white x4 -> levels white, black,
+  // middle, middle, white x4. Codes (DTM1, DTM2): 10 black, 01 gray,
+  // 11 white-clear, 00 hold.
+  const auto physical0 = static_cast<size_t>(551) * 96;  // row 0 is sent last
+  std::vector<uint8_t> page(bytes, 0xff), lsbMask(bytes, 0), msbMask(bytes, 0);
+  page[0] = 0b10001111;
+  lsbMask[0] = 0b00100000;  // dark
+  msbMask[0] = 0b00110000;  // dark | light
+  const auto gray3Page = [&](const uint8_t* base, RefreshMode fallback) {
+    driver.beginGrayscale(bus, base, GrayscaleMode::Overlay, fallback, false);
+    driver.writeGrayscalePlaneStrip(bus, GrayPlane::Lsb, lsbMask.data(), 0, 552);
+    driver.writeGrayscalePlaneStrip(bus, GrayPlane::Msb, msbMask.data(), 0, 552);
+    driver.displayGray(bus, base, false, nullptr, false);
+  };
   {
-    // Bits 7..0 of byte 0: base white, base black, dark, light, then white x4.
-    std::vector<uint8_t> base(bytes, 0xff), lsbMask(bytes, 0), msbMask(bytes, 0);
-    base[0] = 0b10001111;
-    lsbMask[0] = 0b00100000;  // dark
-    msbMask[0] = 0b00110000;  // dark | light
-    driver.beginGrayscale(bus, base.data(), GrayscaleMode::Overlay, RefreshMode::Half, false);
-    driver.copyGrayscaleLsb(bus, lsbMask.data());
-    driver.copyGrayscaleMsb(bus, msbMask.data());
-    driver.displayGray(bus, base.data(), false, nullptr, false);
-    const auto physical = 551 * 96;  // row 0 is sent last-but-padding
-    assert(bus.oldAtRefresh[physical] == 0b10011111 && "DTM1 = level MSB");
-    assert(bus.newAtRefresh[physical] == 0b10101111 && "DTM2 = level LSB");
+    // First Gray3 page after a B/W refresh: no history, every pixel driven from
+    // its new level, base and grays in a single refresh.
+    driver.display(bus, bw.data(), nullptr, RefreshMode::Fast, false);
+    const auto before = bus.refreshes;
+    gray3Page(page.data(), RefreshMode::Fast);
+    assert(bus.refreshes == before + 1 && "Gray3 page must be a single refresh with no B/W base");
+    assert(bus.interval == 0x00 && bus.lutBytes == 49);
+    assert(bus.oldAtRefresh[physical0] == 0b11001111 && bus.newAtRefresh[physical0] == 0b10111111 &&
+           "reset codes: white 11, black 10, middle 01");
+    assert(bus.oldAtRefresh[physical0 + 1] == 0xff && bus.newAtRefresh[physical0 + 1] == 0xff);
+    assert(bus.oldPlane.size() == 600 * 96 && bus.oldPlane[552 * 96] == 0x00 && "padding rows hold");
   }
-
-  // A caller that shows the base with a plain display() and never announces
-  // the overlay (cleanup and image pages) still gets the fold, not a page read
-  // as absolute levels (an inverted page).
   {
-    std::vector<uint8_t> base(bytes, 0xff), lsbMask(bytes, 0), msbMask(bytes, 0);
-    base[0] = 0b10001111;
-    lsbMask[0] = 0b00100000;
-    msbMask[0] = 0b00110000;
-    driver.display(bus, base.data(), nullptr, RefreshMode::Half, false);
+    // The same page again: white and middle hold, black is re-driven.
+    const auto before = bus.refreshes;
+    gray3Page(page.data(), RefreshMode::Fast);
+    assert(bus.refreshes == before + 1);
+    assert(bus.oldAtRefresh[physical0] == 0b01000000 && bus.newAtRefresh[physical0] == 0x00 &&
+           "unchanged white/middle must hold, black re-driven");
+    assert(bus.oldAtRefresh[physical0 + 1] == 0x00 && bus.newAtRefresh[physical0 + 1] == 0x00);
+  }
+  {
+    // A page where those pixels change: middle -> white is cleared, white ->
+    // middle is nudged gray, black -> white is cleared.
+    std::vector<uint8_t> next(bytes, 0xff);
+    next[0] = 0b11111111;  // all white base
+    const auto savedLsb = lsbMask[0], savedMsb = msbMask[0];
+    lsbMask[0] = 0;
+    msbMask[0] = 0b10000000;  // bit 7 now middle
+    gray3Page(next.data(), RefreshMode::Fast);
+    // bit7 white->middle: 01; bit6 black->white: 11; bits5,4 middle->white: 11.
+    assert(bus.oldAtRefresh[physical0] == 0b01110000 && bus.newAtRefresh[physical0] == 0b11110000);
+    lsbMask[0] = savedLsb;
+    msbMask[0] = savedMsb;
+  }
+  {
+    // A cleanup request runs stock's inverted page first, then the page.
+    const auto before = bus.refreshes;
+    gray3Page(page.data(), RefreshMode::Half);
+    assert(bus.refreshes == before + 2 && "cleanup page must show the inverted page, then the page");
+  }
+  {
+    // A stashed base whose gray pass never runs still reaches the panel.
+    driver.beginGrayscale(bus, page.data(), GrayscaleMode::Overlay, RefreshMode::Fast, false);
+    const auto before = bus.refreshes;
+    driver.cleanupGrayscaleBuffers(bus, page.data());
+    assert(bus.refreshes == before + 1 && bus.interval == 0xd7);
+    for (size_t i = 0; i < bytes; ++i) assert(bus.newAtRefresh[(551 - i / 96) * 96 + i % 96] == page[i]);
+  }
+  {
+    // A caller that shows the base with a plain display() and never announces
+    // the overlay (image pages) still gets a Gray3 page on that base.
+    driver.display(bus, page.data(), nullptr, RefreshMode::Half, false);
     driver.copyGrayscaleLsb(bus, lsbMask.data());
     driver.copyGrayscaleMsb(bus, msbMask.data());
-    driver.displayGray(bus, base.data(), false, nullptr, false);
-    const auto physical = 551 * 96;
-    assert(bus.oldAtRefresh[physical] == 0b10011111 && bus.newAtRefresh[physical] == 0b10101111 &&
-           "unannounced overlay pass was not folded onto the displayed base");
-    assert(bus.oldAtRefresh[physical + 1] == 0xff && "white base pixels must stay white");
+    driver.displayGray(bus, page.data(), false, nullptr, false);
+    assert(bus.interval == 0x00 && bus.oldAtRefresh[physical0] == 0b11001111 &&
+           bus.newAtRefresh[physical0] == 0b10111111 && "unannounced overlay must be a reset Gray3 page");
   }
 
   driver.deepSleep(bus);
@@ -141,5 +183,5 @@ int main() {
   assert(bus.refreshes == wakeStart + 2 && "first paint after wake must drive inverse, then target");
   driver.display(bus, bw.data(), nullptr, RefreshMode::Fast, false);
   assert(bus.interval == 0xd7 && bus.lutBytes == 49);
-  std::cout << "PASS: A4 FAST cadence, post-AA pixel transitions, retained baseline, explicit cleanup, gray wire encoding and wake\n";
+  std::cout << "PASS: A4 FAST cadence, post-AA pixel transitions, retained baseline, explicit cleanup, four-gray and Gray3 wire encoding and wake\n";
 }

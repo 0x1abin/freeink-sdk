@@ -54,13 +54,20 @@ B/W paint after initialization uses the full waveform to clear unknown glass sta
 After grayscale, the next B/W paint seeds the old plane with the inverse of the
 target so every pixel is driven with the requested waveform. Each B/W paint then
 copies the displayed frame into the old plane for the next differential update.
-Grayscale uses the stock four-gray waveform (five 42-byte records), which
-drives absolute levels from any prior screen state. The driver advertises
-absolute planes for images (no B/W base pass) and folds overlay masks onto a
-snapshot of their B/W base into the same planes. Planes go out uninverted as
-MSB to DTM1 and LSB to DTM2, so black/dark/light/white are 00/01/10/11. A
-gray pass folds onto the last displayed B/W frame unless it was begun as
-absolute, so callers may show the base with a plain display.
+Anti-aliased (overlay) pages use stock V1.0.3's reader "Gray3" path. The B/W
+base is stashed undisplayed; with its gray masks it becomes one three-level
+frame (white / middle / black), sent as a per-pixel transition from the
+previous Gray3 frame in a single refresh: unchanged white and middle pixels
+hold, black is re-driven, and only changed pixels are cleared or nudged. A
+cleanup request (non-FAST base) shows the page with black and white swapped,
+then the page itself. Any B/W refresh or four-gray image resets the history,
+so the next Gray3 page drives every pixel from its new level.
+
+Full images (absolute/direct planes) use the stock four-gray waveform (five
+42-byte records), which drives every pixel from any prior state, with no B/W
+base pass. Planes go out MSB to DTM1 and LSB to DTM2, so
+black/dark/light/white are 00/01/10/11.
+
 B/W and gray share the stock V1.0.3 panel session: PWR 0x03 00 72 72,
 VCOM_DC 0x32, gate/source 0x65 00 00 00 00, with DTM1 seeded white before
 power-on. Full refresh uses the stock GC waveform (0x50 = 0x97); fast refresh
@@ -89,6 +96,9 @@ Build with `-DFREEINK_DEVICE_EEGO_A4=1`; see the `eego_a4` environment in
   Charging comes from GPIO 11; the gauge cannot observe it.
 - `FrontlightManager` probes the optional LM3630A through
   `BoardProfile::i2cFrontlight`. The profile's PWM frontlight field is `NO_FRONTLIGHT`.
+  The controller is fitted on some unlit units too, so a unit the stock
+  firmware lists as unlit (by device UID, the low 24 bits of the factory MAC)
+  reports no frontlight even when the controller answers.
 
 ## Open items (need a physical unit)
 
