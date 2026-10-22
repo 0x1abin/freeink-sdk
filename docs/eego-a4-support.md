@@ -68,10 +68,12 @@ Full images (absolute/direct planes) use the stock four-gray waveform (five
 base pass. Planes go out MSB to DTM1 and LSB to DTM2, so
 black/dark/light/white are 00/01/10/11.
 
-B/W and gray share the stock V1.0.3 panel session: PWR 0x03 00 72 72,
-VCOM_DC 0x32, gate/source 0x65 00 00 00 00, with DTM1 seeded white before
-power-on. Full refresh uses the stock GC waveform (0x50 = 0x97); fast refresh
-uses the stock production DU waveform (0x50 = 0xd7), both 49-byte records. The planes are
+Gray refreshes use the stock V1.0.3 panel session (PWR 0x03 00 72 72,
+VCOM_DC 0x32); B/W uses a stronger drive (PWR 0x43 00 78 78 17, VCOM_DC 0x24)
+because UI screens change with fast refreshes. Both use gate/source
+0x65 00 00 00 00 and seed DTM1 white before power-on. Full refresh uses the stock GC waveform (0x50 = 0x97); fast refresh
+uses the stock production "DU-factory-previous" waveform (0x50 = 0xd7), both
+49-byte records. The planes are
 lazily allocated, PSRAM first; if allocation fails the driver leaves the
 existing B/W image up.
 

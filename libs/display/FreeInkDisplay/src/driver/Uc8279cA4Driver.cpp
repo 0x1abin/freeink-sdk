@@ -57,20 +57,27 @@ void Uc8279cA4Driver::hardwareReset(EpdBus& bus) {
 }
 
 void Uc8279cA4Driver::initController(EpdBus& bus, const bool grayMode) {
-  // Stock V1.0.3's panel session, shared by its B/W and gray refreshes.
+  // Gray refreshes use stock V1.0.3's panel session (PWR 03 00 72 72,
+  // VCOM_DC 0x32). B/W keeps this driver's original, stronger drive
+  // (PWR 43 00 78 78 17, VCOM_DC 0x24): stock pairs its lower drive with full
+  // refreshes for UI screens, while this driver changes screens with fast ones.
   const uint8_t panel[] = {0x3f, 0x4a};
-  const uint8_t power[] = {0x03, 0x00, 0x72, 0x72};
+  const uint8_t grayPower[] = {0x03, 0x00, 0x72, 0x72};
+  const uint8_t bwPower[] = {0x43, 0x00, 0x78, 0x78, 0x17};
   const uint8_t booster[] = {0x25, 0x25, 0x3c};
   const uint8_t resolution[] = {0x03, 0x00, 0x02, 0x58};  // 768x600
   const uint8_t interval[] = {0x00, 0x00, 0x00, 0x00};
   const uint8_t powerOffSequence = 0x20;
-  const uint8_t vcom = 0x32;
+  const uint8_t vcom = grayMode ? 0x32 : 0x24;
   const uint8_t pll = 0x0f;
   const uint8_t tcon = 0x02;
 
   bus.cmdData(CMD_PANEL_SETTING, panel, sizeof(panel));
   bus.cmdData(CMD_POWER_OFF_SEQUENCE, &powerOffSequence, 1);
-  bus.cmdData(CMD_POWER_SETTING, power, sizeof(power));
+  if (grayMode)
+    bus.cmdData(CMD_POWER_SETTING, grayPower, sizeof(grayPower));
+  else
+    bus.cmdData(CMD_POWER_SETTING, bwPower, sizeof(bwPower));
   bus.cmdData(CMD_BOOSTER_SOFT_START, booster, sizeof(booster));
   bus.cmdData(CMD_VCOM_DC, &vcom, 1);
   bus.cmdData(CMD_PLL_CONTROL, &pll, 1);

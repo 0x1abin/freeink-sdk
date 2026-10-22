@@ -24,7 +24,9 @@ constexpr uint8_t A4_UC8279C_LUT_24[A4_UC8279C_LUT_LENGTH] = {
     0x01, 0x98, 0x04, 0x4e, 0x0a, 0x01, 0x01, 0x01, 0x4a, 0x00, 0x00, 0x00, 0x01, 0x01, 0x01};
 
 // Stock V1.0.3 production fast (DU) waveform, "DU-factory-previous": one
-// phase per record; the rest of each 49-byte record is zero.
+// 36-frame phase per record (pixels changing to white or black are driven
+// there; pixels staying black are re-driven black; pixels staying white are
+// not driven). The rest of each 49-byte record is zero.
 constexpr uint8_t A4_UC8279C_FAST_LUT_20[A4_UC8279C_LUT_LENGTH] = {0x01, 0x32, 0x00, 0x00, 0x00, 0x01, 0x01};
 constexpr uint8_t A4_UC8279C_FAST_LUT_21[A4_UC8279C_LUT_LENGTH] = {0x01, 0x24, 0x00, 0x00, 0x00, 0x01, 0x01};
 constexpr uint8_t A4_UC8279C_FAST_LUT_22[A4_UC8279C_LUT_LENGTH] = {0x01, 0xa4, 0x00, 0x00, 0x00, 0x01, 0x01};
