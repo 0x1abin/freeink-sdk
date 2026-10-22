@@ -21,6 +21,18 @@ checks skip when those converters are unavailable. It builds layout tests for
 the default, SMALL, and LARGE memory profiles. Build outputs go under the system
 temporary directory.
 
+## Progressive JPEG
+
+```sh
+python3 libs/assets/ProgressiveJpeg/test/host/run.py
+```
+
+Needs Pillow, `cjpeg` and `djpeg`. Decodes generated progressive JPEGs (4:2:0,
+4:2:2, 4:4:4, grayscale, restart intervals, odd sizes) and compares the luma
+with `djpeg -grayscale`; also checks that baseline files are refused and that
+a truncated stream decodes without failing. Set `PJ_EXTRA_JPEGS` to a
+colon-separated list of files to check real-world images too.
+
 ## Battery gauge
 
 ```sh
