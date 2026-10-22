@@ -1,4 +1,10 @@
 #include "Ssd1677Driver.h"
+#if __has_include(<esp_rom_sys.h>)
+#include <esp_rom_sys.h>  // ROM printf reaches UART0 consoles (e.g. a USB-serial bridge) when Serial is native USB
+#define EPD_LOG(...) esp_rom_printf(__VA_ARGS__)
+#else
+#define EPD_LOG(...) Serial.printf(__VA_ARGS__)
+#endif
 
 #include <BoardConfig.h>
 #if __has_include(<driver/gpio.h>)
@@ -137,10 +143,10 @@ static void epdReadId3Wire(uint8_t cmdByte, uint8_t* id, uint8_t n, uint16_t rst
   for (const int8_t pin : {d.cs, d.dc, d.sclk, d.mosi, d.rst, d.busy, d.powerEnable}) {
     if (pin >= 0) gpio_hold_dis(static_cast<gpio_num_t>(pin));
   }
-  if (d.powerEnable >= 0) {  // the panel must be powered to answer
+  if (d.powerEnable >= 0 && digitalRead(d.powerEnable) != HIGH) {  // the panel must be powered to answer
     pinMode(d.powerEnable, OUTPUT);
     digitalWrite(d.powerEnable, HIGH);
-    delay(10);
+    delay(50);
   }
   pinMode(d.cs, OUTPUT);
   digitalWrite(d.cs, HIGH);
@@ -189,20 +195,33 @@ static void epdReadId3Wire(uint8_t cmdByte, uint8_t* id, uint8_t n, uint16_t rst
 // Newer Sticky units carry an SSD2677 (UltraChip-style command set, see
 // Ssd2677Driver) in place of the SSD1677. Stock v1.2.0 tells them apart by CMD
 // 0x70: an SSD2677 answers 0x07 first (read half-duplex on SDA after a 20 ms /
-// 10 ms reset); anything else is the SSD1677. Cached. The display shares its
-// SPI bus with the SD card, so pins SPI already owns are handed back to it.
+// 10 ms reset); anything else is the SSD1677. The BUSY line also differs once
+// the controller is idle after reset: SSD1677 BUSY is active-high (idle low),
+// SSD2677 BUSY active-low (idle high), so an idle-high BUSY also selects the
+// SSD2677 when the 0x70 reply is not conclusive. Cached. The display shares its
+// SPI bus with the SD card, so a bus SPI already runs is restarted afterwards.
 bool stickyHasSsd2677() {
   static int8_t cached = -1;
   if (cached >= 0) return cached == 1;
   uint8_t rev = 0;
   epdReadId3Wire(0x70, &rev, 1, 20, 10);
-  cached = rev == 0x07 ? 1 : 0;
-  const auto& d = BoardConfig::ACTIVE.display;
-  if (spi_t* bus = SPI.bus()) {
-    spiAttachSCK(bus, d.sclk);
-    spiAttachMOSI(bus, d.mosi);
+  delay(30);  // let either controller finish its post-reset busy phase
+  const bool busyHigh = digitalRead(BoardConfig::ACTIVE.display.busy) == HIGH;
+  cached = (rev == 0x07 || busyHigh) ? 1 : 0;
+  // Turning the shared pins into GPIOs detached them from the SPI bus the SD card
+  // already started (the pin manager may stop the bus). Restart it on the same
+  // pins so both the SD card and the display driver find it working.
+  if (SPI.bus()) {
+    const auto& b = BoardConfig::ACTIVE;
+    const int8_t ss = SPI.pinSS();
+    SPI.end();
+    SPI.begin(b.display.sclk, b.sd.miso, b.display.mosi, ss);  // the shared bus: display SCLK/MOSI, SD MISO
   }
-  if (Serial) Serial.printf("[%lu] [EPD] Sticky CMD 0x70 reply %02X: %s\n", millis(), rev, cached ? "SSD2677" : "SSD1677");
+
+  // Logged unconditionally: a wrong pick stalls in BUSY waits, so this line
+  // must get out first.
+  EPD_LOG("[%u] [EPD] Sticky CMD 0x70 reply %02X, BUSY idle %s: %s\n", static_cast<unsigned>(millis()), rev,
+          busyHigh ? "high" : "low", cached ? "SSD2677" : "SSD1677");
   return cached == 1;
 }
 #endif

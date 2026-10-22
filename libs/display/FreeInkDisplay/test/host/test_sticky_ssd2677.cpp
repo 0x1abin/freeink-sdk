@@ -6,10 +6,11 @@
 #include <cstring>
 #include <vector>
 
-#include <SPI.h>  // stub: counts shared-bus pin re-attaches
+#include <SPI.h>  // stub: counts shared-bus restarts
 #define private public
 #include "src/driver/Ssd1677Driver.h"
 #include "src/driver/Ssd2677Driver.h"
+#include "src/lut/Ssd2677Luts.h"
 #undef private
 
 using namespace freeink;
@@ -28,15 +29,13 @@ static int count(const EpdBus& bus, uint8_t command) {
 }
 
 int main() {
-  // An SSD2677 answers CMD 0x70 with 0x07 first; the probe hands the shared SPI
-  // pins (SCLK, MOSI) back afterwards.
+  // An SSD2677 answers CMD 0x70 with 0x07 first; the probe restarts the shared
+  // SPI bus on its existing pins (incl. the SD card's MISO) afterwards.
   static const uint8_t rev[3] = {0x07, 0x01, 0x01};
   memcpy(fakePanelRev, rev, 3);
-  assert(stickyHasSsd2677() && fakePanelCommand == 0x70 && fakeSpiAttached == 2);
+  assert(stickyHasSsd2677() && fakePanelCommand == 0x70 && fakeSpiRestarts == 1);
 
   auto& s = ssd2677Driver();
-  assert(!s.grayscaleCapabilities(GrayscaleMode::Overlay).supported());
-  assert(!s.grayscaleCapabilities(GrayscaleMode::Absolute).supported());
 
   EpdBus bus;
   s.begin(bus);
@@ -75,10 +74,59 @@ int main() {
   s.display(bus, white.data(), nullptr, RefreshMode::Fast, false);
   assert(count(bus, 0x00) == 0 && *lastData(bus, 0xE6) == Bytes({0x19}));
 
-  // Deep sleep powers the rails off first, then 0x07 0xA5.
+  // Absolute gray (stock gray4): no B/W base; the OTP gray waveform gets the
+  // level index per pixel (00 black, 01 dark, 10 light, 11 white), then power
+  // off; the next B/W frame is a full refresh.
+  assert(s.grayscaleCapabilities(GrayscaleMode::Absolute).supported());
+  assert(!s.grayscaleCapabilities(GrayscaleMode::Direct).supported());
+  Bytes lsb(48000, 0xFF), msb(48000, 0xFF);
+  lsb[0] = 0x5F;  // px 0-3: black 0, dark 1, light 0, white 1
+  msb[0] = 0x3F;  // px 0-3: black 0, dark 0, light 1, white 1
+  bus.clear();
+  s.beginGrayscale(bus, white.data(), GrayscaleMode::Absolute, RefreshMode::Fast, false);
+  assert(bus.writes.empty() && "no base refresh");
+  s.copyGrayscaleLsb(bus, lsb.data());
+  s.copyGrayscaleMsb(bus, msb.data());
+  assert(*lastData(bus, 0xE6) == Bytes({0xFA}));
+  data = lastData(bus, 0x10);
+  assert(data && (*data)[row0] == 0x1B && (*data)[row0 + 1] == 0xFF && "00 01 10 11 then white");
+  s.displayGray(bus, white.data(), false, nullptr, true);
+  assert(count(bus, 0x12) == 1 && bus.writes.back().command == 0x02 && "gray refresh powers off");
+  bus.clear();
+  s.display(bus, white.data(), nullptr, RefreshMode::Fast, false);
+  assert(*lastData(bus, 0xE6) == Bytes({0xEE}) && "B/W after a gray image is a full refresh");
+
+  // AA (overlay): the base goes out as a normal B/W refresh, then the masks
+  // (MSB high, LSB low, like the Picco) are nudged gray with the uploaded AA
+  // waveform; the next frame re-runs init before latching its OTP waveform.
+  assert(s.grayscaleCapabilities(GrayscaleMode::Overlay).supported());
+  Bytes lsbMask(48000, 0x00), msbMask(48000, 0x00);
+  lsbMask[0] = 0xF0;  // px 0-3 dark
+  msbMask[0] = 0xCC;  // px 0,1,4,5 gray
+  bus.clear();
+  s.beginGrayscale(bus, white.data(), GrayscaleMode::Overlay, RefreshMode::Fast, false);
+  assert(count(bus, 0x12) == 1 && *lastData(bus, 0xE6) == Bytes({0x19}) && "overlay base is a fast B/W refresh");
+  bus.clear();
+  s.copyGrayscaleLsb(bus, lsbMask.data());
+  s.copyGrayscaleMsb(bus, msbMask.data());
+  assert(count(bus, 0x00) == 1 && count(bus, 0xE6) == 0 && *lastData(bus, 0xE0) == Bytes({0x10}) &&
+         "masks go out after a fresh init, no OTP latch");
+  data = lastData(bus, 0x10);
+  assert(data && (*data)[row0] == 0xF5 && (*data)[row0 + 1] == 0xA0 && "px (msb,lsb) = 11 11 01 01 | 10 10 00 00");
+  s.displayGray(bus, white.data(), false, nullptr, false);
+  const Bytes* lut = lastData(bus, 0x20);
+  assert(lut && *lut == Bytes(lut_picco_se0400_gray, lut_picco_se0400_gray + 535));
+  assert(count(bus, 0x12) == 1);
+  bus.clear();
+  s.display(bus, white.data(), nullptr, RefreshMode::Fast, false);
+  assert(count(bus, 0x00) == 1 && *lastData(bus, 0xE6) == Bytes({0x19}) && "next frame re-inits after the AA LUT");
+
+  // Deep sleep: the rails are on after a fast frame, so they go off first.
+  bus.clear();
+  s.display(bus, white.data(), nullptr, RefreshMode::Fast, false);
   bus.clear();
   s.deepSleep(bus);
   assert(bus.writes.size() >= 2 && bus.writes.front().command == 0x02 && *lastData(bus, 0x07) == Bytes({0xA5}));
-  std::printf("Sticky SSD2677: probe, init, OTP latch, packing, row order and power passed\n");
+  std::printf("Sticky SSD2677: probe, init, OTP latch, packing, row order, power, gray4 and AA passed\n");
   return 0;
 }

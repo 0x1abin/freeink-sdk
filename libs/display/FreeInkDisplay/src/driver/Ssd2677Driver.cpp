@@ -57,6 +57,13 @@ constexpr InitCmd kStickyInit[] = {
 // E8/EB/EE/F1 and 08/0F/19/23 by <11/11-20/21-30/>=31 C.
 constexpr uint8_t OTP_FULL_ROOM = 0xEE;
 constexpr uint8_t OTP_FAST_ROOM = 0x19;
+constexpr uint8_t OTP_GRAY_ROOM = 0xFA;  // stock: 0xF1 at 15 C and below, else 0xFA
+// Sticky text AA: stock has none for this panel, so the overlay pass uploads the
+// Picco SE0400NQW47's stock AA waveform (slot 5) over the latched OTP one. It
+// was tuned for the Picco's glass, not the Sticky's.
+constexpr const unsigned char* kStickyAaLut = lut_picco_se0400_gray;
+// Never a stock OTP code: makes the next latch re-run reset + init.
+constexpr uint8_t LATCH_REINIT = 0xFF;
 
 bool isSticky() {
 #if FREEINK_DEVICE_STICKY
@@ -138,6 +145,7 @@ void Ssd2677Driver::latchOtpWaveform(EpdBus& bus, uint8_t code) {
 
 void Ssd2677Driver::begin(EpdBus& bus) {
   initPanel(bus);
+
   _needsInitialFull = true;
   // Retained old-plane: this panel takes old+new as one 2bpp burst, so the old
   // plane must exactly equal what is physically on the glass. The host can't
@@ -233,9 +241,28 @@ void Ssd2677Driver::copyGrayscaleLsb(EpdBus& bus, const uint8_t* lsb) {
   if (_lsb) memcpy(_lsb, lsb, size);
 }
 
+void Ssd2677Driver::beginGrayscale(EpdBus& bus, const uint8_t* fb, GrayscaleMode mode, RefreshMode fallback,
+                                   bool turnOff) {
+  _stickyAbsoluteGray = isSticky() && mode != GrayscaleMode::Overlay;
+  if (_stickyAbsoluteGray) return;  // stock gray4 drives every pixel from any prior state: no base
+  displayGrayscaleBase(bus, fb, fallback, turnOff);
+}
+
 void Ssd2677Driver::copyGrayscaleMsb(EpdBus& bus, const uint8_t* msb) {
-  // Stock (FUN_42286a70): MSB mask in the high bit, LSB mask in the low bit.
   if (!msb || !_lsb) return;
+  if (_stickyAbsoluteGray) {
+    // Stock gray4 (Seeed_GFX2 Driver_SSD2677): level index on the wire, 00 black,
+    // 01 dark, 10 light, 11 white. Absolute planes: LSB = dark bit, MSB = light
+    // bit, so MSB goes high.
+    latchOtpWaveform(bus, OTP_GRAY_ROOM);
+    sendPacked(bus, msb, _lsb);
+    return;
+  }
+  // Sticky: the B/W base latched an OTP waveform (E0 12 / E6 / A5). Re-run reset
+  // + init so the gray LUT runs from the same controller state as on the Picco,
+  // which never latches one. Reset leaves the glass as it is.
+  if (isSticky()) initPanel(bus);
+  // Stock (FUN_42286a70): MSB mask in the high bit, LSB mask in the low bit.
   sendPacked(bus, msb, _lsb);
 }
 
@@ -243,6 +270,27 @@ void Ssd2677Driver::displayGray(EpdBus& bus, const uint8_t* fb, bool turnOff, co
                                 bool factoryMode) {
   (void)lut;
   (void)factoryMode;
+  if (_stickyAbsoluteGray) {
+    _stickyAbsoluteGray = false;
+    if (!_lsb) {
+      display(bus, fb, nullptr, RefreshMode::Full, turnOff);
+      return;
+    }
+    // Stock powers off after gray4. The glass now holds gray a differential
+    // refresh can't clear, so the next B/W frame is a full one.
+    powerAndRefresh(bus, true);
+    _needsInitialFull = true;
+    return;
+  }
+  if (isSticky()) {
+    // Overlay (AA): the base is on the glass and the masks are in controller
+    // RAM; nudge them gray with the uploaded AA waveform. That replaces the
+    // latched OTP waveform, so the next frame re-runs init before latching.
+    if (!_lsb) return;  // nothing staged; `fb` may hold a gray plane by now
+    refreshWith(bus, kStickyAaLut, turnOff);
+    _latchedWaveform = LATCH_REINIT;
+    return;
+  }
   if (!_lsb) {  // planes never staged: plain B/W
     display(bus, fb, nullptr, RefreshMode::Full, turnOff);
     return;

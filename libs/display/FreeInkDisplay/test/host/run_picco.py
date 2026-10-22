@@ -28,14 +28,17 @@ def build(board, device_macro, test_cpp, directory):
     # SPI stub with the shared-bus pin re-attach the Sticky panel probe uses.
     (root / "SPI.h").write_text((HERE / "pro_stubs/SPI.h").read_text() + """
 struct spi_t {};
-inline int fakeSpiAttached;
-inline bool spiAttachSCK(spi_t*, int) { ++fakeSpiAttached; return true; }
-inline bool spiAttachMOSI(spi_t*, int) { ++fakeSpiAttached; return true; }
-struct FakeSpi { spi_t* bus() { static spi_t s; return &s; } };
+inline int fakeSpiRestarts;
+struct FakeSpi {
+  spi_t* bus() { static spi_t s; return &s; }
+  int8_t pinSS() { return -1; }
+  void end() {}
+  bool begin(int8_t sck, int8_t miso, int8_t mosi, int8_t ss) { fakeSpiRestarts += sck == 12 && miso == 40 && mosi == 11 && ss == -1; return true; }
+};
 inline FakeSpi SPI;
 """)
     board_h = (HERE / "pro_stubs/BoardConfig.h").read_text().replace("MetalioEInk4 };", "MetalioEInk4, Picco };")
-    (root / "BoardConfig.h").write_text(board_h.replace("Board board=Board::XteinkX4Pro;", f"Board board=Board::{board};").replace(
+    (root / "BoardConfig.h").write_text(board_h.replace("Board board=Board::XteinkX4Pro;", "struct { int8_t miso=40; } sd;\n  " + f"Board board=Board::{board};").replace(
         "inline bool isX4Classic() { return false; }",
         "inline bool isX4Classic() { return false; }\ninline bool isPicco() { return ACTIVE.board == Board::Picco; }"))
     # Arduino stub plus a fake SSD1677 that answers CMD 0x2E with fakePanelId.
@@ -74,7 +77,7 @@ inline int digitalRead(int p) {
   if (fakePanelCommand != 0x2E) return 0;
   return (fakePanelId[(fakeBit / 8) % 10] >> (7 - fakeBit % 8)) & 1;
 }
-struct FakeSerial { explicit operator bool() const { return false; } template <class... A> void printf(const char*, A...) {} };
+struct FakeSerial { explicit operator bool() const { return false; } template <class... A> void printf(const char*, A...) {} void flush() {} };
 inline FakeSerial Serial;
 """
     (root / "Arduino.h").write_text('#include "BoardConfig.h"\n' + arduino)
