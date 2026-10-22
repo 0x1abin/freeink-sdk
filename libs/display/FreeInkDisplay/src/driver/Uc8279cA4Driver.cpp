@@ -57,25 +57,20 @@ void Uc8279cA4Driver::hardwareReset(EpdBus& bus) {
 }
 
 void Uc8279cA4Driver::initController(EpdBus& bus, const bool grayMode) {
+  // Stock V1.0.3's panel session, shared by its B/W and gray refreshes.
   const uint8_t panel[] = {0x3f, 0x4a};
-  // B/W drive: PWR 0x43 00 78 78 17, VCOM_DC 0x24. Gray drive uses the stock
-  // V1.0.3 gray session values: PWR 0x03 00 72 72, VCOM_DC 0x32.
-  const uint8_t bwPower[] = {0x43, 0x00, 0x78, 0x78, 0x17};
-  const uint8_t grayPower[] = {0x03, 0x00, 0x72, 0x72};
+  const uint8_t power[] = {0x03, 0x00, 0x72, 0x72};
   const uint8_t booster[] = {0x25, 0x25, 0x3c};
   const uint8_t resolution[] = {0x03, 0x00, 0x02, 0x58};  // 768x600
-  const uint8_t interval[] = {0x00, 0x00, 0x20, 0x00};
+  const uint8_t interval[] = {0x00, 0x00, 0x00, 0x00};
   const uint8_t powerOffSequence = 0x20;
-  const uint8_t vcom = grayMode ? 0x32 : 0x24;
+  const uint8_t vcom = 0x32;
   const uint8_t pll = 0x0f;
   const uint8_t tcon = 0x02;
 
   bus.cmdData(CMD_PANEL_SETTING, panel, sizeof(panel));
   bus.cmdData(CMD_POWER_OFF_SEQUENCE, &powerOffSequence, 1);
-  if (grayMode)
-    bus.cmdData(CMD_POWER_SETTING, grayPower, sizeof(grayPower));
-  else
-    bus.cmdData(CMD_POWER_SETTING, bwPower, sizeof(bwPower));
+  bus.cmdData(CMD_POWER_SETTING, power, sizeof(power));
   bus.cmdData(CMD_BOOSTER_SOFT_START, booster, sizeof(booster));
   bus.cmdData(CMD_VCOM_DC, &vcom, 1);
   bus.cmdData(CMD_PLL_CONTROL, &pll, 1);
@@ -83,18 +78,10 @@ void Uc8279cA4Driver::initController(EpdBus& bus, const bool grayMode) {
   bus.cmdData(CMD_GATE_SOURCE_SETTING, interval, sizeof(interval));
   bus.cmdData(CMD_TCON, &tcon, 1);
 
-  if (grayMode) {
-    // Four-gray drive uses a lower power setup and powers the panel before
-    // seeding DTM1. Preserve that order exactly.
-    bus.cmd(CMD_POWER_ON);
-    bus.waitBusy(" A4 gray power-on");
-    fillControllerRam(bus, CMD_DTM1, 0xff);
-  } else {
-    // Official 1.2.7 seeds the old plane before enabling panel power.
-    fillControllerRam(bus, CMD_DTM1, 0xff);
-    bus.cmd(CMD_POWER_ON);
-    bus.waitBusy(" A4 power-on");
-  }
+  // Stock seeds the old plane white, then enables panel power.
+  fillControllerRam(bus, CMD_DTM1, 0xff);
+  bus.cmd(CMD_POWER_ON);
+  bus.waitBusy(" A4 power-on");
   _screenOn = true;
   _grayControllerMode = grayMode;
 }
@@ -115,9 +102,10 @@ void Uc8279cA4Driver::loadFullLut(EpdBus& bus) {
 }
 
 void Uc8279cA4Driver::loadFastLut(EpdBus& bus) {
+  const uint8_t* const lut[] = {A4_UC8279C_FAST_LUT_20, A4_UC8279C_FAST_LUT_21, A4_UC8279C_FAST_LUT_22,
+                                A4_UC8279C_FAST_LUT_23, A4_UC8279C_FAST_LUT_24};
   for (uint8_t i = 0; i < 5; ++i) {
-    bus.cmdData(static_cast<uint8_t>(CMD_LUT_VCOM + i), A4_UC8279C_FAST_LUT + i * A4_UC8279C_FAST_RECORD_LENGTH,
-                A4_UC8279C_FAST_WRITE_LENGTH);
+    bus.cmdData(static_cast<uint8_t>(CMD_LUT_VCOM + i), lut[i], A4_UC8279C_LUT_LENGTH);
   }
 }
 
@@ -183,7 +171,7 @@ void Uc8279cA4Driver::display(EpdBus& bus, const uint8_t* fb, const uint8_t* pre
   const uint8_t interval = fast ? 0xd7 : 0x97;
   bus.cmdData(CMD_VCOM_DATA_INTERVAL, &interval, 1);
   if (fast) {
-    // Fast mode sends the first 42 bytes of each 49-byte record.
+    // Stock's production fast (DU) waveform.
     loadFastLut(bus);
   } else {
     // HALF is CrossPoint's periodic ghost-cleanup cadence on this target.
@@ -205,6 +193,10 @@ void Uc8279cA4Driver::display(EpdBus& bus, const uint8_t* fb, const uint8_t* pre
   }
   writeFrame(bus, CMD_DTM2, fb);
   refresh(bus, turnOff, fb);
+  // The displayed B/W frame is the base any following overlay gray pass folds
+  // onto, however the caller started that pass.
+  if (!_grayBase) _grayBase = allocateGrayBuffer();
+  if (_grayBase) memcpy(_grayBase, fb, static_cast<size_t>(_widthBytes) * _height);
   _redriveAfterGray = false;
 }
 
@@ -219,8 +211,6 @@ void Uc8279cA4Driver::beginGrayscale(EpdBus& bus, const uint8_t* fb, const Grays
                                      const RefreshMode fallback, const bool turnOff) {
   _overlayPass = mode == GrayscaleMode::Overlay;
   if (!_overlayPass) return;  // absolute planes carry every pixel: no base pass
-  if (!_grayBase) _grayBase = allocateGrayBuffer();
-  if (_grayBase && fb) memcpy(_grayBase, fb, static_cast<size_t>(_widthBytes) * _height);
   displayGrayscaleBase(bus, fb, fallback, turnOff);
 }
 
@@ -264,7 +254,7 @@ void Uc8279cA4Driver::displayGray(EpdBus& bus, const uint8_t* fb, const bool tur
     if (!_grayBase) return;
     foldOverlayMasks();
   }
-  _overlayPass = false;
+  _overlayPass = true;  // overlay unless the next pass is begun as absolute
 
   hardwareReset(bus);
   initController(bus, true);

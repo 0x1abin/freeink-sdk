@@ -58,8 +58,11 @@ class Uc8279cA4Driver : public PanelDriver {
   bool _firstRefreshPending = false;
   uint8_t* _grayLsb = nullptr;
   uint8_t* _grayMsb = nullptr;
-  uint8_t* _grayBase = nullptr;  // B/W base of an overlay pass (bit 1 = white)
-  bool _overlayPass = false;
+  uint8_t* _grayBase = nullptr;  // last displayed B/W frame, the overlay base (bit 1 = white)
+  // A gray pass folds overlay masks onto _grayBase unless beginGrayscale()
+  // started it as absolute/direct: callers may display the base with a plain
+  // display() and never announce the overlay.
+  bool _overlayPass = true;
 };
 
 PanelDriver& uc8279cA4Driver();
