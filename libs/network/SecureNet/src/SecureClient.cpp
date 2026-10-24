@@ -41,7 +41,7 @@ namespace {
 // Only the owning task borrows it, so a connection on another task can never
 // hold it when the owner frees it.
 constexpr size_t kRecordBufSize = (1 << 14) + 256 + 64;  // largest record + header/alignment slack
-constexpr size_t kLendMin = 4096;                         // only record-sized requests take it
+constexpr size_t kLendMin = 1024;  // any record buffer, medium records too; small allocations use the heap
 std::atomic<void*> g_recordBuf{nullptr};
 std::atomic<TaskHandle_t> g_recordBufOwner{nullptr};
 std::atomic<bool> g_recordBufLent{false};
@@ -204,27 +204,29 @@ int SecureClient::connectWithMethod(const char* host, uint16_t port, void* metho
     delay(5);
   }
   _connected = true;
-  bool smallRecords = false;
-#ifdef HAVE_MAX_FRAGMENT
-  // Set below MAX_RECORD_SIZE only when the server accepted max_fragment_length.
-  smallRecords = ssl->max_fragment < MAX_RECORD_SIZE;
-#endif
-  if (_reserveFullRecord && !smallRecords && !g_recordBuf.load()) {
-    static const bool hooked = wolfSSL_SetAllocators(lendMalloc, lendFree, lendRealloc) == 0;
-    _recordBuf = hooked ? malloc(kRecordBufSize) : nullptr;
-    if (_recordBuf) {
-      g_recordBufOwner = xTaskGetCurrentTaskHandle();
-      g_recordBuf = _recordBuf;
-    } else if (Serial) {
-      Serial.printf("[SecureClient] no full-record buffer (hook %d), max block %u\n", hooked,
-                    (unsigned)ESP.getMaxAllocHeap());
-    }
-  }
   if (Serial) {
     Serial.printf("[SecureClient] handshake ok (%s): %s / %s in %lu ms\n", label, wolfSSL_get_version(ssl),
                   wolfSSL_get_cipher(ssl), (unsigned long)(millis() - started));
   }
   return 1;
+}
+
+void SecureClient::reserveFullRecord() {
+  auto* ssl = static_cast<WOLFSSL*>(_ssl);
+  if (!_connected || !ssl || _recordBuf || g_recordBuf.load()) return;
+#ifdef HAVE_MAX_FRAGMENT
+  // Set below MAX_RECORD_SIZE only when the server accepted max_fragment_length.
+  if (ssl->max_fragment < MAX_RECORD_SIZE) return;
+#endif
+  static const bool hooked = wolfSSL_SetAllocators(lendMalloc, lendFree, lendRealloc) == 0;
+  _recordBuf = hooked ? malloc(kRecordBufSize) : nullptr;
+  if (_recordBuf) {
+    g_recordBufOwner = xTaskGetCurrentTaskHandle();
+    g_recordBuf = _recordBuf;
+  } else if (Serial) {
+    Serial.printf("[SecureClient] no full-record buffer (hook %d), max block %u\n", hooked,
+                  (unsigned)ESP.getMaxAllocHeap());
+  }
 }
 
 bool SecureClient::abortRequested() {
@@ -322,6 +324,7 @@ size_t SecureClient::write(const uint8_t* buf, size_t size) { (void)buf; (void)s
 int SecureClient::read(uint8_t* buf, size_t size) { (void)buf; (void)size; return -1; }
 int SecureClient::available() { return 0; }
 void SecureClient::stop() { _transport.stop(); _connected = false; }
+void SecureClient::reserveFullRecord() {}
 uint8_t SecureClient::connected() { return 0; }
 
 #endif
