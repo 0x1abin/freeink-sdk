@@ -66,6 +66,8 @@ class SecureHttpClient {
   // Skip peer verification (SecureClient does likewise). Required today because
   // the wolfSSL transport has no CA bundle wired up; see setCACert().
   void setInsecure() { _insecure = true; }
+  // See SecureClient::setReserveFullRecord(). Applies to https connections.
+  void setReserveFullRecord(bool on) { _secure.setReserveFullRecord(on); }
   // Verify against a single PEM root. Clears the insecure flag.
   void setCACert(const char* rootCA) {
     _rootCA = rootCA;
