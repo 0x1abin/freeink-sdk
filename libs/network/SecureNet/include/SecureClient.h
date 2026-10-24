@@ -49,6 +49,14 @@ class SecureClient : public Client {
   // the four that a failing connect() can otherwise spend.
   void setAbortCallback(AbortCallback cb) { _shouldAbort = std::move(cb); }
 
+  // For bulk downloads: right after the handshake, while the heap still has a
+  // large free block, allocate a buffer for a full 16KB record and lend it to
+  // wolfSSL for every record of the connection. Servers that ignore max_fragment_length send 16KB
+  // records; without the reservation each one needs a fresh ~16.4KB block,
+  // which a fragmented heap mid-download often lacks. Skipped when the server
+  // accepted max_fragment_length. One connection at a time holds the buffer.
+  void setReserveFullRecord(bool on) { _reserveFullRecord = on; }
+
   // True when the last connect() returned because the abort callback fired
   // rather than because the connection failed.
   bool aborted() const { return _aborted; }
@@ -81,6 +89,8 @@ class SecureClient : public Client {
   WiFiClient _transport;
   AbortCallback _shouldAbort;
   bool _aborted = false;
+  bool _reserveFullRecord = false;
+  void* _recordBuf = nullptr;  // full-record buffer this connection owns, if any
   const char* _rootCA = nullptr;
   bool _insecure = false;
   void* _ssl = nullptr;  // WOLFSSL* (opaque to keep wolfSSL headers out of here)
