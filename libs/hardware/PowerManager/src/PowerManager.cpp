@@ -177,7 +177,7 @@ void PowerManager::powerDownRailsForSleep() {
   // The shared display/SD rail remains powered through deep sleep.
 #endif
 #if FREEINK_DEVICE_WS397
-  // The EPD rail is an AXP2101 LDO, not a GPIO, so holdRailOff() below cannot
+  // The EPD rail is an AXP2101 LDO, not a GPIO, so holdRailLevel() below cannot
   // reach it — drop it here or the panel stays powered all through deep sleep.
   axp2101::setEpdPower(false);
 #endif
@@ -193,10 +193,21 @@ void PowerManager::powerDownRailsForSleep() {
   // (FUN_420098f0), so the bus cannot back-feed the unpowered card.
   // SdmmcBlockDevice::begin() releases the holds on wake.
   for (const int8_t pin : {b.sdmmc.clk, b.sdmmc.cmd, b.sdmmc.d0, b.sdmmc.d1, b.sdmmc.d2, b.sdmmc.d3}) {
-    holdRailOff(pin, LOW);
+    holdRailLevel(pin, LOW);
   }
 #endif
+#if FREEINK_DEVICE_PICCO
+  // Picco's panel rail is the gated GPIO0 (carried as sd.powerEnable, not
+  // display.powerEnable), so the panel IS unpowered in deep sleep — hold RESET
+  // LOW. The heuristic below would otherwise pick HIGH (no display.powerEnable)
+  // and back-power the off SSD1677 through its RESET diode — a mA-level deep-sleep
+  // drain. Stock never holds the display pins (they go high-Z); LOW is the SDK's
+  // gated-rail equivalent, and the wake path (piccoReadId) releases the hold
+  // before the reset pulse.
+  const uint8_t resetSleepLevel = LOW;
+#else
   const uint8_t resetSleepLevel = b.display.powerEnable >= 0 ? LOW : HIGH;
+#endif
   holdRailLevel(b.display.rst, resetSleepLevel);
   holdRailLevel(b.display.powerEnable, LOW);
   // SD enable OFF = the inactive level: LOW for active-high enables, HIGH for the

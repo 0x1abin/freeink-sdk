@@ -16,6 +16,7 @@ struct WireStub {
   bool homeDown = false;
   bool screenDown = false;
   unsigned readAt = 0;
+  std::vector<uint8_t> touchFrame;  // served for reads of data register 0x80
 
   bool begin(int, int, uint32_t) {
     ended = false;
@@ -58,6 +59,7 @@ struct WireStub {
       constexpr uint8_t screenFrame[] = {1, 0, 0, 0, 0x54, 0x01, 0x80, 0x02};
       return index < sizeof(screenFrame) ? screenFrame[index] : 0;
     }
+    if (reg == 0x80 && !touchFrame.empty()) return index < touchFrame.size() ? touchFrame[index] : 0;
     return reg == 0xB0 && magicValid ? 0x5A : 0;
   }
 };

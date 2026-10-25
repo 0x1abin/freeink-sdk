@@ -22,6 +22,18 @@ checks skip when those converters are unavailable. It builds layout tests for
 the default, SMALL, and LARGE memory profiles. Build outputs go under the system
 temporary directory.
 
+## Progressive JPEG
+
+```sh
+python3 libs/assets/ProgressiveJpeg/test/host/run.py
+```
+
+Needs Pillow, `cjpeg` and `djpeg`. Decodes generated progressive JPEGs (4:2:0,
+4:2:2, 4:4:4, grayscale, restart intervals, odd sizes) and compares the luma
+with `djpeg -grayscale`; also checks that baseline files are refused and that
+a truncated stream decodes without failing. Set `PJ_EXTRA_JPEGS` to a
+colon-separated list of files to check real-world images too.
+
 ## Battery gauge
 
 ```sh
@@ -32,7 +44,10 @@ Compiles `BatteryMonitor` and the real X3 board profile against a model BQ27220
 that holds the Design Capacity load to TRM SLUUBD4A 6.1: key timing, CONFIG
 UPDATE, checksummed Data Memory writes, and the X3's block re-select. Every
 refused I2C transaction must still leave the gauge out of CONFIG UPDATE and
-sealed, and the next start must finish the load.
+sealed, and the next start must finish the load. It also compiles the EEGO A4
+profile against a model CW2015: the battery-profile check and upload sequence,
+the voltage and percentage conversion, and the ADC fallback when no gauge
+answers.
 
 ## Fonts
 
@@ -63,6 +78,23 @@ report decode into key events, auto-reconnect, scanning and teardown order.
 The fake has no radio, so pairing, link timing and memory use still need a
 device.
 
+## OPDS and TLS request memory
+
+```sh
+sh libs/network/SecureNet/test/host/run.sh
+python3 libs/network/SecureNet/test/host/run_tls_record.py
+python3 libs/network/Opds/test/host/run_capacity.py
+```
+
+The first suite uses scripted plain HTTP. The TLS suite compiles the actual
+SecureClient and SecureHttpClient against deterministic wolfSSL allocation/I/O
+adapters: full-record reuse, MFL skip, OOM, task isolation, realloc, stop/cancel,
+failed handshake and repeated requests with large headers. It checks allocation
+after the request write; it does not validate real TLS cryptography or device
+heap headroom. The OPDS suite compiles the production capacity helpers with the
+real entry type under `-fno-exceptions`, testing the minimum, string headroom,
+entry/facet limits and stable vector storage.
+
 ## Display drivers
 
 ```sh
@@ -71,12 +103,19 @@ python3 libs/display/FreeInkDisplay/test/host/run_epdiy_contract.py
 python3 libs/display/FreeInkDisplay/test/host/run_uc8279.py
 python3 libs/display/FreeInkDisplay/test/host/run_uc8279c_a4.py
 python3 libs/display/FreeInkDisplay/test/host/run_uc8253_power.py
+python3 libs/display/FreeInkDisplay/test/host/run_picco.py
 ```
 
 These compile production drivers against recording buses. The Pro suite also
-compiles the facade in single- and dual-buffer modes. The checks cover transfer
+compiles the facade in single- and dual-buffer modes. The Picco suite builds the
+SSD1677/SSD2677 drivers as a Picco and as a Sticky, including each board's
+bit-banged panel probe. The checks cover transfer
 sequences, grayscale uploads, refresh lifecycle, and power-state behavior for
-the drivers included in each harness. The ReadPico harness compiles the real
+the drivers included in each harness. EEGO also injects failure at each of
+its five gray-plane allocations and checks both internal fallback margins. The
+Sticky SSD2677 tests retain the physical image when gray staging fails and force
+full refresh without history; the fork text-routing matrix verifies this actual
+driver cannot enter the SSD1677-only combined-text path. The ReadPico harness compiles the real
 Epdiy driver and checks Overlay-only capabilities, deferred base, successful
 and failed commits, cancellation, B/W fallback, and allocation failure.
 The Pro harness also checks that unsupported UC8279 LUT 0x67 paths upload

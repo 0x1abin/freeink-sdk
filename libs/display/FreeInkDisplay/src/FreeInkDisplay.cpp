@@ -31,7 +31,7 @@
 #include "driver/CrossMuxSsd1677Driver.h"
 #endif
 #endif
-#if FREEINK_DEVICE_PICCO
+#if FREEINK_DEVICE_PICCO || FREEINK_DEVICE_STICKY
 #include "driver/Ssd2677Driver.h"
 #endif
 #if FREEINK_DRIVER_UC8253_X3
@@ -238,6 +238,13 @@ void FreeInkDisplay::selectDriver() {
       break;
     }
 #endif
+#if FREEINK_DEVICE_STICKY
+      // Newer Stickys carry an SSD2677 in place of the SSD1677.
+      if (BoardConfig::ACTIVE.board == BoardConfig::Board::Sticky && stickyHasSsd2677()) {
+        _driver = &ssd2677Driver();
+        break;
+      }
+#endif
 #if FREEINK_DRIVER_UC8279C_A4
     if (BoardConfig::ACTIVE.displayController ==
         BoardConfig::DisplayController::UC8279C) {
@@ -294,6 +301,9 @@ void FreeInkDisplay::selectDriver() {
                                BoardConfig::DisplayController::SSD1677 &&
                            _driver && _driver->geometry().width == 800 &&
                            _driver->geometry().height == 480 &&
+#if FREEINK_DEVICE_STICKY || FREEINK_DEVICE_PICCO
+                           _driver != &ssd2677Driver() &&
+#endif
                            paperMonoDriver().prepareBuffers();
   paperMonoDriver().setOriginalDriver(_originalDriver);
   esp_rom_printf("SSD1677 text-only combined AA: %s (384000 bytes PSRAM)\n",

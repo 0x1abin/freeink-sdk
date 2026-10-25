@@ -89,7 +89,7 @@ public:
 };
 }
 ''')
-    (root / "esp_heap_caps.h").write_text("#pragma once\n#include <cstdlib>\n#define MALLOC_CAP_SPIRAM 1\n#define MALLOC_CAP_8BIT 2\ninline void* heap_caps_malloc(size_t n, int) { return malloc(n); }\n")
+    (root / "esp_heap_caps.h").write_text('#pragma once\n#include <cstdlib>\n#define MALLOC_CAP_SPIRAM 1\n#define MALLOC_CAP_8BIT 2\n#define MALLOC_CAP_INTERNAL 4\ninline size_t hostInternalFree=1024*1024, hostInternalLargest=1024*1024;\ninline int hostAllocations=0, hostFailAt=0, hostInternalCalls=0;\ninline bool hostPsram=true;\ninline size_t heap_caps_get_free_size(int) { return hostInternalFree; }\ninline size_t heap_caps_get_largest_free_block(int) { return hostInternalLargest; }\ninline void* heap_caps_malloc(size_t n, int caps) {\n if((caps&MALLOC_CAP_SPIRAM) && !hostPsram) return nullptr;\n if(caps&MALLOC_CAP_INTERNAL) ++hostInternalCalls;\n ++hostAllocations;\n return hostFailAt && hostAllocations>=hostFailAt ? nullptr : malloc(n);\n}\n')
     exe = root / "test_uc8279c_a4"
     subprocess.run([os.environ.get("CXX", "c++"), "-std=c++17", "-Wall", "-Wextra",
                     "-Wno-unused-parameter", "-I"+str(root), "-I"+str(root / "include"), str(HERE / "test_uc8279c_a4.cpp"),
