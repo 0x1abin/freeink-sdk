@@ -16,6 +16,7 @@
 //     GaugeType::Cw32L010Pmu is a third variant of this backend: the CW32L010 PMU
 //     on Read Pico is not a register map, so it arrives through the board-installed
 //     PmuBatteryHook below instead of any register read.
+//     CW2015 is probed once; no ACK at boot selects the ADC fallback.
 class BatteryMonitor {
 public:
     static constexpr int8_t PIN_NONE = -1;

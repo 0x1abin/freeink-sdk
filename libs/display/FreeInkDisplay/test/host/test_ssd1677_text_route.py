@@ -46,6 +46,9 @@ class TextRoutingTest(unittest.TestCase):
             shutil.copytree(LIB / "include", root / "include")
             shutil.copytree(HERE / "pro_stubs", root, dirs_exist_ok=True)
             shutil.copy2(HERE / "pro_stubs/EpdBus.h", root / "src/bus/EpdBus.h")
+            (root / "SPI.h").write_text('#pragma once\n#include <cstdint>\nstruct FakeNoBusSpi { void* bus() { return nullptr; } int8_t pinSS() { return -1; } void end() {} void begin(int8_t,int8_t,int8_t,int8_t) {} };\ninline FakeNoBusSpi SPI;\n')
+            board = root / "BoardConfig.h"
+            board.write_text(board.read_text().replace("Board board=", "struct { int8_t miso=40; } sd;\n  Board board="))
             bus = root / "src/bus/EpdBus.h"
             text = bus.read_text().replace("  unsigned waits=0;", "  unsigned waits=0, activation=0, failAt=0, resets=0; bool busy=false, sleepBusyUntilReset=false, resetKeepsBusy=false, resetClearsFailure=false;")
             text = text.replace("writes.push_back({c,{}});", "assert(!busy); writes.push_back({c,{}}); if (c==0x20) { busy=true; ++activation; } if (c==0x10 && sleepBusyUntilReset) busy=true;")
@@ -58,7 +61,7 @@ class TextRoutingTest(unittest.TestCase):
             board = root / "BoardConfig.h"
             board.write_text(board.read_text().replace("XteinkX4Pro,", "XteinkX4Pro, XteinkX4Classic, MurphyM4, PaperMono,"))
             arduino = root / "Arduino.h"
-            arduino.write_text(arduino.read_text() + '\n#define DRAM_ATTR\n')
+            arduino.write_text(arduino.read_text().replace('inline int digitalRead(int) { return 0; }', 'inline bool fakeSticky2677=false; inline int digitalRead(int p) { return fakeSticky2677 && p==6; }') + '\n#define LOW 0\n#define HIGH 1\n#define INPUT 1\n#define OUTPUT 3\n#define INPUT_PULLUP 5\nusing gpio_num_t = int;\ninline void gpio_hold_dis(gpio_num_t) {}\ninline void pinMode(int,int) {}\ninline void digitalWrite(int,int) {}\ninline void delayMicroseconds(unsigned) {}\n\n#define DRAM_ATTR\nstruct FakeSerial { template<class... T> void printf(const char*, T...) {} }; inline FakeSerial Serial;\n')
             cases = [(device, False, True) for device in
                      ("STICKY", "X4PRO", "X4CLASSIC", "MURPHY_M4", "WAVESHARE_EPAPER_397", "METALIO_EINK4", "PAPERMONO")]
             cases += [(device, True, True) for device in
@@ -71,7 +74,7 @@ class TextRoutingTest(unittest.TestCase):
             for device, transition, combined, edges in cases:
                 with self.subTest(device=device, transition=transition, edges=edges):
                     local = device in ("MURPHY_M4", "WAVESHARE_EPAPER_397", "METALIO_EINK4")
-                    drivers = ["Ssd1677", "PaperMono", "Uc8179", "Uc8279X4"]
+                    drivers = ["Ssd1677", "PaperMono", "Uc8179", "Uc8279X4", "Ssd2677"]
                     if local:
                         drivers += ["CrossMuxSsd1677"]
                     command = ["c++", "-std=c++17", "-DARDUINO=1", "-DEINK_DISPLAY_SINGLE_BUFFER_MODE=1",
@@ -90,6 +93,8 @@ class TextRoutingTest(unittest.TestCase):
                     scenarios = ["normal", *map(str, range(1, 9))]
                     if device != "PAPERMONO":
                         scenarios += ["rotated", "uc8179", "uc8279"]
+                    if device == "STICKY":
+                        scenarios.append("sticky2677")
                     for scenario in scenarios:
                         subprocess.run([str(binary), scenario], check=True)
                     if device == "MURPHY_M4":
