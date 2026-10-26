@@ -12,6 +12,7 @@ class EpdBus {
     explicit Transaction(EpdBus& bus) : _bus(&bus) {
       assert(!_bus->transaction);
       _bus->transaction = true;
+      if (!_bus->events.empty()) ++_bus->events.back().dataTransactions;
     }
     ~Transaction() {
       if (_bus) {
@@ -33,6 +34,7 @@ class EpdBus {
   struct Event {
     int cmd;
     std::vector<uint8_t> bytes;
+    unsigned dataTransactions = 0;
   };
   std::vector<Event> events;
   bool busy = false, stuck = false, transaction = false;
@@ -47,8 +49,16 @@ class EpdBus {
       ++activation;
     }
   }
-  void data(uint8_t b) { events.back().bytes.push_back(b); }
-  void data(const uint8_t* p, uint16_t n) { events.back().bytes.insert(events.back().bytes.end(), p, p + n); }
+  void data(uint8_t b) { data(&b, 1); }
+  void data(const uint8_t* p, uint16_t n) {
+    if (events.back().cmd == 0x32 && n == 105) {
+      // Arduino SPI reads aligned 32-bit words, including the final partial word.
+      assert(reinterpret_cast<uintptr_t>(p) % alignof(uint32_t) == 0);
+      assert(p[105] == 0 && p[106] == 0 && p[107] == 0);
+    }
+    if (!transaction) ++events.back().dataTransactions;
+    events.back().bytes.insert(events.back().bytes.end(), p, p + n);
+  }
   void cmdData(uint8_t c, const uint8_t* p, uint16_t n) {
     cmd(c);
     data(p, n);
@@ -67,6 +77,7 @@ class EpdBus {
   void fillPlane(uint8_t c, uint8_t v, uint16_t h, uint16_t wb) {
     cmd(c);
     events.back().bytes.assign(h * wb, v);
+    events.back().dataTransactions = 1;
   }
   void clear() {
     assert(!busy && !transaction);

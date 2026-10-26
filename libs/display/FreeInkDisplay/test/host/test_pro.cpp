@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cstdio>
 #include <cstring>
@@ -89,6 +90,57 @@ static void testStream(bool reverse, unsigned gateOffset) {
   for (const auto &w : bus.writes)
     if (w.command == 0x10 || w.command == 0x13)
       assert(w.transactions == 1);
+}
+
+static void testSsdCustomLutTransfer() {
+  alignas(uint32_t) std::array<uint8_t, 111> custom;
+  for (size_t i = 0; i < custom.size(); ++i) custom[i] = static_cast<uint8_t>(i * 37 + 19);
+  const auto original = custom;
+  const auto fb = frame(33);
+  bool batched = true;
+  for (uint8_t border : {0x00, 0x80}) {
+    auto cfg = ssd1677DefaultConfig();
+    cfg.borderWaveformGray = border;
+    for (bool factory : {false, true}) {
+      for (bool turnOff : {false, true}) {
+        for (const auto* lut : {custom.data() + 1, static_cast<uint8_t*>(nullptr)}) {
+          const auto* expected = lut ? lut : (factory ? lut_factory_quality : cfg.grayLut);
+          Ssd1677Driver driver(cfg);
+          EpdBus bus;
+          driver.begin(bus);
+          bus.clear();
+          driver.displayGray(bus, fb.data(), turnOff, lut, factory);
+          Bytes commands;
+          for (const auto& w : bus.writes) commands.push_back(w.command);
+          Bytes expectedCommands{0x32, 0x03, 0x04, 0x2C};
+          if (border) expectedCommands.push_back(0x3C);
+          expectedCommands.insert(expectedCommands.end(), {0x21, 0x22, 0x20});
+          if (factory && turnOff) expectedCommands.insert(expectedCommands.end(), {0x3C, 0x22, 0x20});
+          assert(commands == expectedCommands);
+          assert(bus.writes[0].bytes == Bytes(expected, expected + 105));
+          assert(bus.writes[1].bytes == Bytes({expected[105]}));
+          assert(bus.writes[2].bytes == Bytes(expected + 106, expected + 109));
+          assert(bus.writes[3].bytes == Bytes({expected[109]}));
+          assert(bus.writes[1].transactions == 1 && bus.writes[2].transactions == 3 && bus.writes[3].transactions == 1);
+          if (border) assert(bus.writes[4].bytes == Bytes({border}));
+          const size_t control = border ? 5 : 4;
+          assert(bus.writes[control].bytes == Bytes({0x00}));
+          assert(bus.writes[control + 1].bytes == Bytes({uint8_t(!factory && turnOff ? 0xCF : 0xCC)}));
+          assert(bus.writes[control + 2].bytes.empty());
+          if (factory && turnOff) {
+            assert(bus.writes[control + 3].bytes == Bytes({cfg.borderWaveformInit}));
+            assert(bus.writes[control + 4].bytes == Bytes({0x03}));
+            assert(bus.writes[control + 5].bytes.empty());
+          }
+          assert(custom == original);
+          std::fprintf(stderr, "SSD1677 %s factory=%d off=%d border=%02x: LUT bytes=105, data transactions=%u\n",
+                       lut ? "RAM" : "PROGMEM", factory, turnOff, border, bus.writes[0].transactions);
+          batched = batched && bus.writes[0].transactions == 1;
+        }
+      }
+    }
+  }
+  assert(batched);
 }
 
 static void testSsd() {
@@ -782,6 +834,7 @@ int main(int argc, char **argv) {
               "recovery passed");
     return 0;
   }
+  testSsdCustomLutTransfer();
   testUnsupportedUc8279Variant();
   testUc8179GrayShadeSplit();
   testUc8279X4WaveformSelection();
