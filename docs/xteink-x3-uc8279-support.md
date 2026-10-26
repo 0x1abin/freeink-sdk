@@ -14,6 +14,15 @@ The detection section reflects the stock V6.3.15 protocol. The driver uses
 recovered external waveforms and register initialization; the initial OTP-only
 proposal is no longer the implementation.
 
+## Battery and USB sensing
+
+Both X3 profiles reserve GPIO20 for I2C SDA and declare no digital USB-detect
+pin. `BatteryMonitor::isCharging()` uses the BQ27220's signed current: positive
+means charging; zero or negative means not charging. It retries a failed current
+read once after 2 ms, drains short 16-bit reads, and retries bus initialization
+after a failed `Wire.begin()`. Charging state cannot prove cable presence when
+a full battery stops charging; `isExternalPowerPresent()` reports it unknown.
+
 ## Runtime detection
 
 After the X3 I2C fingerprint, `detectX3DisplayController()` uses the fixed X3

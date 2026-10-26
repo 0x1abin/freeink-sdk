@@ -50,21 +50,23 @@ TwoWire& gaugeWire() {
 }
 
 bool g_wireReady = false;
-void ensureWire() {
-  if (g_wireReady) return;
+bool ensureWire() {
+  if (g_wireReady) return true;
   const auto& g = BoardConfig::ACTIVE.batteryGauge;
-  gaugeWire().begin(g.i2cSda, g.i2cScl, g.i2cHz);
-  g_wireReady = true;
+  g_wireReady = gaugeWire().begin(g.i2cSda, g.i2cScl, g.i2cHz);
+  return g_wireReady;
 }
 
 bool readReg16(uint8_t addr, uint8_t reg, uint16_t& out) {
-  if (addr == 0) return false;
-  ensureWire();
+  if (addr == 0 || !ensureWire()) return false;
   TwoWire& w = gaugeWire();
   w.beginTransmission(addr);
   w.write(reg);
   if (w.endTransmission(false) != 0) return false;
-  if (w.requestFrom(addr, static_cast<uint8_t>(2), static_cast<uint8_t>(true)) < 2) return false;
+  if (w.requestFrom(addr, static_cast<uint8_t>(2), static_cast<uint8_t>(true)) < 2) {
+    while (w.available()) w.read();
+    return false;
+  }
   const uint8_t lo = w.read();
   const uint8_t hi = w.read();
   out = static_cast<uint16_t>(lo) | (static_cast<uint16_t>(hi) << 8);
@@ -72,8 +74,7 @@ bool readReg16(uint8_t addr, uint8_t reg, uint16_t& out) {
 }
 
 bool readReg8(uint8_t addr, uint8_t reg, uint8_t& out) {
-  if (addr == 0) return false;
-  ensureWire();
+  if (addr == 0 || !ensureWire()) return false;
   TwoWire& w = gaugeWire();
   w.beginTransmission(addr);
   w.write(reg);
@@ -84,28 +85,29 @@ bool readReg8(uint8_t addr, uint8_t reg, uint8_t& out) {
 }
 
 bool readRegs(uint8_t addr, uint8_t reg, uint8_t* out, uint8_t length) {
-  if (addr == 0) return false;
-  ensureWire();
+  if (addr == 0 || !ensureWire()) return false;
   TwoWire& w = gaugeWire();
   w.beginTransmission(addr);
   w.write(reg);
   if (w.endTransmission(false) != 0) return false;
-  if (w.requestFrom(addr, length, static_cast<uint8_t>(true)) < length) return false;
+  if (w.requestFrom(addr, length, static_cast<uint8_t>(true)) < length) {
+    while (w.available()) w.read();
+    return false;
+  }
   for (uint8_t i = 0; i < length; ++i) out[i] = static_cast<uint8_t>(w.read());
   return true;
 }
 
 // True when a device acknowledges its address (an empty write).
 bool i2cAcks(uint8_t addr) {
-  ensureWire();
+  if (!ensureWire()) return false;
   TwoWire& w = gaugeWire();
   w.beginTransmission(addr);
   return w.endTransmission(true) == 0;
 }
 
 bool writeReg8(uint8_t addr, uint8_t reg, uint8_t val) {
-  if (addr == 0) return false;
-  ensureWire();
+  if (addr == 0 || !ensureWire()) return false;
   TwoWire& w = gaugeWire();
   w.beginTransmission(addr);
   w.write(reg);
@@ -115,7 +117,7 @@ bool writeReg8(uint8_t addr, uint8_t reg, uint8_t val) {
 
 // One I2C write per word: the X3's BQ27220 ignores a Control() subcommand split in two.
 bool writeReg16(uint8_t addr, uint8_t reg, uint16_t val) {
-  ensureWire();
+  if (!ensureWire()) return false;
   TwoWire& w = gaugeWire();
   delayMicroseconds(66);  // BQ27220 bus-free time between transactions
   w.beginTransmission(addr);
@@ -635,10 +637,14 @@ bool readGaugeCharging(bool& known) {
   }
   const bool charging = readChargerCharging(known);
   if (known) return charging;
-  uint16_t raw = 0;
-  if (readReg16(g.gaugeAddr, BQ27220_CURRENT, raw)) {
-    known = true;
-    return static_cast<int16_t>(raw) > 0;
+  const uint8_t attempts = g.gaugeType == BoardConfig::GaugeType::Bq27220 ? 2 : 1;
+  for (uint8_t attempt = 0; attempt < attempts; ++attempt) {
+    uint16_t raw = 0;
+    if (readReg16(g.gaugeAddr, BQ27220_CURRENT, raw)) {
+      known = true;
+      return static_cast<int16_t>(raw) > 0;
+    }
+    if (attempt + 1 < attempts) delay(2);
   }
   known = false;
   return false;

@@ -1,5 +1,5 @@
 #!/bin/sh
-# Builds and runs the BQ27220 Design Capacity load against a model gauge, the
+# Builds and runs BQ27220 capacity/current/bus recovery against model devices, the
 # SGM41562 charger decode (Picco) against a model charger, the CW2015 gauge
 # (EEGO A4) setup/read and ADC fallback against a model gauge, and the usbDetect
 # external-power path (PaperS3: no charger IC and no gauge, so the profile's
@@ -13,6 +13,11 @@ c++ -std=c++17 -Wall -Wextra -Werror \
   -Istubs -I../../include -I../../../BoardConfig/include -I../../../XteinkDetect/test/host/stubs \
   test_bq27220_capacity.cpp -o "$BUILD_DIR/test_bq27220_capacity"
 "$BUILD_DIR/test_bq27220_capacity"
+c++ -std=c++17 -Wall -Wextra -Werror \
+  -DFREEINK_DEVICE_X3=1 -DFREEINK_DEVICE_X4=1 -DFREEINK_BATTERY_I2C_GAUGE=1 \
+  -Istubs -I../../include -I../../../BoardConfig/include -I../../../XteinkDetect/test/host/stubs \
+  test_bq27220_current.cpp -o "$BUILD_DIR/test_bq27220_current"
+"$BUILD_DIR/test_bq27220_current"
 c++ -std=c++17 -Wall -Wextra -Werror \
   -DFREEINK_DEVICE_PICCO=1 \
   -Istubs -I../../include -I../../../BoardConfig/include -I../../../XteinkDetect/test/host/stubs \

@@ -40,7 +40,7 @@ colon-separated list of files to check real-world images too.
 sh libs/hardware/BatteryMonitor/test/host/run.sh
 ```
 
-Compiles `BatteryMonitor` and the real X3 board profile against a model BQ27220
+Compiles `BatteryMonitor` and the real X3 board profiles against a model BQ27220
 that holds the Design Capacity load to TRM SLUUBD4A 6.1: key timing, CONFIG
 UPDATE, checksummed Data Memory writes, and the X3's block re-select. Every
 refused I2C transaction must still leave the gauge out of CONFIG UPDATE and
@@ -48,6 +48,13 @@ sealed, and the next start must finish the load. It also compiles the EEGO A4
 profile against a model CW2015: the battery-profile check and upload sequence,
 the voltage and percentage conversion, and the ADC fallback when no gauge
 answers.
+
+Also covers signed charging-current reads, bounded NACK/short-read retries,
+receive-buffer cleanup, and recovery after `Wire.begin()` fails. Both X3 profiles
+must leave USB detection unassigned while X4 keeps GPIO20; first battery queries
+must initialize the shared bus after the boot probe releases it or when detection
+uses a cached board profile, regardless of RTC/IMU initialization order. A model
+SGM41562 checks Picco charger status, input detection, setup, and ship mode.
 
 ## Fonts
 
