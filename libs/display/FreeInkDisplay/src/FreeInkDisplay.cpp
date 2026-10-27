@@ -335,8 +335,11 @@ void FreeInkDisplay::begin() {
     const auto &d = BoardConfig::ACTIVE.display;
     const EpdPins pins{d.sclk, d.mosi, d.cs,         d.dc,
                        d.rst,  d.busy, d.powerEnable};
+    const auto &sd = BoardConfig::ACTIVE.sd;
+    const int8_t miso = (!sd.separateSpi && sd.miso >= 0) ? sd.miso : _driver->spiMiso();
+    const int8_t coCs = (!sd.separateSpi && sd.cs >= 0) ? sd.cs : _driver->coCs();
     _bus.begin(pins, _driver->spiHz(), _driver->busyPolarity(),
-               _driver->spiMiso(), _driver->coCs());
+               miso, coCs);
   }
 
   const PanelGeometry geom = _driver->geometry();
