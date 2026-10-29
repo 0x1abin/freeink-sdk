@@ -34,16 +34,17 @@ The original pin map and controller details came from stock-firmware analysis
 | Panel RAM | 768 × **600**; host FB is 768×552 sent **bottom-up**, then 48 white rows |
 | Framebuffer | 52,992 bytes (768/8 × 552); grayscale planes 52,992 B each, lazy from PSRAM |
 | Display SPI | SCLK 42, MOSI 45, CS 21, DC 14, RST 13, BUSY 41 · **20 MHz** |
-| MicroSD | dedicated **HSPI** bus: SCLK 39, MISO 40, MOSI 38, CS 47 · 20 MHz · power enable GPIO6 (active-low) |
+| MicroSD | dedicated **HSPI** bus: SCLK 39, MISO 40, MOSI 38, CS 47 · 20 MHz · no card power-enable pin |
 | Buttons | UP 5 and DOWN 7 active-low; POWER 8 active-high with INPUT_PULLDOWN |
-| Battery | **CW2015** fuel gauge at I²C 0x62 on SDA 2 / SCL 1 (shared with touch and RTC), probed at runtime; ADC GPIO 10 (divider ×1.559) when the gauge does not answer. Charge status GPIO 11 |
+| Battery | ADC **GPIO 10**, divider ×1.559, sampled only while the GPIO 6 rail is on. Charge status GPIO 11. No fuel gauge is fitted on the retail units measured: I²C 0x62 (CW2015) does not ACK. |
 | Touch | **GSLX680** — SDA 2, SCL 1, RST 3, addr 0x40. Firmware blob uploaded at boot (`gsl/EegoA4GslFirmware.h`, extracted + hash-verified); backend in InputManager. |
 | Touch mapping | Calibration in `pollGslx680` returns panel-native X 0..767 / Y 0..551; profile swap/flip disabled |
 | Screen key | GSL sentinel `rawX=0x03a0, rawY=0x1020`; Home tap/700 ms hold events, with actions selected by Reader settings |
 | RTC | **PCF8563** at 0x51, on the **shared touch I2C bus** (SDA 2 / SCL 1), 400 kHz |
 | Power latch | GPIO 4 (held to stay powered) |
+| Peripheral rail | **GPIO 6**, active-high, carried as the display driver's power-enable pin so `EpdBus` drives it HIGH for the session. It feeds the battery divider and the optional LM3630A, so the SD bus must not claim it. |
 | Deep sleep | send controller `0xE0 = 0x88`, float SDA/SCL, hold GPIO 3 (touch RST) low |
-| Frontlight | Optional LM3630A at I²C 0x36 on SDA 2 / SCL 1, enable GPIO 12; runtime-probed by `FrontlightManager` through `BoardProfile::i2cFrontlight`. |
+| Frontlight | Optional LM3630A at I²C 0x36 on SDA 2 / SCL 1, enable GPIO 12, on the GPIO 6 rail; runtime-probed by `FrontlightManager` through `BoardProfile::i2cFrontlight`. |
 | UI scale | 1.2 |
 
 ### Refresh behaviour
@@ -95,16 +96,12 @@ Build with `-DFREEINK_DEVICE_EEGO_A4=1`; see the `eego_a4` environment in
   external Full/Fast/Gray LUTs, bottom-up scan, and padding to 600 panel RAM rows.
 - `InputManager` uploads the GSLX680 firmware and applies calibration in
   `pollGslx680`, returning panel-native coordinates without a second profile transform.
-- `BatteryMonitor` probes the CW2015 once. When it answers, a sleeping gauge is
-  woken and the 64-byte BATINFO battery profile is compared with the stock
-  3.7 V 2000 mAh profile; an empty or different profile is uploaded (profile
-  bytes, CONFIG update flag, MODE power-on reset) and read back. Voltage is
-  VCELL × 305 µV; the percentage is the gauge SOC rounded, plus one, capped at
-  100, matching the stock battery icon. Samples outside 2500–4500 mV or above
-  100% are rejected. When the gauge does not answer, the ADC pin is used.
-  ADC fallback is selected only by the initial absent-gauge probe; a later
-  failed gauge read is unknown, not a fabricated ADC percentage. Charging comes
-  from GPIO 11; the gauge cannot observe it.
+- `BatteryMonitor` reads the pack from **ADC GPIO 10** through the ×1.559
+  divider. The sample is only valid while the **GPIO 6 rail is on** — that is why
+  the profile carries GPIO 6 as the display driver's power-enable (driven HIGH by
+  `EpdBus`) and leaves the SD bus without a power-enable pin. Charge status comes
+  from GPIO 11. The SDK still implements the CW2015 path, but these retail units
+  do not populate the gauge (I²C 0x62 does not ACK), so this profile uses ADC.
 - `FrontlightManager` probes the optional LM3630A through
   `BoardProfile::i2cFrontlight`. The profile's PWM frontlight field is `NO_FRONTLIGHT`.
   The controller is fitted on some unlit units too, so a unit the stock
@@ -123,16 +120,21 @@ Build with `-DFREEINK_DEVICE_EEGO_A4=1`; see the `eego_a4` environment in
 - Re-verify the whole pin map on hardware: a frontlit-unit dump did NOT contain the
   `20 MHz` display clock or the `eego_a4` name the scaffold assumed (both units are
   pre-freeink community-sdk builds), so the borrowed pin values are provisional.
-- Confirm navigation GPIOs 5/7 and battery divider ×1.559. The current profile
-  sets POWER GPIO8 active-high with `INPUT_PULLDOWN`; an internal pull-up caused
-  phantom presses. Charge-status GPIO11 is active-high in the profile.
+- Confirm navigation GPIOs 5/7. The battery divider ×1.559 checks out on
+  hardware (2674 mV at the pin → 4168 mV pack on a charging unit). The current
+  profile sets POWER GPIO8 active-high with `INPUT_PULLDOWN`; an internal pull-up
+  caused phantom presses. Charge-status GPIO11 is active-high in the profile.
 - Validate GSLX680 touch on hardware: the firmware blob is byte-verified (SHA-256
   `076ac8…`) and the init/read sequence is RE-derived, but the
   panel-native calibration needs a corner-tap check.
-- Standby current with the GPIO4 latch + GPIO3-low sequence.
-- CW2015 on hardware: the stock profile and register sequence are recovered
-  from stock V1.0.3 and match a live unit's resident profile byte for byte, but
-  the SDK's upload path and ADC fallback have only run against a host model.
+- Standby current with the GPIO4 latch + GPIO3-low sequence. Also confirm the
+  GPIO 6 rail is released for deep sleep and re-asserted on wake: it feeds the
+  battery divider and the frontlight boost, so a stuck LOW wakes into a 0% pack
+  and a dead light.
+- CW2015 on hardware: the register sequence is recovered from stock V1.0.3 and
+  the SDK's upload path and ADC fallback have only run against a host model. The
+  retail units measured here do not populate the gauge, so this profile stays on
+  the ADC; re-check on a revision that does.
 
 ## Provenance
 
