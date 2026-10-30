@@ -1,7 +1,7 @@
-#!/bin/sh
+﻿#!/bin/sh
 # Builds and runs BQ27220 capacity/current/bus recovery against model devices, the
-# SGM41562 charger decode (Picco) against a model charger, the CW2015 gauge
-# (EEGO A4) setup/read and ADC fallback against a model gauge, and the usbDetect
+# SGM41562 charger decode (Picco) against a model charger, the CW2015 gauge (synthetic A4 profile)
+# (EEGO A4 wiring) setup/read and ADC fallback against a model gauge, and the usbDetect
 # external-power path (PaperS3: no charger IC and no gauge, so the profile's
 # detect pin is the only source for "is a cable attached"; X3 must not read SDA).
 set -e

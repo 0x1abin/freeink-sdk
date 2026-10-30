@@ -1,5 +1,8 @@
-// CW2015 fuel gauge (EEGO A4) against a model gauge: the boot probe with ADC
-// fallback, the BATINFO compare/upload sequence, and the voltage/percent read.
+// CW2015 fuel gauge against a model gauge: the boot probe with ADC fallback, the
+// BATINFO compare/upload sequence, and the voltage/percent read. The driver is
+// exercised through a synthetic board profile: the shipped EEGO A4 profile reads
+// the ADC (the gauge is not populated on the retail units measured), but the
+// gauge type must keep working for any future board that carries one.
 #include <array>
 #include <cstdio>
 #include <string>
@@ -42,11 +45,19 @@ struct FakeGauge {
 };
 FakeGauge gauge;
 
+// EEGO A4 wiring plus the CW2015 gauge, so the driver stays covered even though
+// the shipped profile no longer declares the gauge.
+BoardConfig::BoardProfile cw2015Board() {
+  BoardConfig::BoardProfile board = BoardConfig::EEGO_A4;
+  board.batteryGauge = {2, 1, 400000, 0x62, 0, 0, BoardConfig::GaugeType::Cw2015};
+  return board;
+}
+
 void reset(FakeGauge fresh = FakeGauge()) {
   gauge = fresh;
   cw2015State = Cw2015State();
   hostMillis = 0;
-  BoardConfig::ACTIVE = BoardConfig::EEGO_A4;
+  BoardConfig::ACTIVE = cw2015Board();
 }
 
 }  // namespace
@@ -72,9 +83,16 @@ bool hostI2cRead(uint8_t addr, uint8_t reg, uint8_t* out, size_t length) {
 }
 
 int main() {
-  CHECK(BoardConfig::EEGO_A4.batteryGauge.gaugeAddr == 0x62);
-  CHECK(BoardConfig::EEGO_A4.batteryGauge.gaugeType == BoardConfig::GaugeType::Cw2015);
-  CHECK(BoardConfig::EEGO_A4.batteryGauge.i2cSda == 2 && BoardConfig::EEGO_A4.batteryGauge.i2cScl == 1);
+  // The shipped EEGO A4 profile reads the pack from the ADC: I2C 0x62 does not
+  // ACK on the retail units measured, so a gauge entry there would never be
+  // reached. The CW2015 driver itself stays covered below through cw2015Board().
+  CHECK(BoardConfig::EEGO_A4.batteryGauge.gaugeAddr == 0);
+  CHECK(BoardConfig::EEGO_A4.batteryAdc == 10);
+  CHECK(BoardConfig::EEGO_A4.batteryDividerMultiplier == 1.559f);
+
+  CHECK(cw2015Board().batteryGauge.gaugeAddr == 0x62);
+  CHECK(cw2015Board().batteryGauge.gaugeType == BoardConfig::GaugeType::Cw2015);
+  CHECK(cw2015Board().batteryGauge.i2cSda == 2 && cw2015Board().batteryGauge.i2cScl == 1);
 
   // Resident profile matches, UFG set: nothing is written. The boot-log sample
   // reads VCELL 0x2999 -> 3248 mV, SOC 0x00F5 -> 1% -> 2% shown, as stock logged.
