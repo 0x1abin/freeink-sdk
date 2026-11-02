@@ -321,12 +321,12 @@ touch device or controller, follow [docs/adding-a-touch-controller.md](docs/addi
 ### OnePage Reader board support (ESP32-C61)
 
 The OnePage Reader is an open-hardware DIY e-reader built around the **ESP32-C61**
-RISC-V wireless SoC. Complete hardware specifications, pinout, power gating, and
+RISC-V wireless SoC. Complete hardware specifications, pinout, power wiring, and
 board profile details are documented in [docs/onepage-c61-support.md](docs/onepage-c61-support.md).
 
 Key characteristics:
 - **Display**: SSD1677 800×480 on SPI @ 20MHz.
-- **MicroSD**: SPI mode sharing the bus with EPD, powered via GPIO27 power rail.
+- **MicroSD**: SPI mode sharing the bus with EPD; the V1 rail is unswitched, with `SD_DEP` card detect on GPIO28.
 - **Input**: 4-key front resistor ADC ladder on GPIO4 (`OnePageAdcLadder`) + 3 discrete active-low side keys (`UP=6, DOWN=9, POWER=2`).
 - **Battery / Power**: ADC sampling on GPIO5 with charge-pause control on GPIO10 (`BAT_CHG_EN`).
 - **Bluetooth**: Wi-Fi 6 + BLE 5.4 with BLE HID Central / page-turner remote host support.
@@ -345,7 +345,7 @@ MCU (a C3-vs-S3 mix is a compile error):
 | `-DFREEINK_DEVICE_X4` | X4 only — links just SSD1677 (tightest) |
 | `-DFREEINK_DEVICE_X3 -DFREEINK_DEVICE_X4` | X3 **and** X4 in one C3 binary, runtime-selected via `setDisplayX3()` |
 | `-DFREEINK_DEVICE_METALIO_EINK4` | Metalio E-Ink 4 (S3, SSD1677, CST816S touch, TCA9555, 1-bit SDMMC) |
-| `-DFREEINK_DEVICE_ONEPAGE` | OnePage (C61, SSD1677 800×480 + 4-key ADC ladder + 3 side keys + shared SD) |
+| `-DFREEINK_DEVICE_ONEPAGE` | OnePage (C61, SSD1677 800×480 + 4-key ADC ladder + 3 side keys + shared SPI SD) |
 | `-DFREEINK_DEVICE_DELINK` | de-link (S3, SSD1677 + frontlight) |
 | `-DFREEINK_DEVICE_M5` | M5 PaperColor (S3, ED2208 + color) |
 | `-DFREEINK_DEVICE_MURPHY` | Murphy M3 (S3, UC8253 + touch + frontlight) |
