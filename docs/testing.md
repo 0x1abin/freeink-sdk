@@ -144,3 +144,14 @@ SDK APIs. A public method, board profile, compatibility wrapper, or capability-g
 driver can have no in-repository callers and still be used by downstream firmware.
 Check references across all configurations before removing internal symbols, and
 exclude vendored dependencies and generated assets from routine source cleanup.
+
+## Shared SPI initialization
+
+```sh
+python3 libs/display/FreeInkDisplay/test/host/test_shared_spi_init.py
+```
+
+Executes the display facade's SPI pin selection and production `EpdBus::begin`
+against a recording SPI/GPIO adapter. Covers shared SD MISO/CS preservation,
+dedicated SD buses and missing-pin fallbacks. It does not establish physical
+SD persistence or display/SD concurrency acceptance on Sticky hardware.
