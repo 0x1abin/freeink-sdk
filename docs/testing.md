@@ -144,3 +144,13 @@ SDK APIs. A public method, board profile, compatibility wrapper, or capability-g
 driver can have no in-repository callers and still be used by downstream firmware.
 Check references across all configurations before removing internal symbols, and
 exclude vendored dependencies and generated assets from routine source cleanup.
+
+## EEGO A4 GPIO6 ownership
+
+```sh
+python3 libs/hardware/SDCardManager/test/host/test_eego_gpio6.py
+```
+
+Executes the production SD-init selection block for a responding gauge, an absent
+address, failed bus initialization and a transient bus fault. This verifies pin
+ownership and retry behavior, not physical SD, frontlight or sleep/wake operation.

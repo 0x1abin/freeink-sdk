@@ -1907,15 +1907,11 @@ constexpr BoardProfile EEGO_A4 = {
     DisplayController::UC8279C,
     768,
     552,
-    // SCLK MOSI CS DC RST BUSY + GPIO6 rail enable. EpdBus drives the last pin
-    // HIGH for the whole session; that rail also feeds the battery divider and
-    // the optional LM3630A, so it must stay on outside sleep. Measured on a
-    // retail unit: with GPIO6 low the GPIO10 battery ADC reads 0 mV.
+    // Gauge-less units need GPIO6 HIGH for battery ADC/frontlight. SDCardManager
+    // assigns it to active-low SD power instead when the CW2015 answers.
     {42, 45, 21, 14, 13, 41, 6},
     20000000,
-    // Dedicated HSPI SD: SCLK MISO MOSI CS, no power enable. GPIO6 gates the
-    // shared peripheral rail (above), not the card: the 1.5.5 firmware ran with
-    // this pin unassigned and the card mounted fine.
+    // GPIO6 ownership is selected before SD and display initialization.
     {39, 40, 38, 47, PIN_UNASSIGNED, true, 20000000},
     // UP DOWN POWER. Power is active-HIGH (press drives 3V3) with a weak
     // external pull-down; INPUT_PULLDOWN required (InputManager honors the
@@ -1937,12 +1933,8 @@ constexpr BoardProfile EEGO_A4 = {
     NO_LEDS,
     NO_FLIP,
     NO_SDMMC,
-    // Battery: ADC on GPIO10 through the x1.559 divider — the source the 1.5.5
-    // target shipped with and the one its release gate lists. The gauge entry
-    // added by the 2.0.0 SDK sync (CW2015 at 0x62) does not exist on the retail
-    // units tested (the address does not ACK), so keep the ADC path. The sample
-    // is only valid while the GPIO6 rail above is on.
-    NO_GAUGE,
+    // Probe CW2015; gauge-less units retain the GPIO10 ADC fallback.
+    {2, 1, 400000, 0x62, 0, 0, GaugeType::Cw2015},
     NO_MIC,
     {2, 1, 400000, 0x51, 0, 0, 0, RtcType::Pcf8563, ImuType::None},  // PCF8563 on the shared touch bus
     1.2f,
