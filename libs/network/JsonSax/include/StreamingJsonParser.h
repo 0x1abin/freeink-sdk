@@ -16,6 +16,10 @@ struct JsonCallbacks {
   void (*onArrayEnd)(void* ctx);
   // Optional overflow delivery for long values; short strings still use onString.
   void (*onStringChunk)(void* ctx, const char* value, size_t len, bool final) = nullptr;
+  // Optional opt-in for text previews. Called instead of onString when a
+  // string exceeds the fixed token buffer; the prefix may end mid-UTF-8 codepoint.
+  // Keys and numbers still reject overflow. Never treat this prefix as a URL or ID.
+  void (*onStringPrefix)(void* ctx, const char* value, size_t len) = nullptr;
 };
 
 class StreamingJsonParser {

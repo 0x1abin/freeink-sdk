@@ -35,6 +35,7 @@ class PaperMonoDriver final : public PanelDriver {
   void setOriginalDriver(PanelDriver* driver) { _originalDriver = driver; }
   void setTransitionSource(OpticalState source) { _transitionSource = source; }
   bool prepareBuffers() { return allocateBuffers(); }
+  const char* controllerName() const override { return "SSD1677"; }
   uint32_t spiHz() const override;
   BusyPolarity busyPolarity() const override { return BusyPolarity::ActiveHigh; }
   PanelGeometry geometry() const override;

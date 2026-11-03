@@ -30,12 +30,17 @@ namespace freeink {
 
 class Ssd2677Driver : public PanelDriver {
  public:
+  const char* controllerName() const override { return "SSD2677"; }
   uint32_t spiHz() const override;
-  BusyPolarity busyPolarity() const override { return BusyPolarity::ActiveLow; }
+  BusyPolarity busyPolarity() const override {
+    return BoardConfig::ACTIVE.board == BoardConfig::Board::Sticky ? BusyPolarity::ActiveLowReady
+                                                                   : BusyPolarity::ActiveLow;
+  }
   PanelGeometry geometry() const override;
 
   void begin(EpdBus& bus) override;
   void deepSleep(EpdBus& bus) override;
+  void powerOffBetweenFrames(EpdBus& bus) override;
   void display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) override;
 
   // Overlay AA with the Picco's uploaded gray LUT on both boards. Sticky also

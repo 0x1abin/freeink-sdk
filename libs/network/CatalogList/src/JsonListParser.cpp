@@ -15,14 +15,14 @@ JsonListParser::JsonListParser(const std::string &itemsPath,
     : sink(sink), sinkCtx(sinkCtx),
       json(JsonCallbacks{
           this,
-          [](void *c, const char *k, size_t n) {
-            auto &p = self(c);
+          [](void* c, const char* k, size_t n) {
+            auto& p = self(c);
+            if (p.malformed) return;
             if (n > 128) {
               p.malformed = true;
               return;
             }
-            if (!p.stack.empty() && !p.stack.back().isArray)
-              p.stack.back().key.assign(k, n);
+            if (!p.stack.empty() && !p.stack.back().isArray) p.stack.back().key.assign(k, n);
           },
           [](void *c, const char *v, size_t n) {
             self(c).onScalar(v, n, true);
@@ -44,16 +44,16 @@ JsonListParser::JsonListParser(const std::string &itemsPath,
       malformed = true;
 }
 
-bool JsonListParser::parse(const ReadFn read, void *readCtx) {
-  if (malformed)
-    return false;
-  for (int n; (n = read(readCtx, buf, sizeof(buf))) > 0;) {
+bool JsonListParser::parse(const ReadFn read, void* readCtx) {
+  if (malformed) return false;
+  int n;
+  for (; (n = read(readCtx, buf, sizeof(buf))) > 0;) {
     json.feed(buf, static_cast<size_t>(n));
     if (json.hasError() || malformed)
       return false;
   }
   // JsonSax does not check nesting; an unclosed container means a cut-off body.
-  return stack.empty();
+  return n == 0 && stack.empty();
 }
 
 bool JsonListParser::split(const std::string &dotted, Path &out) {
@@ -126,8 +126,7 @@ void JsonListParser::onContainerStart(const bool isArray) {
 }
 
 void JsonListParser::onContainerEnd(const bool isArray) {
-  if (malformed)
-    return;
+  if (malformed) return;
   if (stack.empty() || stack.back().isArray != isArray) {
     malformed = true;
     return;
@@ -139,8 +138,8 @@ void JsonListParser::onContainerEnd(const bool isArray) {
   stack.pop_back();
 }
 
-void JsonListParser::onScalar(const char *value, const size_t len,
-                              const bool isString) {
+void JsonListParser::onScalar(const char* value, const size_t len, const bool isString) {
+  if (malformed) return;
   beginValue();
   if (malformed || itemDepth == 0)
     return;
@@ -150,23 +149,25 @@ void JsonListParser::onScalar(const char *value, const size_t len,
   for (int i = 0; i < F_COUNT; i++) {
     if (!fields[i].empty() && current.field[i].empty() &&
         framesMatch(base, fields[i])) {
-      if (len > MAX_FIELD_CHARS || len > MAX_ROW_BYTES - rowBytes) {
+      if (len > captureBudget - capturedBytes || len > MAX_FIELD_CHARS || len > MAX_ROW_BYTES - rowBytes) {
         malformed = true;
         return;
       }
       rowBytes += len;
+      capturedBytes += len;
       current.field[i].assign(value, len);
     }
   }
   // A files element: the frames spell filesPath, plus the array holding it.
   if (isString && !files.empty() && stack.back().isArray &&
       framesMatch(base, files, 1)) {
-    if (len > MAX_FIELD_CHARS || current.files.size() >= MAX_FILES ||
+    if (len > captureBudget - capturedBytes || len > 240 || len > MAX_FIELD_CHARS || current.files.size() >= MAX_FILES ||
         len > MAX_ROW_BYTES - rowBytes) {
       malformed = true;
       return;
     }
     rowBytes += len;
+    capturedBytes += len;
     current.files.emplace_back(value, len);
   }
 }

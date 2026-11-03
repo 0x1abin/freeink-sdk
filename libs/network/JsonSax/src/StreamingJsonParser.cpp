@@ -323,9 +323,12 @@ void StreamingJsonParser::emitToken() {
   } else {
     if (stringChunked && cb.onStringChunk) {
       cb.onStringChunk(cb.ctx, tokenBuf, tokenLen, true);
-    } else if (!tokenOverflow && cb.onString) {
+    } else {
+      const auto callback = tokenOverflow ? cb.onStringPrefix : cb.onString;
+      if (callback) {
       tokenBuf[tokenLen] = '\0';
-      cb.onString(cb.ctx, tokenBuf, tokenLen);
+      callback(cb.ctx, tokenBuf, tokenLen);
+      }
     }
     state = State::SCANNING;
     expectingValue = false;

@@ -52,7 +52,7 @@ constexpr InitCmd kStickyInit[] = {
 };
 
 // Stock's OTP waveform codes (0xE6) for 21..30 C: full 0xEE, partial 0x19.
-// ponytail: fixed room-temperature bucket; stock reads the panel temperature
+// Fixed room-temperature bucket. Stock reads the panel temperature
 // (CMD 0x40, a half-duplex read the shared SPI bus can't do mid-run) and picks
 // E8/EB/EE/F1 and 08/0F/19/23 by <11/11-20/21-30/>=31 C.
 constexpr uint8_t OTP_FULL_ROOM = 0xEE;
@@ -123,7 +123,9 @@ void Ssd2677Driver::initPanel(EpdBus& bus) {
     if (c.delayMs) delay(c.delayMs);
     if (c.waitBusy) bus.waitBusy(" SSD2677 init");
   }
-  bus.waitBusy(" SSD2677 init");
+  // Sticky's final command already waits for completion. Keep the final
+  // wait for init tables without a per-command wait on their last entry.
+  if (!list[count - 1].waitBusy) bus.waitBusy(" SSD2677 init");
   _needsPowerOn = true;
   _latchedWaveform = 0;
 }
@@ -167,7 +169,9 @@ void Ssd2677Driver::display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev,
     // OTP waveforms: a full refresh sends old == new (every pixel driven to its
     // level) and powers off; a fast one diffs against the retained old plane
     // and keeps the rails on (stock).
-    const bool fast = mode == RefreshMode::Fast;
+    // Differential refresh needs a real previous frame. On allocation failure,
+    // send old == new with the full waveform so black pixels can still clear.
+    const bool fast = mode == RefreshMode::Fast && _old != nullptr;
     latchOtpWaveform(bus, fast ? OTP_FAST_ROOM : OTP_FULL_ROOM);
     sendPacked(bus, fast ? _old : fb, fb);
     powerAndRefresh(bus, !fast || turnOff);
@@ -181,7 +185,9 @@ void Ssd2677Driver::display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev,
   // reason non-full frames ghosted). _old == nullptr (alloc failed) falls back to
   // an all-white old plane in sendPacked.
   sendPacked(bus, _old, fb);
-  refreshWith(bus, mode == RefreshMode::Fast ? lut_picco_se0400_fast : lut_picco_se0400_full, turnOff);
+  // Stock powers off after every refresh (PON, 0x12, POF), whatever `turnOff` says.
+  (void)turnOff;
+  refreshWith(bus, mode == RefreshMode::Fast ? lut_picco_se0400_fast : lut_picco_se0400_full, true);
   if (_old) memcpy(_old, fb, geometry().bufferSize);  // new becomes old for the next frame
   _needsInitialFull = false;
 }
@@ -210,6 +216,14 @@ void Ssd2677Driver::sendPacked(EpdBus& bus, const uint8_t* hi, const uint8_t* lo
   if (n) txn.writeBytes(chunk, n);
 }
 
+void Ssd2677Driver::powerOffBetweenFrames(EpdBus& bus) {
+  if (_needsPowerOn) return;
+  bus.cmd(CMD_POWER_OFF);
+  bus.data(0x00);
+  bus.waitBusy(" SSD2677 power off");
+  _needsPowerOn = true;
+}
+
 void Ssd2677Driver::powerAndRefresh(EpdBus& bus, bool turnOff) {
   if (_needsPowerOn) {
     bus.cmd(CMD_POWER_ON);
@@ -219,12 +233,7 @@ void Ssd2677Driver::powerAndRefresh(EpdBus& bus, bool turnOff) {
   bus.cmd(CMD_REFRESH);
   bus.data(0x00);
   bus.waitRefreshComplete("refresh");
-  if (turnOff) {
-    bus.cmd(CMD_POWER_OFF);
-    bus.data(0x00);
-    bus.waitBusy(" SSD2677 power off");
-    _needsPowerOn = true;
-  }
+  if (turnOff) powerOffBetweenFrames(bus);
 }
 
 void Ssd2677Driver::refreshWith(EpdBus& bus, const unsigned char* lut, bool turnOff) {
@@ -297,7 +306,7 @@ void Ssd2677Driver::displayGray(EpdBus& bus, const uint8_t* fb, bool turnOff, co
     display(bus, fb, nullptr, RefreshMode::Full, turnOff);
     return;
   }
-  refreshWith(bus, lut_picco_se0400_gray, turnOff);
+  refreshWith(bus, lut_picco_se0400_gray, true);
   // NB: do NOT force the next frame to a full refresh here. Every reader page in
   // AA mode is a gray frame, so forcing a full on the following page flashed the
   // whole screen black on every page turn. The retained `_old` still holds the
