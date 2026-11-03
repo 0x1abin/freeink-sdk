@@ -903,9 +903,10 @@ void CrossMuxSsd1677Driver::setCustomLut(EpdBus& bus, bool enabled, const unsign
 
   // First 105 bytes: VS + TP/RP + frame rate.
   bus.cmd(CMD_WRITE_LUT);
-  for (uint16_t i = 0; i < 105; i++) {
-    bus.data(pgm_read_byte(&data[i]));
-  }
+  // SPI.writeBytes reads aligned 32-bit words, including the final partial word.
+  alignas(uint32_t) uint8_t payload[108]{};
+  memcpy(payload, data, 105);
+  bus.data(payload, 105);
 
   bus.cmd(CMD_GATE_VOLTAGE);  // VGH
   bus.data(pgm_read_byte(&data[105]));
