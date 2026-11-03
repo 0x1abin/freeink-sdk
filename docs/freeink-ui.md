@@ -1691,3 +1691,24 @@ key arrangement. The classic tables are static read-only data, not heap copies.
 `GfxRendererTarget::setTextCentering(TextCentering::Advance)` opts out of the
 new single-digit ink-bounds centering. `InkBounds` remains the default.
 CrossMux selects these policies only for INX, through its shared theme bridge.
+
+### Runtime composition and compact style overrides
+
+`FreeInkUILayout.h` supports fixed/flexible linear containers and equal-track
+runtime grids. Set `LayoutNode::kind = LayoutKind::Grid`, `columns`, and `rows`;
+children carry zero-based `column`/`row` and positive spans. Spanned rectangles
+include internal gaps. Grid children may themselves be linear containers. Layout
+is allocation-free and uses 32-bit intermediate coordinates. Callers validate
+configuration; invalid/out-of-bounds placements produce no slot.
+
+`FreeInkUIComponentStyle.h` supplies compact text and state-box overrides with
+explicit presence masks. Applying false, zero, or transparent replaces the
+inherited value; absent fields preserve it. `Screen::setComponentStyle` borrows
+screen-lifetime storage, applies overrides to list typography/state styles and
+headers, and supports alignment of list blocks that fit the viewport (including wrapped rows).
+The style pointer defaults to null, preserving existing callers. Layout owners
+apply `padding` to their content bounds before routing and drawing.
+
+`fitCoverGrid` computes fitting cover/row dimensions from the existing grid
+properties, available rectangle, line height and maximum cover height. It leaves
+text line-count policy to the caller and allocates no buffers.

@@ -23,7 +23,7 @@
 #include "MurphyM4TouchPolling.h"
 #endif
 
-#if FREEINK_DEVICE_METALIO_EINK4
+#if FREEINK_TOUCH_CST816S
 #include "Cst816sInput.h"
 #endif
 
@@ -412,14 +412,14 @@ private:
                          TouchPoint &point) const;
   uint16_t mapTouchAxis(uint16_t raw, uint16_t rawMin, uint16_t rawMax,
                         uint16_t outMax) const;
-#if FREEINK_DEVICE_EEGO_A4 || FREEINK_DEVICE_MURPHY_M4 ||                      \
-    FREEINK_DEVICE_METALIO_EINK4 || FREEINK_DEVICE_READPICO
+#if FREEINK_TOUCH_GSLX680 || FREEINK_DEVICE_MURPHY_M4 ||                      \
+    FREEINK_TOUCH_CST816S || FREEINK_DEVICE_READPICO
   TouchPoint mapTouchPoint(uint16_t rawX, uint16_t rawY,
                            unsigned long now) const;
   void updateTouchContact(const TouchPoint &point);
   void releaseTouch(unsigned long now);
 #endif
-#if FREEINK_DEVICE_METALIO_EINK4
+#if FREEINK_TOUCH_CST816S
   void beginCst816s();
   uint8_t pollCst816s(unsigned long now);
   bool touchContactPressedEvent = false;
@@ -459,16 +459,17 @@ private:
   bool classifyMultiTouchRotation(unsigned long now);
   bool classifyMultiTouchPinch(unsigned long now);
   void normalizeTouchPoint(uint16_t x, uint16_t y, float &nx, float &ny) const;
-#if FREEINK_DEVICE_EEGO_A4
+#if FREEINK_TOUCH_GSLX680
   void beginGslx680();
+  static void gslCalibrate(uint16_t rawX, uint16_t rawY, int16_t& screenX, int16_t& screenY);
   void pollGslx680(unsigned long now);
   bool gslWrite(uint8_t reg, const uint8_t *data, uint8_t len);
   bool gslRead(uint8_t reg, uint8_t *buf, uint8_t len);
   bool gslUploadFirmware();
 #endif
-#if FREEINK_DEVICE_PICCO
-  void beginPiccoTouch();
-  void pollPiccoTouch(unsigned long now);
+#if FREEINK_TOUCH_TMA525C
+  void beginTma525c();
+  void pollTma525c(unsigned long now);
 #endif
 #if FREEINK_DEVICE_MURPHY_M4
   bool beginFt6336u(bool powerCycle);
@@ -491,6 +492,11 @@ private:
   bool cst836uReadReg(uint8_t reg, uint8_t *out, uint8_t len);
   uint8_t cst836uReadFrame(uint8_t *out);
   uint8_t cst836uDecodeFrame(const uint8_t *data, unsigned long now);
+#endif
+
+#if FREEINK_TOUCH_FT6336U && !FREEINK_DEVICE_MURPHY_M4
+  void beginFt6336u();
+  void pollFt6336u(unsigned long now);
 #endif
 
   void updateToggleSwitch(unsigned long now);
@@ -525,7 +531,7 @@ private:
   freeink::input::FunctionButtonGesture functionButtonGesture;
 #endif
 
-#if FREEINK_DEVICE_EEGO_A4
+#if FREEINK_TOUCH_GSLX680
   enum class GslContactOwner : uint8_t { None, Screen, Home, Cancelled };
   GslContactOwner gslContactOwner = GslContactOwner::None;
 #endif

@@ -95,6 +95,7 @@ int main(int argc, char** argv) {
   assert(argc == 2);
 #if FREEINK_DEVICE_STICKY
   BoardConfig::ACTIVE.board = BoardConfig::Board::Sticky;
+  fakeSticky2677 = std::strcmp(argv[1], "sticky2677") == 0;
 #elif FREEINK_DEVICE_MURPHY_M4
   BoardConfig::ACTIVE.board = BoardConfig::Board::MurphyM4;
 #elif FREEINK_DEVICE_WAVESHARE_EPAPER_397
@@ -117,6 +118,16 @@ int main(int argc, char** argv) {
   if (std::strcmp(argv[1], "batch1") == 0) d.setMurphyM4Batch(MurphyM4Batch::First);
 #endif
   d.begin();
+#if FREEINK_DEVICE_STICKY
+  if (fakeSticky2677) {
+    assert(!d.supportsTextOnlyCombinedBase() && !d.supportsReaderTransitions());
+    assert(paperMonoDriver()._pendingBw == nullptr);
+    assert(d._driver == d._originalDriver);
+    assert(d.grayscaleCapabilities(GrayscaleMode::Absolute).supported());
+    assert(liveAllocations == 1); // Only SSD2677 history, no PaperMono buffers.
+    return 0;
+  }
+#endif
   if (uc || allocationFailAt) {
     assert(!d.supportsTextOnlyCombinedBase());
     assert(!d.supportsReaderTransitions() && !d.canUseTextTransition());
