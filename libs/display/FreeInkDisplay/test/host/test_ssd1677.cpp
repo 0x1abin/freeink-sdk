@@ -34,6 +34,7 @@ void testCustomLutTransfer() {
           const auto* expected = lut ? lut : (factory ? lut_factory_quality : cfg.grayLut);
           CrossMuxSsd1677Driver driver(cfg);
           EpdBus bus;
+          bus.checkLutPayload = true;
           driver.begin(bus);
           bus.clear();
           driver.displayGray(bus, fb.data(), turnOff, lut, factory);

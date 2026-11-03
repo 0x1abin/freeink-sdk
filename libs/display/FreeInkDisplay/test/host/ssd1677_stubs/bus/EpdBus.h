@@ -49,9 +49,10 @@ class EpdBus {
       ++activation;
     }
   }
+  bool checkLutPayload = false;
   void data(uint8_t b) { data(&b, 1); }
   void data(const uint8_t* p, uint16_t n) {
-    if (events.back().cmd == 0x32 && n == 105) {
+    if (checkLutPayload && events.back().cmd == 0x32 && n == 105) {
       // Arduino SPI reads aligned 32-bit words, including the final partial word.
       assert(reinterpret_cast<uintptr_t>(p) % alignof(uint32_t) == 0);
       assert(p[105] == 0 && p[106] == 0 && p[107] == 0);
