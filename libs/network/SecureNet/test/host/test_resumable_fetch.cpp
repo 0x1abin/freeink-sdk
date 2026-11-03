@@ -20,7 +20,6 @@ int SecureClient::read(uint8_t*, size_t) { return -1; }
 int SecureClient::peek() { return -1; }
 void SecureClient::flush() {}
 void SecureClient::stop() {}
-void SecureClient::reserveFullRecord() {}
 uint8_t SecureClient::connected() { return 0; }
 bool SecureClient::tls13Available() { return false; }
 // The plain-http path checks hostResolves(); tests flip dnsWorks.

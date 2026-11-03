@@ -28,7 +28,7 @@ def build(board, device_macro, test_cpp, directory):
     for name in ("esp_heap_caps.h", "sdkconfig.h"):
         shutil.copy2(HERE / "pro_stubs" / name, root / name)
     heap = root / "esp_heap_caps.h"
-    heap.write_text(heap.read_text().replace("inline void* heap_caps_malloc", "inline bool fakeHeapFail=false;\ninline void* heap_caps_malloc").replace("return malloc(size);", "return fakeHeapFail ? nullptr : malloc(size);"))
+    heap.write_text(heap.read_text() + "\ninline bool& fakeHeapFail = fakeHeapCapsFail;\n")
     # SPI stub with the shared-bus pin re-attach the Sticky panel probe uses.
     (root / "SPI.h").write_text((HERE / "pro_stubs/SPI.h").read_text() + """
 #include <cstdint>

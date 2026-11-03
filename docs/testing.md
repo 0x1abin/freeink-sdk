@@ -129,14 +129,14 @@ python3 libs/network/SecureNet/test/host/run_tls_record.py
 python3 libs/network/Opds/test/host/run_capacity.py
 ```
 
-The first suite uses scripted plain HTTP. The TLS suite compiles the actual
-SecureClient and SecureHttpClient against deterministic wolfSSL allocation/I/O
-adapters: full-record reuse, MFL skip, OOM, task isolation, realloc, stop/cancel,
-failed handshake and repeated requests with large headers. It checks allocation
-after the request write; it does not validate real TLS cryptography or device
-heap headroom. The OPDS suite compiles the production capacity helpers with the
-real entry type under `-fno-exceptions`, testing the minimum, string headroom,
-entry/facet limits and stable vector storage.
+The first suite uses scripted HTTP transports, including request ordering,
+reservation timing, retries and cancellation. `run_tls_record.py` is a compatibility
+entry point for the connection-owned reservation harness documented below and
+requires `WOLFSSL_INTERNAL_SOURCE`. The old global allocator-loan harness no
+longer models the production architecture. The OPDS suite checks the production
+capacity helpers under `-fno-exceptions`: minimum/string headroom, entry/facet
+limits and stable vector storage. These tests do not measure device heap or TLS
+cryptography.
 
 ## Frontlight driver
 

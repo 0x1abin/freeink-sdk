@@ -26,7 +26,7 @@ void* s_epdRefreshDone=nullptr;
 void* xSemaphoreCreateBinary(){return reinterpret_cast<void*>(1);}
 struct SPISettings {SPISettings()=default;SPISettings(uint32_t,int,int){}};
 struct {int miso=-2,begins=0;void begin(int,int m,int,int){miso=m;++begins;}} SPI;
-enum class BusyPolarity {ActiveHigh,ActiveLow};
+enum class BusyPolarity {ActiveHigh,ActiveLow,ActiveLowReady};
 struct EpdPins {int8_t sclk=10,mosi=11,cs=6,dc=3,rst=4,busy=5,powerEnable=-1;};
 namespace BoardConfig {
 struct Profile {EpdPins display;struct {int8_t miso=12,cs=8;bool separateSpi=false;} sd;} ACTIVE;
