@@ -1937,11 +1937,12 @@ constexpr BoardProfile EEGO_A4 = {
     DisplayController::UC8279C,
     768,
     552,
-    {42, 45, 21, 14, 13, 41, PIN_UNASSIGNED},  // SCLK MOSI CS DC RST BUSY (no panel power enable)
+    // Gauge-less units need GPIO6 HIGH for battery ADC/frontlight. SDCardManager
+    // assigns it to active-low SD power instead when the CW2015 answers.
+    {42, 45, 21, 14, 13, 41, 6},
     20000000,
-    // Dedicated HSPI SD: SCLK MISO MOSI CS. GPIO6 is the card's power enable,
-    // active-low, as stock V1.0.3 drives it ("SD power enabled: GPIO6 active-low").
-    {39, 40, 38, 47, 6, true, 20000000, false},
+    // GPIO6 ownership is selected before SD and display initialization.
+    {39, 40, 38, 47, PIN_UNASSIGNED, true, 20000000},
     // UP DOWN POWER. Power is active-HIGH (press drives 3V3) with a weak
     // external pull-down; INPUT_PULLDOWN required (InputManager honors the
     // polarity for pinMode). An internal pull-up leaves the pin mid-rail and
@@ -1962,8 +1963,7 @@ constexpr BoardProfile EEGO_A4 = {
     NO_LEDS,
     NO_FLIP,
     NO_SDMMC,
-    // CW2015 fuel gauge at 0x62 on the shared touch/RTC bus. Stock V1.0.3 probes it at
-    // boot and falls back to the GPIO10 ADC when it is absent; BatteryMonitor does the same.
+    // Probe CW2015; gauge-less units retain the GPIO10 ADC fallback.
     {2, 1, 400000, 0x62, 0, 0, GaugeType::Cw2015},
     NO_MIC,
     {2, 1, 400000, 0x51, 0, 0, 0, RtcType::Pcf8563, ImuType::None},  // PCF8563 on the shared touch bus

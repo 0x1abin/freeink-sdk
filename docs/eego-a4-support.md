@@ -34,7 +34,7 @@ The original pin map and controller details came from stock-firmware analysis
 | Panel RAM | 768 × **600**; host FB is 768×552 sent **bottom-up**, then 48 white rows |
 | Framebuffer | 52,992 bytes (768/8 × 552); grayscale planes 52,992 B each, lazy from PSRAM |
 | Display SPI | SCLK 42, MOSI 45, CS 21, DC 14, RST 13, BUSY 41 · **20 MHz** |
-| MicroSD | dedicated **HSPI** bus: SCLK 39, MISO 40, MOSI 38, CS 47 · 20 MHz; power enable GPIO6 (active-low) on units with the CW2015 gauge, otherwise GPIO6 is left HIGH |
+| MicroSD | dedicated **HSPI** bus: SCLK 39, MISO 40, MOSI 38, CS 47 · 20 MHz · GPIO6 power ownership selected by the CW2015 probe |
 | Buttons | UP 5 and DOWN 7 active-low; POWER 8 active-high with INPUT_PULLDOWN |
 | Battery | **CW2015** fuel gauge at I²C 0x62 on SDA 2 / SCL 1 (shared with touch and RTC), probed at runtime; ADC GPIO 10 (divider ×1.559) when the gauge does not answer. Charge status GPIO 11 |
 | Touch | **GSLX680** — SDA 2, SCL 1, RST 3, addr 0x40. Firmware blob uploaded at boot (`gsl/EegoA4GslFirmware.h`, extracted + hash-verified); backend in InputManager. |
@@ -112,16 +112,19 @@ Build with `-DFREEINK_DEVICE_EEGO_A4=1`; see the `eego_a4` environment in
   100, matching the stock battery icon. Samples outside 2500–4500 mV or above
   100% are rejected. When the gauge does not answer, the ADC pin is used.
   ADC fallback is selected only by the initial absent-gauge probe; a later
-  failed gauge read is unknown, not a fabricated ADC percentage.
-  Charging comes from GPIO 11; the gauge cannot observe it.
-  GPIO6 depends on the unit. On units whose CW2015 answers, it is the SD
-  card's active-low power enable, as stock V1.0.3 drives it; held HIGH, the
-  card does not answer. On a tested unlit unit without the gauge, the GPIO10
-  ADC reads the battery only with GPIO6 HIGH (a 40-minute trace showed about
-  4.12 to 4.08 V). Before mounting the card, `SDCardManager` checks for the
-  gauge at 0x62: if it answers, GPIO6 becomes the SD power enable and display
-  initialization leaves it alone; otherwise display initialization drives it
-  HIGH. The profile describes the gauge-less case.
+  failed gauge read is unknown, not a fabricated ADC percentage. Charging comes
+  from GPIO 11; the gauge cannot observe it.
+  GPIO6 differs between revisions. Before mounting the SD card, `SDCardManager`
+  probes the configured gauge at 0x62. An acknowledgement assigns GPIO6 to
+  active-low SD power and removes it from display enable; an address NACK leaves
+  GPIO6 as the display enable, driven HIGH for battery ADC/frontlight operation.
+  Initialization or other I2C failures abort that mount attempt and remain retryable.
+  This follows upstream `ed7c5c3` without disabling the real board's gauge path.
+
+  On the contributor's gauge-less retail unit, GPIO6 HIGH changed the GPIO10
+  ADC from 0 mV to 2674 mV (4168 mV pack) and restored the frontlight. This is
+  evidence for that unit, not proof that every EEGO A4 has the same rail wiring.
+  Deep sleep/wake, SD access and frontlight still need checks on both revisions.
 - `FrontlightManager` probes the optional LM3630A through
   `BoardProfile::i2cFrontlight`. The profile's PWM frontlight field is `NO_FRONTLIGHT`.
   The controller is fitted on some unlit units too, so a unit the stock

@@ -5,6 +5,9 @@
 #include <MetalioEInk4Board.h>
 #endif
 #include <SPI.h>
+#if FREEINK_DEVICE_EEGO_A4
+#include <Wire.h>
+#endif
 #include <driver/gpio.h>
 #include <esp_task_wdt.h>
 
@@ -162,29 +165,27 @@ bool SDCardManager::begin() {
   if (_powerHook) _powerHook();  // board brings up its SD rail (e.g. PMIC) if needed
 
 #if FREEINK_DEVICE_EEGO_A4
-  // EEGO A4 revisions differ on GPIO6. Units whose CW2015 gauge answers use it as
-  // the SD card's active-low power enable (stock V1.0.3 logs "SD power enabled:
-  // GPIO6 active-low"); held HIGH, their card does not answer. Units without the
-  // gauge read the battery on the GPIO10 ADC only with GPIO6 HIGH, which the
-  // profile leaves to display initialization. Decided once, before SD and display
-  // initialization drive the pin.
+  // Adapted from upstream ed7c5c3: revisions disagree on GPIO6 ownership.
+  // Decide before either peripheral drives it; retry bus faults rather than
+  // treating a failed initialization as proof that the gauge is absent.
   if (BoardConfig::isEegoA4()) {
     static bool decided = false;
-    const int8_t gpio6 = BoardConfig::ACTIVE.display.powerEnable;
-    if (!decided && gpio6 >= 0) {
-      decided = true;
-      const auto& g = BoardConfig::ACTIVE.batteryGauge;
-      Wire.begin(g.i2cSda, g.i2cScl, g.i2cHz);
-      Wire.beginTransmission(g.gaugeAddr);
-      const bool gauge = Wire.endTransmission() == 0;
-      if (gauge) {
-        BoardConfig::ACTIVE.sd.powerEnable = gpio6;
+    const int8_t rail = BoardConfig::ACTIVE.display.powerEnable;
+    if (!decided && rail >= 0) {
+      const auto& gauge = BoardConfig::ACTIVE.batteryGauge;
+      if (!Wire.begin(gauge.i2cSda, gauge.i2cScl, gauge.i2cHz)) return false;
+      Wire.beginTransmission(gauge.gaugeAddr);
+      const uint8_t status = Wire.endTransmission();
+      if (status != 0 && status != 2) return false;
+      if (status == 0) {
+        BoardConfig::ACTIVE.sd.powerEnable = rail;
         BoardConfig::ACTIVE.sd.powerActiveHigh = false;
         BoardConfig::ACTIVE.display.powerEnable = BoardConfig::PIN_UNASSIGNED;
       }
+      decided = true;
       if (Serial)
-        Serial.printf("[%lu] [SD] EEGO A4: CW2015 %s, GPIO%d = %s\n", millis(), gauge ? "present" : "absent", gpio6,
-                      gauge ? "SD power (active-low)" : "display enable (HIGH)");
+        Serial.printf("[%lu] [SD] EEGO A4: CW2015 %s, GPIO%d = %s\n", millis(), status == 0 ? "present" : "absent",
+                      rail, status == 0 ? "SD power (active-low)" : "display enable (HIGH)");
     }
   }
 #endif

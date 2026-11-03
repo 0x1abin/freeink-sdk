@@ -237,3 +237,13 @@ Executes the display facade's SPI pin selection and production `EpdBus::begin`
 against a recording SPI/GPIO adapter. Covers shared SD MISO/CS preservation,
 dedicated SD buses and missing-pin fallbacks. It does not establish physical
 SD persistence or display/SD concurrency acceptance on Sticky hardware.
+
+## EEGO A4 GPIO6 ownership
+
+```sh
+python3 libs/hardware/SDCardManager/test/host/test_eego_gpio6.py
+```
+
+Executes the production SD-init selection block for a responding gauge, an absent
+address, failed bus initialization and a transient bus fault. This verifies pin
+ownership and retry behavior, not physical SD, frontlight or sleep/wake operation.
