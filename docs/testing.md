@@ -226,3 +226,14 @@ sh libs/network/JsonSax/test/host/run.sh
 
 Checks optional bounded string prefixes, unchanged default overflow handling,
 continued parsing after long strings, and rejection of oversized keys under ASan/UBSan.
+
+## Shared SPI initialization
+
+```sh
+python3 libs/display/FreeInkDisplay/test/host/test_shared_spi_init.py
+```
+
+Executes the display facade's SPI pin selection and production `EpdBus::begin`
+against a recording SPI/GPIO adapter. Covers shared SD MISO/CS preservation,
+dedicated SD buses and missing-pin fallbacks. It does not establish physical
+SD persistence or display/SD concurrency acceptance on Sticky hardware.

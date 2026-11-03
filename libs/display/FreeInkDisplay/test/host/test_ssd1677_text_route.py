@@ -48,7 +48,6 @@ class TextRoutingTest(unittest.TestCase):
             shutil.copy2(HERE / "pro_stubs/EpdBus.h", root / "src/bus/EpdBus.h")
             (root / "SPI.h").write_text('#pragma once\n#include <cstdint>\nstruct FakeNoBusSpi { void* bus() { return nullptr; } int8_t pinSS() { return -1; } void end() {} void begin(int8_t,int8_t,int8_t,int8_t) {} };\ninline FakeNoBusSpi SPI;\n')
             board = root / "BoardConfig.h"
-            board.write_text(board.read_text().replace("Board board=", "struct { int8_t miso=40; } sd;\n  Board board="))
             bus = root / "src/bus/EpdBus.h"
             text = bus.read_text().replace("  unsigned waits=0;", "  unsigned waits=0, activation=0, failAt=0, resets=0; bool busy=false, sleepBusyUntilReset=false, resetKeepsBusy=false, resetClearsFailure=false;")
             text = text.replace("writes.push_back({c,{}});", "assert(!busy); writes.push_back({c,{}}); if (c==0x20) { busy=true; ++activation; } if (c==0x10 && sleepBusyUntilReset) busy=true;")

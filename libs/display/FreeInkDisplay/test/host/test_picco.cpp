@@ -213,7 +213,7 @@ int main(int argc, char** argv) {
       if (w.command == 0x12) assert(poweredOn);
       assert(w.command != 0x07);  // no deep sleep
     }
-    assert(poweredOn && !s._needsPowerOn);
+    assert(poweredOn && s._needsPowerOn && lastRegister(bus, 0x02) == 0);
     s.deepSleep(bus);
     assert(lastRegister(bus, 0x07) == 0xA5);
     std::printf("Picco se0400: probe, init, packing and refresh passed\n");
