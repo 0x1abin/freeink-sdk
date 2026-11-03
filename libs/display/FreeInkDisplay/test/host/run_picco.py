@@ -43,7 +43,7 @@ struct FakeSpi {
 inline FakeSpi SPI;
 """)
     board_h = (HERE / "pro_stubs/BoardConfig.h").read_text().replace("MetalioEInk4 };", "MetalioEInk4, Picco };")
-    (root / "BoardConfig.h").write_text(board_h.replace("Board board=Board::XteinkX4Pro;", "struct { int8_t miso=40; } sd;\n  " + f"Board board=Board::{board};").replace(
+    (root / "BoardConfig.h").write_text(board_h.replace("Board board=Board::XteinkX4Pro;", f"Board board=Board::{board};").replace(
         "inline bool isX4Classic() { return false; }",
         "inline bool isX4Classic() { return false; }\ninline bool isPicco() { return ACTIVE.board == Board::Picco; }"))
     # Arduino stub plus a fake SSD1677 that answers CMD 0x2E with fakePanelId.
