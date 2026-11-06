@@ -80,6 +80,13 @@
 #ifndef FREEINK_DEVICE_METALIO_EINK4
 #define FREEINK_DEVICE_METALIO_EINK4 0
 #endif
+// OnePage is the only ESP32-C61 profile this SDK supports. Some library/IDF
+// hybrid build passes compile BoardConfig without the project-level
+// -DFREEINK_DEVICE_ONEPAGE flag; the C61 Arduino target macro is always present
+// there, so use it as the fallback rather than failing with "no device".
+#if defined(ARDUINO_ESP32C61_DEV) && !defined(FREEINK_DEVICE_ONEPAGE)
+#define FREEINK_DEVICE_ONEPAGE 1
+#endif
 #ifndef FREEINK_DEVICE_ONEPAGE
 #define FREEINK_DEVICE_ONEPAGE 0
 #endif
@@ -2188,7 +2195,8 @@ constexpr BoardProfile XTEINK_X4_CLASSIC = {
     {9, 7, 3, 7},  // bezel insets: carried from X4 Pro (same glass), pending measurement
     true};
 
-constexpr BoardProfile ONEPAGE = {
+constexpr BoardProfile makeOnePageProfile() {
+  BoardProfile profile = {
     Board::OnePage,
     "onepage",
     InputStyle::OnePageAdcLadder,
@@ -2198,8 +2206,9 @@ constexpr BoardProfile ONEPAGE = {
     // Display SPI: SCLK 22, MOSI 23, CS 25, DC 8, RST 27, BUSY 29, powerEnable PIN_UNASSIGNED
     {22, 23, 25, 8, 27, 29, PIN_UNASSIGNED},
     20000000,  // displaySpiHz: 20MHz
-    // MicroSD (shared SPI bus): SCLK 22, MISO 24, MOSI 23, CS 26, powerEnable 27
-    {22, 24, 23, 26, 27, false, 20000000, true},
+    // MicroSD (shared SPI bus): SCLK 22, MISO 24, MOSI 23, CS 26. The V1 board
+    // has no switched SD rail; GPIO27 is EPD_RST and IO28/SD_DEP is card detect.
+    {22, 24, 23, 26, PIN_UNASSIGNED, false, 20000000},
     // Input: 4-key front ADC ladder on GPIO4 + 3 side GPIO keys (UP=6, DOWN=9, POWER=2)
     // {back, confirm, left, right, up, down, power, powerActiveHigh, adcLadderPin}
     {PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, PIN_UNASSIGNED, 6, 9, 2, false, 4},
@@ -2222,6 +2231,19 @@ constexpr BoardProfile ONEPAGE = {
     0,               // displayControllerVariant
     {0, 0, 0, 0},    // viewableInsets: full 800x480 panel frame
     false};          // batteryChargeStatusActiveHigh: false (low = USB present)
+  // The LM66200 ST output is open-drain and LOW while USB is attached. This
+  // field sits after the positional aggregate above, so set it explicitly;
+  // leaving the default true made BatteryMonitor read a connected cable as
+  // absent.
+  profile.usbDetectActiveHigh = false;
+  return profile;
+}
+constexpr BoardProfile ONEPAGE = makeOnePageProfile();
+
+// GPIO27 is the EPD reset line on V1, not an SD power gate; IO28/SD_DEP is the
+// card-detect switch. The LM66200 ST output is open-drain LOW when USB is in.
+static_assert(ONEPAGE.sd.powerEnable == PIN_UNASSIGNED, "OnePage SD rail is unswitched");
+static_assert(!ONEPAGE.usbDetectActiveHigh, "OnePage USB detect is active-low");
 
 static_assert(ONEPAGE.displayWidth / 8 * ONEPAGE.displayHeight == 48000,
               "OnePage framebuffer must be 48,000 bytes (800/8 x 480)");
