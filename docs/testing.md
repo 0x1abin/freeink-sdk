@@ -4,6 +4,28 @@ Run these commands from the repository root. Host tests use production code
 with desktop adapters or hardware stubs; they do not require a device or PlatformIO.
 You need a C/C++ compiler with C++17 support, Python 3, and a POSIX shell.
 
+## Serial transport
+
+```sh
+python3 libs/hardware/BoardConfig/test/host/run_serial.py
+```
+
+Checks that native USB Serial/JTAG output is serviced without a blocking flush,
+and that UART, TinyUSB, Sticky's UART bridge, and simulator builds remain no-ops.
+Device tests must also verify timely acknowledgements and intact transfer data.
+
+## Paper Mono bring-up
+
+```sh
+python3 libs/hardware/BoardConfig/test/host/run_papermono_boot.py
+```
+
+Runs `PaperMonoBoard.h` against a model PMIC and IO expander. An expander that
+misses its first probes after a PMIC restart must still come up within the boot
+wait, whichever manager starts first. A failed setup must stay cached, so no rail
+in use is switched off later, and the power button must keep working. A failed
+expander read or mode write must not leave the touch controller in reset.
+
 ## UI, books, credentials, and input
 
 ```sh
@@ -56,6 +78,20 @@ must initialize the shared bus after the boot probe releases it or when detectio
 uses a cached board profile, regardless of RTC/IMU initialization order. A model
 SGM41562 checks Picco charger status, input detection, setup, and ship mode.
 
+## Motion sensors
+
+```sh
+sh libs/hardware/Imu/test/host/run.sh
+```
+
+Compiles `Imu` with the Metalio EInk4 profile against a model SC7A20H (and
+the QMI8658 and LSM6DS3 scaling), once more with `FREEINK_CAP_IMU=0`, and with
+the Paper Mono profile against a model BMI270: `begin()` must only identify
+the part, the first `wake()` or `read()` must stream the whole configuration
+file through the INIT window in order with a longer bus timeout, a warm part
+must skip the upload, and the board's axis flips apply. The model does not run
+the configuration file, so the sensor's data path still needs a device.
+
 ## Fonts
 
 ```sh
@@ -93,18 +129,33 @@ python3 libs/network/SecureNet/test/host/run_tls_record.py
 python3 libs/network/Opds/test/host/run_capacity.py
 ```
 
-The first suite uses scripted plain HTTP. The TLS suite compiles the actual
-SecureClient and SecureHttpClient against deterministic wolfSSL allocation/I/O
-adapters: full-record reuse, MFL skip, OOM, task isolation, realloc, stop/cancel,
-failed handshake and repeated requests with large headers. It checks allocation
-after the request write; it does not validate real TLS cryptography or device
-heap headroom. The OPDS suite compiles the production capacity helpers with the
-real entry type under `-fno-exceptions`, testing the minimum, string headroom,
-entry/facet limits and stable vector storage.
+The first suite uses scripted HTTP transports, including request ordering,
+reservation timing, retries and cancellation. `run_tls_record.py` is a compatibility
+entry point for the connection-owned reservation harness documented below and
+requires `WOLFSSL_INTERNAL_SOURCE`. The old global allocator-loan harness no
+longer models the production architecture. The OPDS suite checks the production
+capacity helpers under `-fno-exceptions`: minimum/string headroom, entry/facet
+limits and stable vector storage. These tests do not measure device heap or TLS
+cryptography.
+
+## Frontlight driver
+
+```sh
+sh libs/hardware/FrontlightManager/test/host/run.sh
+```
+
+Compiles the Picco frontlight backend and real board profile against a register
+model with a wake-settling interval. Covers the first nonzero brightness write,
+off/on level restoration, warm/cool channels, slider updates without repeated
+wake delays, and retry after a failed wake transaction. Sweeps brightness in both
+directions at all 101 warmth settings, checking fine PWM steps, minimum and maximum
+output, disabled channels at zero PWM, and restoration after off/on. Physical light
+output and the actual controller settling time still require a device check.
 
 ## Display drivers
 
 ```sh
+python3 libs/display/FreeInkDisplay/test/host/run_bus.py
 python3 libs/display/FreeInkDisplay/test/host/run_pro.py
 python3 libs/display/FreeInkDisplay/test/host/run_epdiy_contract.py
 python3 libs/display/FreeInkDisplay/test/host/run_uc8279.py
@@ -114,7 +165,9 @@ python3 libs/display/FreeInkDisplay/test/host/run_picco.py
 ```
 
 These compile production drivers against recording buses. The Pro suite also
-compiles the facade in single- and dual-buffer modes. The Picco suite builds the
+compiles the facade in single- and dual-buffer modes, checks every concrete driver
+header against the shared interface, and verifies selected controller identity
+independently of board metadata. The Picco suite builds the
 SSD1677/SSD2677 drivers as a Picco and as a Sticky, including each board's
 bit-banged panel probe. The checks cover transfer
 sequences, grayscale uploads, refresh lifecycle, and power-state behavior for
@@ -144,3 +197,53 @@ SDK APIs. A public method, board profile, compatibility wrapper, or capability-g
 driver can have no in-repository callers and still be used by downstream firmware.
 Check references across all configurations before removing internal symbols, and
 exclude vendored dependencies and generated assets from routine source cleanup.
+
+## SecureNet bulk transfers
+
+```sh
+sh libs/network/SecureNet/test/host/run.sh
+WOLFSSL_INTERNAL_SOURCE=/path/to/Arduino-wolfSSL/src/src/internal.c \
+  python3 libs/network/SecureNet/test/host/test_record_reservation.py
+```
+
+The shell suite exercises HTTP control flow with scripted transports, including
+reservation timing after the request, cancellation, and resumed transfers. The
+Python harness compiles the production reservation/stop methods and the
+consumer's pinned wolfSSL buffer functions with a bounded allocator, sanitizers,
+and competing clients. It requires the consumer's verified input-retention and
+empty-buffer-release patches. It covers both allocation failure before the fix
+and retained medium/full records afterward; it does not perform TLS handshakes
+or measure device heap. Consumers without `FREEINK_WOLFSSL_RETAIN_INPUT_BUFFER`
+use ordinary on-demand record growth without proactive reservation. Reservations
+use wolfSSL's own connection-owned buffer and allocator, with no global allocator
+replacement or cross-client loan.
+
+## Streaming JSON previews
+
+```sh
+sh libs/network/JsonSax/test/host/run.sh
+```
+
+Checks optional bounded string prefixes, unchanged default overflow handling,
+continued parsing after long strings, and rejection of oversized keys under ASan/UBSan.
+
+## Shared SPI initialization
+
+```sh
+python3 libs/display/FreeInkDisplay/test/host/test_shared_spi_init.py
+```
+
+Executes the display facade's SPI pin selection and production `EpdBus::begin`
+against a recording SPI/GPIO adapter. Covers shared SD MISO/CS preservation,
+dedicated SD buses and missing-pin fallbacks. It does not establish physical
+SD persistence or display/SD concurrency acceptance on Sticky hardware.
+
+## EEGO A4 GPIO6 ownership
+
+```sh
+python3 libs/hardware/SDCardManager/test/host/test_eego_gpio6.py
+```
+
+Executes the production SD-init selection block for a responding gauge, an absent
+address, failed bus initialization and a transient bus fault. This verifies pin
+ownership and retry behavior, not physical SD, frontlight or sleep/wake operation.

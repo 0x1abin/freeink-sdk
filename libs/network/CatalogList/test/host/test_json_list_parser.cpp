@@ -27,16 +27,15 @@ int read5(void *c, char *b, size_t n) {
   return static_cast<int>(k);
 }
 
-bool run(const char *doc, const std::string &items,
-         std::initializer_list<const char *> paths, const char *filesPath) {
+bool run(const char* doc, const std::string& items, std::initializer_list<const char*> paths, const char* filesPath,
+         size_t budget = 64 * 1024) {
   std::vector<std::string> p(paths.begin(), paths.end());
   p.resize(JsonListParser::F_COUNT);
   const std::string *const fields[] = {&p[0], &p[1], &p[2],
                                        &p[3], &p[4], &p[5]};
   rows.clear();
-  auto *parser = new JsonListParser(
-      items, fields, filesPath, [](void *, Row &r) { rows.push_back(r); },
-      nullptr);
+  auto* parser = new JsonListParser(items, fields, filesPath, [](void*, Row& r) { rows.push_back(r); }, nullptr);
+  parser->setCaptureBudget(budget);
   Src s{doc, strlen(doc)};
   const bool ok = parser->parse(read5, &s);
   delete parser;
@@ -64,13 +63,12 @@ int main() {
   assert(rows.size() == 1 && rows[0].field[JsonListParser::F_ID] == "x");
 
   // plugin-store / dictionaries: version, bundle base and files array.
-  assert(run(
-      R"({"plugins":[{"name":"p","title":"P","version":"1.2","base":"https://h/p","files":["a.js","b/c.bin"]}]})",
-      "plugins", {"title", "", "name", "", "version", "base"}, "files"));
-  assert(rows.size() == 1 &&
-         rows[0].field[JsonListParser::F_VERSION] == "1.2" &&
-         rows[0].field[JsonListParser::F_BASE] == "https://h/p" &&
-         rows[0].files.size() == 2 && rows[0].files[1] == "b/c.bin");
+  assert(
+      run(R"({"plugins":[{"name":"p","title":"P","version":"1.2","base":"https://h/p","files":["a.js","b/c.bin"]}]})",
+          "plugins", {"title", "", "name", "", "version", "base"}, "files"));
+  assert(rows.size() == 1 && rows[0].field[JsonListParser::F_VERSION] == "1.2" &&
+         rows[0].field[JsonListParser::F_BASE] == "https://h/p" && rows[0].files.size() == 2 &&
+         rows[0].files[1] == "b/c.bin");
 
   // Mismatched closers and a cut-off body both report failure.
   assert(!run(R"([{"title":"A"}}])", "", {"title"}, ""));
@@ -103,5 +101,7 @@ int main() {
                            "\",\"e\":\"" + value + "\",\"f\":\"" + value +
                            "\"}]";
   assert(!run(wide.c_str(), "", {"a", "b", "c", "d", "e", "f"}, ""));
+  assert(!run(R"([{"title":"abc"},{"title":"def"}])", "", {"title"}, "", 5));
+  assert(rows.size() == 1);
   puts("json list ok");
 }

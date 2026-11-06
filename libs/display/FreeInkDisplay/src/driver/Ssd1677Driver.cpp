@@ -618,7 +618,13 @@ void Ssd1677Driver::powerOn(EpdBus& bus) {
   _isScreenOn = true;
 }
 
-void Ssd1677Driver::powerOffController(EpdBus& bus) {
+void Ssd1677Driver::powerOffBetweenFrames(EpdBus& bus) {
+  // Picco idle shutdown uses BUSY, with one tick for command propagation.
+  // Other callers keep their existing production shutdown timing.
+  powerOffController(bus, 1);
+}
+
+void Ssd1677Driver::powerOffController(EpdBus& bus, uint16_t settleMs) {
   if (!completeRefresh(bus) || !_isScreenOn) return;
   bus.cmd(CMD_BORDER_WAVEFORM);
   bus.data(_cfg.borderWaveformInit);  // X4 Pro: 0x80
@@ -627,7 +633,7 @@ void Ssd1677Driver::powerOffController(EpdBus& bus) {
   bus.cmd(CMD_MASTER_ACTIVATION);
   // Production X4 Pro power-off time. If BUSY remains asserted after the fixed
   // interval, wait out the remainder before changing the state flag.
-  delay(200);
+  delay(settleMs);
   bus.waitBusy(" display power-down");
   if (!completeRefresh(bus)) return;
   _isScreenOn = false;
@@ -967,9 +973,10 @@ void Ssd1677Driver::setCustomLut(EpdBus& bus, bool enabled, const unsigned char*
 
   // First 105 bytes: VS + TP/RP + frame rate.
   bus.cmd(CMD_WRITE_LUT);
-  for (uint16_t i = 0; i < 105; i++) {
-    bus.data(pgm_read_byte(&data[i]));
-  }
+  // SPI.writeBytes reads aligned 32-bit words, including the final partial word.
+  alignas(uint32_t) uint8_t payload[108]{};
+  memcpy(payload, data, 105);
+  bus.data(payload, 105);
   bus.cmd(CMD_GATE_VOLTAGE);  // VGH
   bus.data(pgm_read_byte(&data[105]));
 

@@ -28,7 +28,7 @@ def build(board, device_macro, test_cpp, directory):
     for name in ("esp_heap_caps.h", "sdkconfig.h"):
         shutil.copy2(HERE / "pro_stubs" / name, root / name)
     heap = root / "esp_heap_caps.h"
-    heap.write_text(heap.read_text().replace("inline void* heap_caps_malloc", "inline bool fakeHeapFail=false;\ninline void* heap_caps_malloc").replace("return malloc(size);", "return fakeHeapFail ? nullptr : malloc(size);"))
+    heap.write_text(heap.read_text() + "\ninline bool& fakeHeapFail = fakeHeapCapsFail;\n")
     # SPI stub with the shared-bus pin re-attach the Sticky panel probe uses.
     (root / "SPI.h").write_text((HERE / "pro_stubs/SPI.h").read_text() + """
 #include <cstdint>
@@ -43,7 +43,7 @@ struct FakeSpi {
 inline FakeSpi SPI;
 """)
     board_h = (HERE / "pro_stubs/BoardConfig.h").read_text().replace("MetalioEInk4 };", "MetalioEInk4, Picco };")
-    (root / "BoardConfig.h").write_text(board_h.replace("Board board=Board::XteinkX4Pro;", "struct { int8_t miso=40; } sd;\n  " + f"Board board=Board::{board};").replace(
+    (root / "BoardConfig.h").write_text(board_h.replace("Board board=Board::XteinkX4Pro;", f"Board board=Board::{board};").replace(
         "inline bool isX4Classic() { return false; }",
         "inline bool isX4Classic() { return false; }\ninline bool isPicco() { return ACTIVE.board == Board::Picco; }"))
     # Arduino stub plus a fake SSD1677 that answers CMD 0x2E with fakePanelId.
@@ -86,18 +86,14 @@ struct FakeSerial { explicit operator bool() const { return false; } template <c
 inline FakeSerial Serial;
 """
     (root / "Arduino.h").write_text('#include "BoardConfig.h"\n' + arduino)
-    exe = root / board.lower()
-    subprocess.run([os.environ.get("CXX", "c++"), "-std=c++17", "-Wall", "-Wextra", "-Wno-unused-parameter",
-                    "-Wno-unused-function", "-DARDUINO=1", f"-D{device_macro}=1", "-I" + str(root), "-I" + str(root / "include"),
-                    str(HERE / test_cpp), str(root / "src/driver/Ssd1677Driver.cpp"),
-                    str(root / "src/driver/Ssd2677Driver.cpp"), "-o", str(exe)],
-                   check=True)
-    # The facade's driver selection must compile in this build.
     shutil.copy2(LIB / "src/FreeInkDisplay.cpp", root / "src/FreeInkDisplay.cpp")
     shutil.copy2(LIB / "include/FreeInkDisplay.h", root / "include/FreeInkDisplay.h")
-    subprocess.run([os.environ.get("CXX", "c++"), "-std=c++17", "-fsyntax-only", "-DARDUINO=1",
-                    f"-D{device_macro}=1", "-DFREEINK_DRIVER_SSD1677=1", "-I" + str(root),
-                    "-I" + str(root / "include"), str(root / "src/FreeInkDisplay.cpp")], check=True)
+    exe = root / board.lower()
+    subprocess.run([os.environ.get("CXX", "c++"), "-std=c++17", "-Wall", "-Wextra", "-Wno-unused-parameter",
+                    "-Wno-unused-function", "-Wno-unused-variable", "-DARDUINO=1", f"-D{device_macro}=1", "-DFREEINK_DRIVER_SSD1677=1",
+                    "-I" + str(root), "-I" + str(root / "include"), str(HERE / test_cpp),
+                    str(root / "src/FreeInkDisplay.cpp"), str(root / "src/driver/Ssd1677Driver.cpp"),
+                    str(root / "src/driver/Ssd2677Driver.cpp"), "-o", str(exe)], check=True)
     return exe
 
 
@@ -108,3 +104,5 @@ with tempfile.TemporaryDirectory(prefix="freeink-picco-test-") as directory:
 with tempfile.TemporaryDirectory(prefix="freeink-sticky-test-") as directory:
     exe = build("Sticky", "FREEINK_DEVICE_STICKY", "test_sticky_ssd2677.cpp", directory)
     subprocess.run([str(exe)], check=True)
+    subprocess.run([str(exe), "no-old-plane"], check=True)
+    subprocess.run([str(exe), "ssd1677"], check=True)

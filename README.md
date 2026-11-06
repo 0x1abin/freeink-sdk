@@ -148,7 +148,7 @@ not alias them or enable both PMIC owners for the same board.
 | **M5Stack PaperS3** | ESP32-S3 | ED047TC1 (raw parallel) | 960×540 16-gray | same LovyanGFX EPD driver class as the LilyGo T5 S3 (plain-GPIO EPD rails, no PMIC), GT911 touch (touch-only navigation — no GPIO buttons), BM8563 RTC, GPIO3 ADC battery, LEDC buzzer, SPI MicroSD; power-off is a GPIO44 pulse to the PMS150G latch (`BoardPaperS3::powerOff()`); rotation/touch-flip pending hardware validation |
 | **EEGO A4** | ESP32-S3 N16R8 | UC8279C | 768×552 | GSLX680 touch, PCF8563 RTC, SPI MicroSD, 4-level grayscale in PSRAM |
 | **Murphy M4** | ESP32-S3 N16R8 | SSD1677 | 800×480 | GPIO0 power + GPIO1/2 navigation, background-polled FT6336U touch + RX8010 on shared native I²C1, 25 kHz 10-bit dual warm/cool frontlight, native 4-bit SDMMC |
-| **Onyx Picco / BOOX Tiles** (initial) | ESP32-S3 (16MB flash, 8MB octal PSRAM) | SSD1677 / SSD2677 (auto) | 3.97" 800×480 B/W (portrait) | reuses the SSD1677 driver, native 4-bit SDMMC, GPIO2 power/wake button, PCF8563/BM8563 RTC @0x51 + QMI8658 IMU @0x6A on the shared I2C bus (SDA7/SCL8); Parade TMA525C touch (I2C 0x24), 2-channel warm/cool I2C frontlight (@0x38), slide switch (GPIO6), SGM41562 charger (@0x03) and battery ADC (GPIO1) are wired; nav-button roles are provisional |
+| **Onyx Picco / BOOX Tiles** (initial) | ESP32-S3 (16MB flash, 8MB octal PSRAM) | SSD1677 / SSD2677 (auto) | 3.97" 800×480 B/W (portrait) | reuses the SSD1677 driver, native 4-bit SDMMC, GPIO2 power/wake button, PCF8563/BM8563 RTC @0x51 + QMI8658 IMU @0x6A on the shared I2C bus (SDA7/SCL8); Parade TMA525C touch (I2C 0x24, multi-touch when panel GET_SYSINFO confirms it), 2-channel warm/cool I2C frontlight (@0x38), slide switch (GPIO6), SGM41562 charger (@0x03) and battery ADC (GPIO1) are wired; nav-button roles are provisional |
 
 X3 and X4 share the ESP32-C3 and a pinout, so **one firmware binary drives both**:
 it carries both board profiles (`XTEINK_X4` and `XTEINK_X3`) and picks one at
@@ -309,7 +309,7 @@ reads gated on the active-low IRQ line), **FT6336U** (Murphy M4, 10 ms backgroun
 on native I²C1 because GPIO46 TOUCH_INT is unusable, retaining invalid-frame rejection
 and complete gesture latching), **CST836U** (ReadPico), **GSLX680** (EEGO A4,
 firmware uploaded at boot), **CST816S** (Metalio E-Ink 4, with cover keys) and
-**Parade TMA525C** (Onyx Picco, PIP protocol). A build compiles only the drivers its
+**Parade TMA525C** (Onyx Picco, PIP protocol; stable contact IDs and multi-touch when GET_SYSINFO confirms at least two contacts). A build compiles only the drivers its
 selected devices use (`FREEINK_TOUCH_<CONTROLLER>`, each overridable with `-D`). The
 InputManager exposes `hasTouch/isTouchPressed/wasTouchPressed/wasTouchReleased/getTouchPoint`.
 It delivers coordinates in raw panel orientation, and the app owns display-orientation
