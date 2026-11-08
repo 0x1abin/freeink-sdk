@@ -61,6 +61,9 @@
 #if FREEINK_DRIVER_LGFX_EPD
 #include "driver/LgfxEpdDriver.h"
 #endif
+#if FREEINK_DRIVER_METALIO_PLUS
+#include "driver/MetalioPlusDriver.h"
+#endif
 #if FREEINK_DRIVER_EPDIY_LCD
 #include "driver/EpdiyLcdDriver.h"
 #endif
@@ -282,6 +285,8 @@ void FreeInkDisplay::selectDriver() {
     _driver = &ed2208M5Driver();
 #elif FREEINK_DRIVER_UC8253_X3
     _driver = &uc8253X3Driver();
+#elif FREEINK_DRIVER_METALIO_PLUS
+    _driver = &metalioPlusDriver();
 #elif FREEINK_DRIVER_EPDIY_LCD
     // Raw-parallel panels whose timing the LCD_CAM must generate (DE/HSYNC on
     // hardware plus an RMT gate clock) instead of LovyanGFX's i80 bus.
