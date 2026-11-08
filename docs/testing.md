@@ -154,6 +154,28 @@ output and the actual controller settling time still require a device check.
 
 ## Display drivers
 
+The experimental Metalio E-Ink4-Plus V1.4/S31 build has separate profile and
+display acceptance checks:
+
+```sh
+python3 libs/hardware/BoardConfig/test/host/run_metalio_plus.py
+python3 libs/display/MetalioPlusEpd/test/host/run.py
+python3 libs/display/MetalioPlusEpd/test/host/run_lcd_compat.py
+python3 libs/book/ContentProtection/test/host/run_psa_keygen.py
+```
+
+The profile harness also checks Plus ROM-console logging and unchanged C3 /
+ReadPico logging selection. Native S31 global constructors must not access the
+Arduino HWCDC object before it is constructed.
+
+The display harness compiles the production adapter and PanelDriver against a
+recording vendor API: native stride/polarity, full fallback and failed
+initialization/power/clear/draw/off checks. The LCD harness compiles the production
+clock shim against both known HAL signatures, rejects a mismatched signature and
+rejects a native 250MHz configuration. The PSA harness verifies export and
+cleanup control flow, not RSA mathematics. Actual panel optics, repeated pages,
+200MHz memory configuration and cryptographic operations remain device checks.
+
 ```sh
 python3 libs/display/FreeInkDisplay/test/host/run_bus.py
 python3 libs/display/FreeInkDisplay/test/host/run_pro.py
@@ -247,3 +269,21 @@ python3 libs/hardware/SDCardManager/test/host/test_eego_gpio6.py
 Executes the production SD-init selection block for a responding gauge, an absent
 address, failed bus initialization and a transient bus fault. This verifies pin
 ownership and retry behavior, not physical SD, frontlight or sleep/wake operation.
+
+## Metalio Plus native input and S31 SDMMC
+
+```sh
+python3 libs/hardware/InputManager/test/host/run_metalio_plus.py
+python3 libs/hardware/SDCardManager/test/host/run_s31.py
+```
+
+Compile the production native I/O facade and InputManager with recording BSP/IDF
+boundaries. Screen/strip transition cancellation, home short/held/release,
+failed reads, activity suppression, coordinate bounds and expander debounce are
+covered; no Arduino Wire transaction or per-poll reset is permitted. This does
+not establish the actual sensor transform or physical button polarity.
+
+The SD harness compiles production SdmmcBlockDevice for both S31 and a legacy
+S3 API shape. It checks the bounded aligned internal DMA allocation, host callback,
+slot/pins, cleanup, chunked reads/writes and failure propagation. It does not mount,
+format, write or inspect a physical card. No device acceptance follows from mocks.
