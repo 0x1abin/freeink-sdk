@@ -9,6 +9,8 @@
 #include <Wire.h>
 #include <driver/gpio.h>  // gpio_hold_en/dis in prepareForDeepSleep()/begin()
 
+#include <algorithm>
+
 #include "FrontlightManager.h"
 #ifdef FREEINK_FRONTLIGHT_LS
 #include <driver/ledc.h>
@@ -82,7 +84,19 @@ void pm1FrontlightWrite(uint32_t pct) {
 constexpr uint8_t LEDC_CH_COOL = 0;
 constexpr uint8_t LEDC_CH_WARM = 1;
 
-// Apply the board's output polarity to a logical 0..full LED duty.
+// Scale the total before mixing, so rounding cannot add light as warmth changes.
+uint32_t cappedDuty(uint32_t logicalDuty, uint32_t full, uint16_t maxOutputPermille) {
+  const uint32_t limit = (full * std::min<uint32_t>(maxOutputPermille, 1000u)) / 1000u;
+  uint32_t scaled = 0;
+  if (logicalDuty > 0 && limit > 0) {
+    scaled = static_cast<uint32_t>((static_cast<uint64_t>(std::min(logicalDuty, full)) * limit) / full);
+    // Preserve the dimmest nonzero step under a reduced physical ceiling.
+    if (scaled == 0) scaled = 1;
+  }
+  return scaled;
+}
+
+// Polarity uses the physical range, so active-low off remains full duty.
 uint32_t physicalDuty(uint32_t logicalDuty, uint32_t full, bool activeHigh) {
   return activeHigh ? logicalDuty : full - logicalDuty;
 }
@@ -606,6 +620,7 @@ void FrontlightManager::apply() {
   if (totalDuty > 0 && holdFloor > 0) {
     totalDuty = holdFloor + static_cast<uint32_t>((static_cast<uint64_t>(totalDuty) * (full - holdFloor)) / full);
   }
+  totalDuty = cappedDuty(totalDuty, full, fl.maxOutputPermille);
   uint32_t warmDuty = 0;
   uint32_t coolDuty = totalDuty;
   if (dual) {
@@ -619,7 +634,7 @@ void FrontlightManager::apply() {
   // from dark into the hold band gets a brief burst at the ignition floor, then
   // settles to the target -- which is what lets minHoldPermille sit below
   // minStartPermille and 1% reach a level the boost could never start at.
-  const uint32_t startFloor = (full * fl.minStartPermille + 500u) / 1000u;
+  const uint32_t startFloor = cappedDuty((full * fl.minStartPermille + 500u) / 1000u, full, fl.maxOutputPermille);
   if (_lastTotalDuty == 0 && totalDuty > 0 && startFloor > 0 && totalDuty < startFloor) {
     const uint32_t kickWarm = dual ? (startFloor * _warmPercent + 50u) / 100u : 0;
     writeChannel(fl.gpio, LEDC_CH_COOL, physicalDuty(startFloor - kickWarm, full, fl.activeHigh));
