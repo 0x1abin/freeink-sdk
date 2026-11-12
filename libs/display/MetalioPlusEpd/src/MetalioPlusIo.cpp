@@ -95,6 +95,43 @@ bool metalioPlusTouchBegin() {
   return ready;
 }
 
+bool metalioPlusRtcRead(uint8_t reg, uint8_t* data, size_t size) {
+  const bool time = reg == 0x02 && size == 7;
+  if (!data || (!time && !(reg == 0 && size == 1))) return false;
+  if (!metalio_i2c1_lock(kTimeoutMs)) return false;
+  const uint8_t start = 0;
+  uint8_t raw[9] = {};
+  const auto err = metalio_i2c1_transmit_receive_locked(I2C_NUM_1, 0x51, &start, 1, raw, time ? 9 : 1, kTimeoutMs);
+  metalio_i2c1_unlock();
+  // STOP/test modes cannot provide advancing wall time. Presence still works,
+  // so an explicit trusted set can initialize a stopped or voltage-low clock.
+  if (err != ESP_OK || (time && (raw[0] & 0xa8))) return false;
+  for (size_t i = 0; i < size; ++i) data[i] = raw[i + (time ? 2 : 0)];
+  return true;
+}
+
+bool metalioPlusRtcWriteTime(const uint8_t* bcd) {
+  if (!bcd || !metalio_i2c1_lock(kTimeoutMs)) return false;
+  const uint8_t reg = 0;
+  uint8_t control = 0;
+  auto err = metalio_i2c1_transmit_receive_locked(I2C_NUM_1, 0x51, &reg, 1, &control, 1, kTimeoutMs);
+  if (err == ESP_OK && (control & 0x80)) {
+    metalio_i2c1_unlock();
+    return false;  // TEST1 selects an external test clock; never repurpose it.
+  }
+  // Explicit trusted set also clears TESTC POR override (NXP 8.11.1) to
+  // restore normal operation. Read-only begin/now never change that state.
+  // PCF8563 control0's other bits are reserved and must be written as zero.
+  // Keep STOP asserted on a failed calendar write: partial bytes cannot then
+  // masquerade as valid, advancing time after reboot. No alarm/timer writes.
+  const uint8_t stop = 0x20, run = 0;
+  if (err == ESP_OK) err = metalio_i2c1_write_reg_locked(I2C_NUM_1, 0x51, 0, &stop, 1, kTimeoutMs);
+  if (err == ESP_OK) err = metalio_i2c1_write_reg_locked(I2C_NUM_1, 0x51, 0x02, bcd, 7, kTimeoutMs);
+  if (err == ESP_OK) err = metalio_i2c1_write_reg_locked(I2C_NUM_1, 0x51, 0, &run, 1, kTimeoutMs);
+  metalio_i2c1_unlock();
+  return err == ESP_OK;
+}
+
 bool metalioPlusTouchRead(uint8_t* frame, size_t size) {
   if (!ready || !frame || size != 11) return false;
   return readRegister(0x02, frame, size);

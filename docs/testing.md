@@ -297,3 +297,19 @@ incomplete uploads and power/draw failures. It stages 0/5/10/15 in the existing
 native front plane and commits one panel waveform; no new driver framebuffer is
 allocated. Optical quality, runtime heap and endurance require separate device
 checks; the host transport does not establish them.
+
+## Metalio Plus native RTC
+
+```sh
+python3 libs/hardware/Rtc/test/host/run_metalio_plus.py
+```
+
+Compiles production Rtc and MetalioPlusIo against a recording native-I2C boundary
+with ASan/UBSan. 37 cases check read-only probing, no Wire/Wire1 initialization,
+bus/lock retries, coherent STOP/test/VL/BCD/calendar validation, unchanged failure
+outputs, explicit stop/write/restart, partial-write failure staying stopped and
+preserved alarm/CLKOUT/timer state. Trusted set can recover TESTC POR override
+and VL while TEST1 external-clock mode still rejects writes; each recovery
+transfer failure is covered. No RTC alarm wake is enabled. The native bus owner's
+lazy IDF handle allocation, physical UTC convention, time continuity and
+current/heap costs remain separate device checks.

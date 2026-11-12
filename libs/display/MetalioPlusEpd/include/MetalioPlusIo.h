@@ -9,6 +9,10 @@ namespace freeink {
 // BQ27220: read-only 0x08 voltage, 0x0c signed-current bits, 0x2c SOC.
 // One-second native snapshot; false leaves value unchanged. No gauge/charger writes.
 bool metalioPlusReadGauge16(uint8_t reg, uint16_t& value);
+// PCF8563 uses the existing native owner. Begin is read-only; explicit time
+// writes touch control0/STOP and seven calendar bytes, preserving alarm/CLKOUT.
+bool metalioPlusRtcRead(uint8_t reg, uint8_t* data, size_t size);
+bool metalioPlusRtcWriteTime(const uint8_t* bcd);
 bool metalioPlusTouchBegin();
 bool metalioPlusTouchRead(uint8_t* frame, size_t size);
 // Provisional active-low TCA P10/P11/P17 -> InputManager Up/Down/Power.
