@@ -17,7 +17,7 @@ static_assert(BoardConfig::DEFAULT_DEVICE.board==BoardConfig::Board::MetalioEink
 static_assert(BoardConfig::DEFAULT_DEVICE.displayWidth==1216 && BoardConfig::DEFAULT_DEVICE.displayHeight==684);
 static_assert(BoardConfig::MAX_FRAMEBUFFER_BYTES==103968);
 static_assert(BoardConfig::DEFAULT_DEVICE.display.sclk==BoardConfig::PIN_UNASSIGNED);
-static_assert(BoardConfig::DEFAULT_DEVICE.grayscaleLevels==2);
+static_assert(BoardConfig::DEFAULT_DEVICE.grayscaleLevels==4);
 static_assert(FREEINK_CAP_TOUCH && FREEINK_TOUCH_FT6336U && FREEINK_SD_SDMMC && !FREEINK_CAP_BLE_HID_HOST);
 static_assert(BoardConfig::DEFAULT_DEVICE.touch.reset==BoardConfig::PIN_UNASSIGNED);
 static_assert(BoardConfig::DEFAULT_DEVICE.touch.sda==0 && BoardConfig::DEFAULT_DEVICE.touch.scl==1);

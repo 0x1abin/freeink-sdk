@@ -1,5 +1,6 @@
 #include <MetalioPlusEpd.h>
 
+#include <algorithm>
 #include <cassert>
 #include <cstdio>
 #include <cstring>
@@ -56,6 +57,8 @@ EpdDrawError epd_hl_update_screen(EpdiyHighlevelState* hl, int mode, int tempera
 }
 }
 
+#include "gray_cases.h"
+
 int main(int argc, char** argv) {
   assert(argc == 2);
   const std::string scenario(argv[1]);
@@ -64,7 +67,7 @@ int main(int argc, char** argv) {
   freeink::EpdBus bus;
   freeink::MetalioPlusDriver driver;
   assert(driver.usesExternalBus() && !driver.supportsAsyncDisplay());
-  assert(!driver.grayscaleCapabilities().supported() && driver.beginGrayscale16() == nullptr);
+  assert(driver.beginGrayscale16() == nullptr);
   const auto geometry = driver.geometry();
   assert(geometry.width == 1216 && geometry.height == 684 && geometry.widthBytes == 152 &&
          geometry.bufferSize == 103968);
@@ -73,6 +76,11 @@ int main(int argc, char** argv) {
   std::vector<uint8_t> frame(103968, 0xff);
   frame.front() = 0x81;
   frame.back() = 0x01;
+  if (scenario.rfind("gray_", 0) == 0) {
+    runGrayScenario(driver, bus, scenario, frame);
+    std::printf("Metalio Plus %s: passed\n", scenario.c_str());
+    return 0;
+  }
   if (scenario == "modes" || scenario == "resync" || scenario == "sleep_recovery" || scenario == "diff_failure" ||
       scenario == "diff_power_failure" || scenario == "diff_off_failure") {
     // Any first request establishes a physical baseline, even a Fast request.

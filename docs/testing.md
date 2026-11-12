@@ -287,3 +287,13 @@ The SD harness compiles production SdmmcBlockDevice for both S31 and a legacy
 S3 API shape. It checks the bounded aligned internal DMA allocation, host callback,
 slot/pins, cleanup, chunked reads/writes and failure propagation. It does not mount,
 format, write or inspect a physical card. No device acceptance follows from mocks.
+
+## Metalio Plus combined four-level grayscale
+
+The existing `libs/display/MetalioPlusEpd/test/host/run.py` harness now runs
+34 production driver/backend cases, including whole/strip uploads, consecutive
+gray pages, grayscale-to-B/W cleanup, periodic full refresh, cancellation,
+incomplete uploads and power/draw failures. It stages 0/5/10/15 in the existing
+native front plane and commits one panel waveform; no new driver framebuffer is
+allocated. Optical quality, runtime heap and endurance require separate device
+checks; the host transport does not establish them.

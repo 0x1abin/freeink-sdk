@@ -18,6 +18,7 @@ bool attempted = false;
 bool ready = false;
 bool powerFault = false;
 bool baselineKnown = false;
+bool targetStaged = false;
 
 bool powerOffChecked() {
   epd_poweroff();
@@ -46,8 +47,28 @@ bool metalioPlusEpdBegin() {
   return ready;
 }
 
-bool metalioPlusEpdDraw(const uint8_t* framebuffer, MetalioPlusRefresh mode) {
-  if (!ready || powerFault || !framebuffer) return false;
+uint8_t* metalioPlusEpdStageBase(const uint8_t* framebuffer) {
+  targetStaged = false;
+  if (!ready || powerFault || !framebuffer) return nullptr;
+  auto* target = epd_hl_get_framebuffer(MetalioEpd_Hl());
+  // The native front plane is scratch until committed. Preserve the back plane
+  // representing completed ink, including on cancellation or invalid uploads.
+  for (int byte = 0; byte < kFrameBytes; ++byte) {
+    const uint8_t value = framebuffer[byte];
+    for (int pair = 0; pair < 4; ++pair) {
+      const unsigned shift = 6 - pair * 2;
+      const uint8_t even = (value & (1u << (shift + 1))) ? 0x0f : 0;
+      const uint8_t odd = (value & (1u << shift)) ? 0xf0 : 0;
+      target[byte * 4 + pair] = even | odd;
+    }
+  }
+  targetStaged = true;
+  return target;
+}
+
+bool metalioPlusEpdCommit(MetalioPlusRefresh mode) {
+  if (!ready || powerFault || !targetStaged) return false;
+  targetStaged = false;
   const auto started = millis();
   const bool clean = !baselineKnown || mode == MetalioPlusRefresh::Full;
   const auto waveform = clean ? MODE_GC16 : (mode == MetalioPlusRefresh::Half ? MODE_GL16 : MODE_DU);
@@ -63,19 +84,6 @@ bool metalioPlusEpdDraw(const uint8_t* framebuffer, MetalioPlusRefresh mode) {
   auto result = clean ? epd_clear_checked() : EPD_DRAW_SUCCESS;
   if (result == EPD_DRAW_SUCCESS) {
     auto* hl = MetalioEpd_Hl();
-    auto* target = epd_hl_get_framebuffer(hl);
-    // No allocation: expand into the vendor's existing native PSRAM plane.
-    // Source is MSB-first 1bpp, white=1. epdiy packs even pixels in the low
-    // nibble, white=15; preserve the native landscape row order and stride.
-    for (int byte = 0; byte < kFrameBytes; ++byte) {
-      const uint8_t value = framebuffer[byte];
-      for (int pair = 0; pair < 4; ++pair) {
-        const unsigned shift = 6 - pair * 2;
-        const uint8_t even = (value & (1u << (shift + 1))) ? 0x0f : 0;
-        const uint8_t odd = (value & (1u << shift)) ? 0xf0 : 0;
-        target[byte * 4 + pair] = even | odd;
-      }
-    }
     // Full/recovery retains the accepted physical-white initialization. Ordinary
     // power-off does not destroy the vendor's committed PSRAM back framebuffer.
     // No PREVIOUSLY_WHITE hint is valid for a differential page transition.
@@ -89,9 +97,19 @@ bool metalioPlusEpdDraw(const uint8_t* framebuffer, MetalioPlusRefresh mode) {
   return baselineKnown;
 }
 
-void metalioPlusEpdRequestResync() { baselineKnown = false; }
+bool metalioPlusEpdDraw(const uint8_t* framebuffer, MetalioPlusRefresh mode) {
+  return metalioPlusEpdStageBase(framebuffer) && metalioPlusEpdCommit(mode);
+}
+
+void metalioPlusEpdCancelStage() { targetStaged = false; }
+
+void metalioPlusEpdRequestResync() {
+  targetStaged = false;
+  baselineKnown = false;
+}
 
 void metalioPlusEpdSleep() {
+  targetStaged = false;
   baselineKnown = false;
   if (attempted) powerOffChecked();
 }

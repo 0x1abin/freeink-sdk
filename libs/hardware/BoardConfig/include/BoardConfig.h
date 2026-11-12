@@ -1781,7 +1781,7 @@ constexpr BoardProfile METALIO_EINK4_PLUS = {
     {},
     false,
     NO_I2C_FRONTLIGHT,
-    2};
+    4};
 
 // --- Onyx Picco / BOOX Tiles — ESP32-S3 (16MB flash, 8MB octal PSRAM), SSD1677/2677 ---
 // Ultra-compact 3.97" 800x480 mono e-reader. Everything below was recovered from
