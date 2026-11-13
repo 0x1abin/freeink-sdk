@@ -2208,6 +2208,39 @@ void testBatteryIndicator() {
   props.percent = 250;
   batteryIndicator(frame3, Rect{400, 0, 80, 20}, props);
   CHECK_EQ(draw3.ops[2].rect.width, 18);
+
+  struct GlyphFixture { int calls = 0; bool handled = true; } fixture;
+  props.glyphWidth = 30;
+  props.glyphHeight = 24;
+  props.label = "100%";
+  props.glyphPainterUserData = &fixture;
+  props.glyphPainter = [](DrawTarget& target, Rect rect, const BatteryIndicatorProps& values, void* context) {
+    auto& state = *static_cast<GlyphFixture*>(context);
+    ++state.calls;
+    CHECK_EQ(rect.x, 448);
+    CHECK_EQ(rect.y, 12);
+    CHECK_EQ(rect.width, 32);
+    CHECK_EQ(rect.height, 24);
+    CHECK_EQ(values.percent, 250);
+    if (state.handled) target.fill(rect, Paint::solid(Color::Black));
+    return state.handled;
+  };
+  FakeDrawTarget custom;
+  Frame<4> customFrame(custom, device, input, interactions);
+  batteryIndicator(customFrame, Rect{400, 0, 80, 48}, props);
+  CHECK_EQ(fixture.calls, 1);
+  CHECK_EQ(custom.countKind(FakeDrawTarget::Op::Stroke), 0u);
+  CHECK_EQ(custom.countKind(FakeDrawTarget::Op::Fill), 1u);
+  CHECK_EQ(custom.countKind(FakeDrawTarget::Op::Text), 1u);
+  CHECK_EQ(custom.ops[1].rect.y, 18);
+
+  fixture.handled = false;
+  FakeDrawTarget fallback;
+  Frame<4> fallbackFrame(fallback, device, input, interactions);
+  batteryIndicator(fallbackFrame, Rect{400, 0, 80, 48}, props);
+  CHECK_EQ(fixture.calls, 2);
+  CHECK_EQ(fallback.countKind(FakeDrawTarget::Op::Stroke), 1u);
+  CHECK_EQ(fallback.countKind(FakeDrawTarget::Op::Text), 1u);
 }
 
 void testMetricCard() {
