@@ -1,0 +1,44 @@
+{
+  "name": "MetalioPlusEpd",
+  "version": "0.1.0",
+  "description": "Experimental ESP32-S31 Metalio E-Ink4-Plus V1.4 checked full B/W backend; frozen vendor display sources.",
+  "platforms": [
+    "espressif32"
+  ],
+  "frameworks": [
+    "arduino"
+  ],
+  "build": {
+    "srcFilter": [
+      "-<*>",
+      "+<MetalioPlusEpd.cpp>",
+      "+<MetalioPlusIo.cpp>",
+      "+<MetalioPlusPower.cpp>",
+      "+<MetalioPlusBoot.cpp>",
+      "+<sd_release_hold.c>",
+      "+<vendor/bus/metalio_i2c1.c>",
+      "+<vendor/bus/pca9555.c>",
+      "+<vendor/bus/tps65185.c>",
+      "+<vendor/display/board_specific.c>",
+      "+<vendor/display/builtin_waveforms.c>",
+      "+<vendor/display/displays.c>",
+      "+<vendor/display/epd_board.c>",
+      "+<vendor/display/epd_board_common.c>",
+      "+<vendor/display/epd_board_metalio_eink4_plus.c>",
+      "+<vendor/display/epdiy.c>",
+      "+<vendor/display/epdiy_riscv_ve_stub.c>",
+      "+<vendor/display/highlevel.c>",
+      "+<vendor/display/metalio_epd.c>",
+      "+<vendor/display/render.c>",
+      "+<vendor/display/output_common/line_queue.c>",
+      "+<vendor/display/output_common/lut.c>",
+      "+<vendor/display/output_common/render_context.c>",
+      "+<vendor/display/output_common/render_method.c>",
+      "+<lcd_idf_compat.c>",
+      "+<vendor/display/output_lcd/render_lcd.c>",
+      "+<vendor/display/waveforms/my_waveform.c>",
+      "+<vendor/display/waveforms/my_waveform_trim.c>"
+    ],
+    "extraScript": "build.py"
+  }
+}

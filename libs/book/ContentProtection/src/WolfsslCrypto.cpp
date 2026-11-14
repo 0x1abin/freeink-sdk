@@ -30,10 +30,12 @@
 #include <wolfssl/wolfcrypt/sha.h>
 #include <wolfssl/wolfcrypt/sha256.h>
 
-#if defined(ESP_PLATFORM)
+#if defined(ESP_PLATFORM) && __has_include(<mbedtls/rsa.h>)
 #include <mbedtls/esp_mbedtls_random.h>
 #include <mbedtls/pk.h>
 #include <mbedtls/rsa.h>
+#elif defined(ESP_PLATFORM)
+#include "EspPsaRsaKeygen.h"
 #endif
 
 #include <stdlib.h>
@@ -259,7 +261,7 @@ bool WolfsslCrypto::rsaGenerate(RsaKeyPairDer* out) {
     lastError = "rng not initialized";
     return false;
   }
-#if defined(ESP_PLATFORM)
+#if defined(ESP_PLATFORM) && __has_include(<mbedtls/rsa.h>)
   // wolfSSL 5.7.2's Tom's Fast Math key-generation path is unstable on the
   // ESP32-C3 (the Miller-Rabin test faults in fp_mul_comba). ESP-IDF already
   // ships mbedTLS with RSA key generation enabled, so use it for this one
@@ -291,6 +293,22 @@ bool WolfsslCrypto::rsaGenerate(RsaKeyPairDer* out) {
   }
 
   mbedtls_pk_free(&key);
+  return ok;
+#elif defined(ESP_PLATFORM)
+  // IDF6 removes the public legacy RSA key-generation API. PSA retains the
+  // same 1024-bit RSA/exponent-65537 generation and PKCS#1 DER exports; keep
+  // the established outer SPKI / PKCS#8 formats consumed by account plugins.
+  uint8_t pubBuf[192];
+  uint8_t privBuf[1024];
+  size_t pubLen = 0;
+  size_t privLen = 0;
+  const auto status = generatePsaRsaPkcs1(pubBuf, sizeof(pubBuf), &pubLen, privBuf, sizeof(privBuf), &privLen);
+  if (status != PSA_SUCCESS) {
+    lastError = "PSA RSA keygen/export rc=" + std::to_string(status);
+    return false;
+  }
+  const bool ok = wrapSpki(pubBuf, pubLen, &out->spki) && wrapPkcs8(privBuf, privLen, &out->pkcs8);
+  if (!ok) lastError = "der wrap failed";
   return ok;
 #else
   ScopedRsaKey key;

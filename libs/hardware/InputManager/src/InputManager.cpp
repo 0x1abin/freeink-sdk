@@ -3,6 +3,9 @@
 #include <algorithm>
 
 #include "MultiTouchGestureMath.h"
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+#include <MetalioPlusIo.h>
+#endif
 #if FREEINK_DEVICE_METALIO_EINK4
 #include <MetalioEInk4Board.h>
 #endif
@@ -69,8 +72,8 @@ const char *InputManager::BUTTON_NAMES[] = {"Back", "Confirm", "Left", "Right",
 namespace {
 int absInt(const int value) { return value < 0 ? -value : value; }
 
-#if FREEINK_TOUCH_GSLX680 || FREEINK_DEVICE_MURPHY_M4 ||                      \
-    FREEINK_TOUCH_CST816S || FREEINK_DEVICE_READPICO
+#if FREEINK_TOUCH_GSLX680 || FREEINK_DEVICE_MURPHY_M4 || FREEINK_TOUCH_CST816S || FREEINK_DEVICE_READPICO || \
+    (FREEINK_DEVICE_METALIO_EINK4_PLUS && FREEINK_TOUCH_FT6336U)
 bool movedBeyondSlop(const int dx, const int dy, const int slop) {
   return absInt(dx) > slop || absInt(dy) > slop;
 }
@@ -115,6 +118,9 @@ static constexpr uint32_t METALIO_BOOT_WAIT_MS = 3000;
 #endif
 
 void InputManager::begin() {
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+  static_assert(BTN_UP == 4 && BTN_DOWN == 5 && BTN_POWER == 6);
+#endif
 #if FREEINK_DEVICE_PICCO
   // pinMode preserves wake interrupt types; a held polled button must not trigger a level ISR.
   if (BoardConfig::isPicco() && BoardConfig::ACTIVE.input.power >= 0) {
@@ -213,6 +219,11 @@ void InputManager::readButtonAdc(ButtonAdcSample &group1,
 }
 
 uint8_t InputManager::getPhysicalState() {
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+  uint8_t native = 0;
+  plusPhysicalFault = !freeink::metalioPlusReadButtons(native);
+  return getDigitalState() | native;
+#endif
   uint8_t state = 0;
 
   if (BoardConfig::ACTIVE.inputStyle ==
@@ -823,6 +834,9 @@ void InputManager::updateFunctionMultiGesture(const unsigned long currentTime) {
 #endif
 
 void InputManager::update() {
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+  plusCleanupRelease = false;
+#endif
   const unsigned long currentTime = millis();
 
   pressedEvents = 0;
@@ -868,9 +882,25 @@ void InputManager::update() {
 #endif
 
   const uint8_t physicalState = getPhysicalState();
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+  const uint8_t virtualState = serviceTouch();
+  const uint8_t hookedState = s_buttonHook ? s_buttonHook() : 0;
+  uint8_t state = physicalState | virtualState | hookedState;
+  // Discard fault/cancellation releases before ordinary debounce can publish
+  // them as navigation. Preserve a real physical key held under the same bit.
+  uint8_t canceled = plusCanceledButtons & ~(physicalState | hookedState);
+  if (plusPhysicalFault) {
+    constexpr uint8_t nativeKeys = (1u << BTN_UP) | (1u << BTN_DOWN) | (1u << BTN_POWER);
+    canceled |= nativeKeys & ~(virtualState | getDigitalState() | hookedState);
+  }
+  currentState &= ~canceled;
+  lastState &= ~canceled;
+  plusCanceledButtons = 0;
+#else
   uint8_t state = physicalState | serviceTouch();
   if (s_buttonHook)
     state |= s_buttonHook();
+#endif
 
   // Debounce
   if (state != lastState) {
@@ -906,6 +936,10 @@ bool InputManager::isPressed(const uint8_t buttonIndex) const {
 }
 
 bool InputManager::isPowerButtonPhysicallyPressed() const {
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+  uint8_t native = 0;
+  return freeink::metalioPlusReadButtons(native) && (native & (1u << BTN_POWER));
+#endif
   const int8_t pin = BoardConfig::ACTIVE.input.power;
   if (pin < 0)
     return false;
@@ -1022,6 +1056,11 @@ bool InputManager::wasTouchPressed() const {
   return touchPressedEvent && !touchMultiContactSequence;
 }
 bool InputManager::wasTouchReleased() const {
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+  // UI controls still need their raw cleanup edge after a canceled contact.
+  // Tap/swipe classifiers remain suppressed by touchSuppressed.
+  if (plusCleanupRelease) return true;
+#endif
   // A multi-touch gesture must still provide the raw release edge so UI code
   // can drop pressed-state feedback, even though its tap/drag classifiers are
   // suppressed below.
@@ -1253,6 +1292,10 @@ bool InputManager::wasTouchLongPress(float &nx, float &ny) const {
 }
 
 void InputManager::suppressTouchContact() {
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+  plusCanceledButtons |= plusVirtualButtons;
+  plusVirtualButtons = 0;
+#endif
 #if FREEINK_DEVICE_METALIO_EINK4
   touchContactPressedEvent = false;
 #endif
@@ -1262,6 +1305,9 @@ void InputManager::suppressTouchContact() {
   if (touchPressed || touchReleasedEvent || touchHomeKeyDown
 #if FREEINK_DEVICE_METALIO_EINK4
       || cstContact.region != freeink::Cst816sRegion::None
+#endif
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+      || plusRegion != PlusRegion::None
 #endif
   )
     touchSuppressed = true;
@@ -1776,7 +1822,9 @@ void InputManager::beginTouch() {
 #endif
 #if FREEINK_TOUCH_FT6336U
   if (t.controller == BoardConfig::TouchController::Ft6336u) {
-#if FREEINK_DEVICE_MURPHY_M4
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+    beginPlusTouch();
+#elif FREEINK_DEVICE_MURPHY_M4
     beginFt6336u(true);
 #else
     beginFt6336u();
@@ -1837,6 +1885,9 @@ uint8_t InputManager::serviceTouch() {
 #if FREEINK_DEVICE_METALIO_EINK4
       && cstContact.region == freeink::Cst816sRegion::None
 #endif
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+      && plusRegion == PlusRegion::None
+#endif
   ) {
     touchSuppressed = false;
     touchLongPressFired = false;
@@ -1864,7 +1915,11 @@ uint8_t InputManager::serviceTouch() {
 #endif
 #if FREEINK_TOUCH_FT6336U
     case BoardConfig::TouchController::Ft6336u:
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+      plusVirtualButtons = pollPlusTouch(now);
+#else
       pollFt6336u(now);
+#endif
       break;
 #endif
 #if FREEINK_TOUCH_GSLX680
@@ -1909,6 +1964,9 @@ uint8_t InputManager::serviceTouch() {
 #if FREEINK_DEVICE_READPICO
   if (t.controller == BoardConfig::TouchController::Cst836u)
     return cst836uButtons;
+#endif
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+  return touchSuppressed ? 0 : plusVirtualButtons;
 #endif
   return (t.synthesizeConfirm && now < touchIrqPulseUntil) ? (1 << BTN_CONFIRM)
                                                            : 0;
@@ -2032,8 +2090,8 @@ uint16_t InputManager::mapTouchAxis(uint16_t raw, const uint16_t rawMin,
   return static_cast<uint32_t>(raw - rawMin) * outMax / (rawMax - rawMin);
 }
 
-#if FREEINK_TOUCH_GSLX680 || FREEINK_DEVICE_MURPHY_M4 ||                      \
-    FREEINK_TOUCH_CST816S || FREEINK_DEVICE_READPICO
+#if FREEINK_TOUCH_GSLX680 || FREEINK_DEVICE_MURPHY_M4 || FREEINK_TOUCH_CST816S || FREEINK_DEVICE_READPICO || \
+    FREEINK_DEVICE_METALIO_EINK4_PLUS
 InputManager::TouchPoint
 InputManager::mapTouchPoint(const uint16_t rawX, const uint16_t rawY,
                             const unsigned long now) const {
@@ -3685,7 +3743,83 @@ void InputManager::gt911SetStatusFault(const bool fault) {
 
 #endif  // FREEINK_TOUCH_GT911 (pollGt911 is further down)
 
-#if FREEINK_TOUCH_FT6336U && !FREEINK_DEVICE_MURPHY_M4
+#if FREEINK_TOUCH_FT6336U && FREEINK_DEVICE_METALIO_EINK4_PLUS
+void InputManager::beginPlusTouch() {
+  pinMode(BoardConfig::ACTIVE.touch.irq, INPUT_PULLUP);
+  touchDataEnabled = freeink::metalioPlusTouchBegin();
+}
+
+uint8_t InputManager::pollPlusTouch(const unsigned long now) {
+  if (static_cast<int32_t>(now - touchReadAt) < 0) return plusVirtualButtons;
+  touchReadAt = now + 10;
+  uint8_t frame[11] = {};
+  const auto cancel = [&]() {
+    plusRegion = PlusRegion::Blocked;
+    plusCanceledButtons |= plusVirtualButtons;
+    plusVirtualButtons = 0;
+    plusCleanupRelease = touchPressed;
+    touchSuppressed = true;
+    touchHomeKeyDown = false;
+    touchMovedBeyondTapSlop = touchMovedBeyondTapReleaseSlop = true;
+    releaseTouch(now);
+  };
+  if (!freeink::metalioPlusTouchRead(frame, sizeof(frame))) {
+    cancel();
+    return 0;
+  }
+  const uint8_t count = frame[0] & 0x0f;
+  const uint8_t event = frame[1] >> 6;
+  if (count == 0 || (count == 1 && event == 1)) {
+    if (touchHomeKeyDown && !touchHomeKeyLongFired && !touchSuppressed) touchHomeKeyTapEvent = true;
+    touchHomeKeyDown = false;
+    releaseTouch(now);
+    plusRegion = PlusRegion::None;
+    return 0;
+  }
+  if (count != 1 || (event != 0 && event != 2)) {
+    cancel();
+    return 0;
+  }
+  const uint16_t x = (uint16_t(frame[1] & 0x0f) << 8) | frame[2];
+  const uint16_t y = (uint16_t(frame[3] & 0x0f) << 8) | frame[4];
+  PlusRegion region = PlusRegion::Blocked;
+  if (x < 684 && y < 1216)
+    region = PlusRegion::Screen;
+  else if (y >= 1570 && y <= 1630) {
+    if (x >= 70 && x <= 130)
+      region = PlusRegion::Home;
+    else if (x >= 170 && x <= 230)
+      region = PlusRegion::Previous;
+    else if (x >= 270 && x <= 330)
+      region = PlusRegion::Next;
+  }
+  if (region == PlusRegion::Blocked || (plusRegion != PlusRegion::None && plusRegion != region)) {
+    cancel();
+    return 0;
+  }
+  const bool first = plusRegion == PlusRegion::None;
+  plusRegion = region;
+  if (region == PlusRegion::Screen) {
+    updateTouchContact(mapTouchPoint(x, y, now));
+  } else if (region == PlusRegion::Home) {
+    touchHomeKeyDown = true;
+    if (first) {
+      touchHomeKeyDownAt = now;
+      touchHomeKeyLongFired = false;
+      touchHomeKeyEvent = !touchSuppressed;
+    } else if (!touchHomeKeyLongFired && now - touchHomeKeyDownAt >= HOME_KEY_LONG_PRESS_MS) {
+      touchHomeKeyLongFired = true;
+      touchHomeKeyLongEvent = !touchSuppressed;
+    }
+  }
+  if (touchSuppressed) return 0;
+  if (region == PlusRegion::Previous) return 1u << BTN_UP;
+  if (region == PlusRegion::Next) return 1u << BTN_DOWN;
+  return 0;
+}
+#endif
+
+#if FREEINK_TOUCH_FT6336U && !FREEINK_DEVICE_MURPHY_M4 && !FREEINK_DEVICE_METALIO_EINK4_PLUS
 void InputManager::beginFt6336u() {
   const auto& t = BoardConfig::ACTIVE.touch;
 

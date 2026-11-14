@@ -168,6 +168,8 @@ public:
   uint8_t capacitivePageButtonMask() const {
 #if FREEINK_CAP_TOUCH && FREEINK_DEVICE_METALIO_EINK4
     return cstVirtualButtons;
+#elif FREEINK_CAP_TOUCH && FREEINK_DEVICE_METALIO_EINK4_PLUS
+    return touchSuppressed ? 0 : plusVirtualButtons;
 #else
     return 0;
 #endif
@@ -437,8 +439,8 @@ private:
                          TouchPoint &point) const;
   uint16_t mapTouchAxis(uint16_t raw, uint16_t rawMin, uint16_t rawMax,
                         uint16_t outMax) const;
-#if FREEINK_TOUCH_GSLX680 || FREEINK_DEVICE_MURPHY_M4 ||                      \
-    FREEINK_TOUCH_CST816S || FREEINK_DEVICE_READPICO
+#if FREEINK_TOUCH_GSLX680 || FREEINK_DEVICE_MURPHY_M4 || FREEINK_TOUCH_CST816S || FREEINK_DEVICE_READPICO || \
+    FREEINK_DEVICE_METALIO_EINK4_PLUS
   TouchPoint mapTouchPoint(uint16_t rawX, uint16_t rawY,
                            unsigned long now) const;
   void updateTouchContact(const TouchPoint &point);
@@ -534,7 +536,17 @@ private:
   uint8_t cst836uDecodeFrame(const uint8_t *data, unsigned long now);
 #endif
 
-#if FREEINK_TOUCH_FT6336U && !FREEINK_DEVICE_MURPHY_M4
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+  void beginPlusTouch();
+  uint8_t pollPlusTouch(unsigned long now);
+  enum class PlusRegion : uint8_t { None, Screen, Home, Previous, Next, Blocked };
+  PlusRegion plusRegion = PlusRegion::None;
+  uint8_t plusVirtualButtons = 0;
+  uint8_t plusCanceledButtons = 0;
+  bool plusPhysicalFault = false;
+  bool plusCleanupRelease = false;
+#endif
+#if FREEINK_TOUCH_FT6336U && !FREEINK_DEVICE_MURPHY_M4 && !FREEINK_DEVICE_METALIO_EINK4_PLUS
   void beginFt6336u();
   void pollFt6336u(unsigned long now);
 #endif
