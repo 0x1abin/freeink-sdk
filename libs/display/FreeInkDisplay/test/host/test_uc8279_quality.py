@@ -8,7 +8,7 @@ import tempfile
 root = Path(__file__).resolve().parents[2]
 source = (root / "src/driver/Uc8279X4Driver.cpp").read_text()
 function = source[source.index("struct GrayBank"):
-                  source.index("// Register order for the quality bank")]
+                  source.index("// Register order for")]
 # Byte-for-byte output of upstream 14028b17 before packing Phase's bounded fields.
 expected = {
     1: "59701a2b7e6e3bc769f6166cd560a7ced04740f63a9272931356df730b4f08a8",

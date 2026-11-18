@@ -35,8 +35,13 @@ sh libs/book/ContentProtection/test/host/run.sh
 sh libs/hardware/InputManager/test/host/run.sh
 sh libs/hardware/InputManager/test/host/run_metalio.sh
 sh libs/hardware/InputManager/test/host/run_eego.sh
+sh libs/hardware/InputManager/test/host/run_papermono.sh
 sh libs/hardware/HapticManager/test/host/run.sh
 ```
+
+The Paper Mono input suite disables touch and models PMIC click reports. It checks
+that delayed polling does not lengthen clicks and that two-button Power chords
+retain their hold duration, including clicks that overlap a chord.
 
 The book suite also needs `zip`. It uses `sips` or ImageMagick's `convert` for
 JPEG fixtures and optionally Pillow for progressive JPEG fixtures; the related
@@ -75,8 +80,18 @@ Also covers signed charging-current reads, bounded NACK/short-read retries,
 receive-buffer cleanup, and recovery after `Wire.begin()` fails. Both X3 profiles
 must leave USB detection unassigned while X4 keeps GPIO20; first battery queries
 must initialize the shared bus after the boot probe releases it or when detection
-uses a cached board profile, regardless of RTC/IMU initialization order. A model
-SGM41562 checks Picco charger status, input detection, setup, and ship mode.
+uses a cached board profile, regardless of RTC/IMU initialization order.
+A model SGM41562 checks Picco charger status as a single register snapshot,
+input detection, setup, and ship mode. The suite also covers three-conversion
+ADC median, charging endpoint and completion state,
+and the allocation-free `BatteryEstimate` presentation filter. The estimator
+checks include unplug settling, low-voltage correction, failed samples, sleep
+reconciliation and retained-state validation.
+The flash-at-near-full regression covers a 4.340 V cell still reporting active
+charging: its stock voltage estimate can reach 100% without inventing charger
+completion. Lower voltage held on USB alone does not become full over time.
+These are model checks; actual voltage calibration, charge termination and power
+usage still need a Picco.
 
 ## Motion sensors
 
@@ -97,6 +112,7 @@ the configuration file, so the sensor's data path still needs a device.
 ```sh
 sh libs/font/FreeInkFont/test/host/run.sh
 sh libs/font/FreeInkFont/test/host/run_ligature.sh
+sh libs/font/FreeInkFont/test/host/run_gpos.sh
 ```
 
 Covers `FtFont::RenderOptions` (every `HintingMode` plus monochrome) against a
@@ -108,6 +124,11 @@ Covers `FtFont::ligature()`/`ligatureGlyphId()` (GSUB-based) against a real
 bundled font: exact-value assertions for the five standard Latin ligatures,
 the codepoint-vs-glyph-ID contract boundary, deinit()/re-init cache
 invalidation, and a null-pointer safety check on `Gsub::LigatureGlyphId`.
+
+The GPOS suite covers pair formats and extension lookups, GDEF-based LookupFlag
+filtering (glyph classes, mark attachment classes, and mark filtering sets), and
+truncated/corrupt tables under ASan/UBSan. It checks resident and streamed kerning,
+the combined GPOS/GDEF stream budget, and cache release/reinitialization.
 
 ## BLE HID host
 
@@ -151,6 +172,12 @@ wake delays, and retry after a failed wake transaction. Sweeps brightness in bot
 directions at all 101 warmth settings, checking fine PWM steps, minimum and maximum
 output, disabled channels at zero PWM, and restoration after off/on. Physical light
 output and the actual controller settling time still require a device check.
+
+
+The same runner also compiles EEGO A4 with its real profile. The register model
+covers exponential light-share mixing, minimum visible codes, endpoints,
+off/sleep sequencing, configuration retry and factory-UID exclusion. Brightness,
+colour, shared-bus concurrency and sleep current still need hardware validation.
 
 ## Display drivers
 
@@ -333,3 +360,15 @@ dispatch and the legacy virtual fallback. Native16 optical separation and
 bounded reader/image acceptance were recorded in CrossMux on one V1.4 unit;
 these host checks alone do not establish optical output, low-power behavior,
 or field endurance.
+
+## OPDS authentication
+
+```sh
+sh libs/network/Opds/test/host/run.sh
+```
+
+Requires host Expat headers and library. Runs the production OPDS client and
+parsers with a scripted transport under ASan/UBSan. Covers public Atom browsing
+with protected acquisitions, Basic challenge headers and OPDS documents, rejected
+credentials, OAuth login/refresh, and cross-origin challenge rejection. Device
+tests must still verify the consumer's download retry, cancellation, and heap.

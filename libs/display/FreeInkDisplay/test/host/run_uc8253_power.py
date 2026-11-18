@@ -40,13 +40,14 @@ inline struct { unsigned short displayWidth=792, displayHeight=528; unsigned dis
 #include <cstdint>
 #include <cstddef>
 #include <vector>
+#include <cstring>
 namespace freeink {
 enum class BusyPolarity { X3TwoPhase };
 class EpdBus {
   uint8_t command=0;
 public:
   std::vector<uint8_t> oldPlane, newPlane, lastBank, rawRegisters;
-  unsigned powerOns=0, refreshes=0;
+  unsigned powerOns=0, refreshes=0, pollingRefreshWaits=0, interruptWaits=0;
   void cmd(uint8_t c) { command=c; if(c == 4) ++powerOns; if(c == 0x12) ++refreshes; }
   void cmdData2(uint8_t c, uint8_t a, uint8_t b) { cmd(c); data(a); data(b); }
   void data(uint8_t) {}
@@ -70,8 +71,8 @@ public:
     (c == 0x10 ? oldPlane : newPlane).assign(size_t(h)*wb,v);
   }
   void reset(int) {}
-  void waitBusy(const char*) {}
-  void waitRefreshComplete(const char*) {}
+  void waitBusy(const char* tag) { if (!std::strcmp(tag, " X3_DRF")) ++pollingRefreshWaits; }
+  void waitRefreshComplete(const char*) { ++interruptWaits; }
   struct Pins { int8_t busy=0; };
   Pins pins() const { return {}; }
   struct Transaction { void writeBytes(const uint8_t*, size_t) {} void end() {} };
@@ -82,6 +83,7 @@ public:
     (root / "test.cpp").write_text("""
 #include <cassert>
 #include <vector>
+#include <cstring>
 #include <iostream>
 #include "driver/Uc8253X3Driver.h"
 int main() {
@@ -90,7 +92,15 @@ int main() {
  assert(caps.supported() && caps.stripUploads && !caps.asyncBase && !caps.stagingWhileBusy);
  assert(d.grayscaleCapabilities(freeink::GrayscaleMode::Direct).base == freeink::GrayscaleBase::Combined);
  std::vector<uint8_t> fb(792/8*528, 0xAA); d.begin(bus);
- d.display(bus,fb.data(),nullptr,freeink::RefreshMode::Full,false);
+ assert(d.supportsAsyncDisplay());
+ assert(d.displayStart(bus,fb.data(),nullptr,freeink::RefreshMode::Fast,false));
+ assert(bus.refreshes == 1 && bus.interruptWaits == 0);
+ d.displayFinish(bus,fb.data());
+ assert(bus.interruptWaits == 1 && bus.pollingRefreshWaits == 2); // existing boot conditioning polls
+ const auto bootRefreshes = bus.refreshes;
+ d.display(bus,fb.data(),nullptr,freeink::RefreshMode::Fast,false);
+ assert(bus.refreshes == bootRefreshes + 1 && bus.interruptWaits == 2);
+ assert(bus.pollingRefreshWaits == 2); // no additional full-sync conditioning on the second screen
  assert(bus.powerOns == 1);
  d.display(bus,fb.data(),nullptr,freeink::RefreshMode::Full,false);
  assert(bus.powerOns == 1);

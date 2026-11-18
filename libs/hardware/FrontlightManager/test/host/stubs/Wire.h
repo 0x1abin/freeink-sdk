@@ -11,6 +11,7 @@ struct WireStub {
   unsigned rejectedWrites = 0;
   int failRegister = -1;
   bool present = true;
+  uint8_t deviceAddress = 0x38;
   WireStub() { regs[0] = 0x80; }
   void begin(int, int, uint32_t) {}
   void setTimeOut(unsigned) {}
@@ -21,7 +22,7 @@ struct WireStub {
   void write(uint8_t value) { tx.push_back(value); }
   uint8_t control() const { return regs[0] | ((regs[0] & 0x80) || fakeNow < awakeAt ? 0x40 : 0); }
   int endTransmission(bool = true) {
-    if (address != 0x38 || !present) return 2;
+    if (address != deviceAddress || !present) return 2;
     if (tx.empty()) return 0;
     pointer = tx[0];
     if (tx.size() == 1) return 0;
@@ -43,7 +44,7 @@ struct WireStub {
       regs[pointer] = value;
     return 0;
   }
-  uint8_t requestFrom(uint8_t addr, uint8_t n, uint8_t) { return present && addr == 0x38 ? n : 0; }
+  uint8_t requestFrom(uint8_t addr, uint8_t n, uint8_t) { return present && addr == deviceAddress ? n : 0; }
   uint8_t read() { return pointer == 0 ? control() : regs[pointer]; }
   bool visible() const {
     return !(regs[0] & 0x80) && fakeNow >= awakeAt && (((regs[0] & 4) && regs[3]) || ((regs[0] & 2) && regs[4]));

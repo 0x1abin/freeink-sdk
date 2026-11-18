@@ -24,9 +24,9 @@ with tempfile.TemporaryDirectory(prefix="freeink-pro-test-") as directory:
     shutil.copy2(LIB / "include/GrayscaleCapabilities.h", root / "include/GrayscaleCapabilities.h")
     shutil.copy2(LIB / "include/RefreshContext.h", root / "include/RefreshContext.h")
     shutil.copy2(LIB.parents[1] / "hardware/BoardConfig/include/MurphyM4Batch.h", root / "MurphyM4Batch.h")
-    for name in ("Ssd1677Luts.h", "Uc8279X3Luts.h", "UltraChipDirectGrayLuts.h"):
+    for name in ("Ssd1677Luts.h", "Uc8279X3Luts.h", "UltraChipDirectGrayLuts.h", "X4ProTextAaLuts.h", "X4ProImageLuts.h"):
         shutil.copy2(LIB / f"src/lut/{name}", root / f"src/lut/{name}")
-    for name in ("Arduino.h", "BoardConfig.h", "SPI.h", "esp_heap_caps.h", "sdkconfig.h"):
+    for name in ("Arduino.h", "BoardConfig.h", "SPI.h", "esp_heap_caps.h", "sdkconfig.h", "esp_rom_sys.h"):
         shutil.copy2(HERE / "pro_stubs" / name, root / name)
     shutil.copy2(HERE / "pro_stubs/EpdBus.h", root / "src/bus/EpdBus.h")
     for single in (False, True):
@@ -42,6 +42,19 @@ with tempfile.TemporaryDirectory(prefix="freeink-pro-test-") as directory:
         subprocess.run([str(exe)], check=True)
         subprocess.run([str(exe), "sticky"], check=True)
         subprocess.run([str(exe), "metalio"], check=True)
+
+    # Check real driver allocations with and without PSRAM and both SSD routes.
+    for psram in (False, True):
+        for routing in (0, 1):
+            exe = root / f"text-aa-ownership-{int(psram)}-{routing}"
+            command = [os.environ.get("CXX", "c++"), "-std=c++17",
+                       f"-DFREEINK_SSD1677_TEXT_ROUTING={routing}", "-I" + str(root),
+                       "-I" + str(root / "include"), str(HERE / "test_text_aa_ownership.cpp")]
+            if psram:
+                command += ["-DBOARD_HAS_PSRAM=1"]
+            command += [str(root / f"src/driver/{name}Driver.cpp") for name in drivers]
+            subprocess.run(command + ["-o", str(exe)], check=True)
+            subprocess.run([str(exe)], check=True)
 
     # Header-check every concrete driver against the shared identity contract.
     # The IT8951 header only needs a declaration for its owned Arduino SPI reference.
