@@ -149,6 +149,7 @@ void Ssd2677Driver::begin(EpdBus& bus) {
   initPanel(bus);
 
   _needsInitialFull = true;
+  _grayPending = _grayMaskReady = false;
   // Retained old-plane: this panel takes old+new as one 2bpp burst, so the old
   // plane must exactly equal what is physically on the glass. The host can't
   // supply it — CrossPoint builds single-buffer (EINK_DISPLAY_SINGLE_BUFFER_MODE),
@@ -184,11 +185,41 @@ void Ssd2677Driver::display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev,
   // would see old==new on every incremental update and move nothing (the whole
   // reason non-full frames ghosted). _old == nullptr (alloc failed) falls back to
   // an all-white old plane in sendPacked.
+  if (!_old) mode = RefreshMode::Full;
+  if (_grayPending && _old && _lsb) {
+    for (uint32_t i = 0; i < geometry().bufferSize; ++i)
+      _old[i] = (_old[i] & ~_lsb[i]) | (~fb[i] & _lsb[i]);
+  }
+  _grayPending = false;
+  // The first frame after a book page still erases reading-depth blacks, so it
+  // keeps the reading waveform (reader menu, footnotes over a page).
+  const bool reading = _readerRefresh || _afterReader;
+  _afterReader = _readerRefresh;
+  // BOOX presents book pages and UI screen redraws with mode 2 and powers off;
+  // only small interaction updates (highlight moves) use mode 3 with the rails on.
+  // A redraw changes over 1/8 of the frame.
+  const uint32_t size = geometry().bufferSize;
+  bool redraw = reading;
+  if (mode == RefreshMode::Fast && !redraw && _old) {
+    uint32_t changed = 0;
+    for (uint32_t i = 0; i < size; ++i) changed += _old[i] != fb[i];
+    redraw = changed > size / 8;
+  }
+  // Undriven blacks fade: on a dark background erased white text shows as deeper
+  // black, and in UI dither old dots show through. Drive every black pixel as
+  // white-to-black so old and fresh black match. In light mode only on UI redraws,
+  // and only where the frame changed: re-driving static text and reader pages
+  // builds up ghosts.
+  if (mode == RefreshMode::Fast && (_darkBackground || (redraw && !reading)) && _old) {
+    for (uint32_t i = 0; i < size; ++i)
+      if (_darkBackground || _old[i] != fb[i]) _old[i] |= static_cast<uint8_t>(~fb[i]);
+  }
+  // Real old plane for every mode: old == new gives each pixel the no-change drive.
   sendPacked(bus, _old, fb);
-  // Stock powers off after every refresh (PON, 0x12, POF), whatever `turnOff` says.
-  (void)turnOff;
-  refreshWith(bus, mode == RefreshMode::Fast ? lut_picco_se0400_fast : lut_picco_se0400_full, true);
-  if (_old) memcpy(_old, fb, geometry().bufferSize);  // new becomes old for the next frame
+  const auto* fastLut = redraw ? lut_picco_se0400_fast : lut_picco_se0400_mode3;
+  const bool keepPower = mode == RefreshMode::Fast && !redraw;
+  refreshWith(bus, mode == RefreshMode::Fast ? fastLut : lut_picco_se0400_full, !keepPower);
+  if (_old) memcpy(_old, fb, size);  // new becomes old for the next frame
   _needsInitialFull = false;
 }
 
@@ -204,8 +235,8 @@ void Ssd2677Driver::sendPacked(EpdBus& bus, const uint8_t* hi, const uint8_t* lo
   for (uint16_t r = 0; r < g.height; ++r) {
     const uint32_t row = static_cast<uint32_t>(reversed ? g.height - 1 - r : r) * g.widthBytes;
     for (uint16_t xb = 0; xb < g.widthBytes; ++xb) {
-      // hi == nullptr → an all-white (0xFF) old plane (stock's begin-time seed).
-      packPixels(hi ? hi[row + xb] : 0xFF, lo[row + xb], &chunk[n]);
+      // A null plane is all white (0xFF), stock's begin-time seed.
+      packPixels(hi ? hi[row + xb] : 0xFF, lo ? lo[row + xb] : 0xFF, &chunk[n]);
       n += 2;
       if (n == sizeof(chunk)) {
         txn.writeBytes(chunk, n);
@@ -224,12 +255,16 @@ void Ssd2677Driver::powerOffBetweenFrames(EpdBus& bus) {
   _needsPowerOn = true;
 }
 
-void Ssd2677Driver::powerAndRefresh(EpdBus& bus, bool turnOff) {
+void Ssd2677Driver::powerOn(EpdBus& bus) {
   if (_needsPowerOn) {
     bus.cmd(CMD_POWER_ON);
     bus.waitBusy(" SSD2677 power on");
     _needsPowerOn = false;
   }
+}
+
+void Ssd2677Driver::powerAndRefresh(EpdBus& bus, bool turnOff) {
+  powerOn(bus);
   bus.cmd(CMD_REFRESH);
   bus.data(0x00);
   bus.waitRefreshComplete("refresh");
@@ -242,29 +277,57 @@ void Ssd2677Driver::refreshWith(EpdBus& bus, const unsigned char* lut, bool turn
   powerAndRefresh(bus, turnOff);
 }
 
+bool Ssd2677Driver::ensureLsb() {
+  if (!_lsb) _lsb = static_cast<uint8_t*>(heap_caps_malloc(geometry().bufferSize, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+  return _lsb != nullptr;
+}
+
 void Ssd2677Driver::copyGrayscaleLsb(EpdBus& bus, const uint8_t* lsb) {
   (void)bus;
   if (!lsb) return;
-  const uint32_t size = geometry().bufferSize;
-  if (!_lsb) _lsb = static_cast<uint8_t*>(heap_caps_malloc(size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
-  if (_lsb) memcpy(_lsb, lsb, size);
+  if (!_absoluteGray) ensureLsb();
+  _grayMaskReady = false;
+  if (_lsb) memcpy(_lsb, lsb, geometry().bufferSize);
 }
 
 void Ssd2677Driver::beginGrayscale(EpdBus& bus, const uint8_t* fb, GrayscaleMode mode, RefreshMode fallback,
                                    bool turnOff) {
-  _absoluteGray = isSticky() && mode != GrayscaleMode::Overlay;
-  if (_absoluteGray) return;  // stock gray4 drives every pixel from any prior state: no base
+  _absoluteGray = mode == GrayscaleMode::Absolute;
+  if (_absoluteGray) {
+    _grayPending = false;
+    // Picco can fall back while fb still holds the B/W base. Sticky preserves
+    // the current glass on OOM; neither path may later paint a selector plane.
+    if ((!isSticky() && !_old) || !ensureLsb()) {
+      if (!isSticky()) display(bus, fb, nullptr, RefreshMode::Full, true);
+      _needsInitialFull = true;
+    }
+    return;
+  }
+  if (isSticky() && mode == GrayscaleMode::Overlay && fallback == RefreshMode::Fast && !_needsInitialFull && _old) {
+    // Give every incoming ink pixel the stock white-to-black pulse, even if
+    // the last B/W base called it black before AA lightened it. For incoming
+    // white, keep the real prior bit so old ink clears and blank paper holds.
+    // The synchronous display below replaces this transition mask with fb.
+    const uint32_t size = geometry().bufferSize;
+    for (uint32_t i = 0; i < size; ++i) _old[i] |= static_cast<uint8_t>(~fb[i]);
+  }
   displayGrayscaleBase(bus, fb, fallback, turnOff);
 }
 
 void Ssd2677Driver::copyGrayscaleMsb(EpdBus& bus, const uint8_t* msb) {
   if (!msb || !_lsb) return;
   if (_absoluteGray) {
-    // Stock gray4 (Seeed_GFX2 Driver_SSD2677): level index on the wire, 00 black,
-    // 01 dark, 10 light, 11 white. Absolute planes: LSB = dark bit, MSB = light
-    // bit, so MSB goes high.
-    latchOtpWaveform(bus, OTP_GRAY_ROOM);
-    sendPacked(bus, msb, _lsb);
+    if (isSticky()) {
+      latchOtpWaveform(bus, OTP_GRAY_ROOM);
+      sendPacked(bus, msb, _lsb);
+    } else if (_old) {
+      // Stock powers on before the image upload. Stage it until presentation
+      // so cancellation during plane upload never leaves the rails on. The MSB
+      // approximates the new B/W state. Force a full refresh even on cancellation
+      // because the previous B/W history is no longer available.
+      memcpy(_old, msb, geometry().bufferSize);
+      _needsInitialFull = true;
+    }
     return;
   }
   // Sticky: the B/W base latched an OTP waveform (E0 12 / E6 / A5). Re-run reset
@@ -272,7 +335,14 @@ void Ssd2677Driver::copyGrayscaleMsb(EpdBus& bus, const uint8_t* msb) {
   // which never latches one. Reset leaves the glass as it is.
   if (isSticky()) initPanel(bus);
   // Stock (FUN_42286a70): MSB mask in the high bit, LSB mask in the low bit.
+  // The Picco's stock AA powers on before the upload (0x4200bad0).
+  if (!isSticky()) powerOn(bus);
   sendPacked(bus, msb, _lsb);
+  if (!isSticky()) {
+    // The vendor retains the MSB mask to correct the next B/W transition.
+    memcpy(_lsb, msb, geometry().bufferSize);
+    _grayMaskReady = true;
+  }
 }
 
 void Ssd2677Driver::displayGray(EpdBus& bus, const uint8_t* fb, bool turnOff, const unsigned char* lut,
@@ -281,15 +351,21 @@ void Ssd2677Driver::displayGray(EpdBus& bus, const uint8_t* fb, bool turnOff, co
   (void)factoryMode;
   if (_absoluteGray) {
     _absoluteGray = false;
-    if (!_lsb) {
+    if (!_lsb || (!isSticky() && !_old)) {
       // No staged image: fb may already be a gray plane. Keep the glass as-is
       // rather than displaying that selector plane as a B/W image.
       _needsInitialFull = true;
       return;
     }
-    // Stock powers off after gray4. The glass now holds gray a differential
+    // Stock powers off after the image. The glass now holds gray a differential
     // refresh can't clear, so the next B/W frame is a full one.
-    powerAndRefresh(bus, true);
+    if (isSticky()) {
+      powerAndRefresh(bus, true);
+    } else {
+      powerOn(bus);
+      sendPacked(bus, _old, _lsb);
+      refreshWith(bus, lut_picco_se0400_image, turnOff);
+    }
     _needsInitialFull = true;
     return;
   }
@@ -303,25 +379,18 @@ void Ssd2677Driver::displayGray(EpdBus& bus, const uint8_t* fb, bool turnOff, co
     return;
   }
   if (!_lsb) {  // planes never staged: plain B/W
-    display(bus, fb, nullptr, RefreshMode::Full, turnOff);
+    // An inverted base is already on the glass; `fb` holds the logical frame.
+    if (!_darkBackground) display(bus, fb, nullptr, RefreshMode::Full, turnOff);
     return;
   }
   refreshWith(bus, lut_picco_se0400_gray, true);
-  // NB: do NOT force the next frame to a full refresh here. Every reader page in
-  // AA mode is a gray frame, so forcing a full on the following page flashed the
-  // whole screen black on every page turn. The retained `_old` still holds the
-  // B/W base drawn before this overlay, so the next page diffs against it
-  // correctly; CrossPoint schedules its own periodic full refreshes to clean any
-  // AA-edge residual (stock does the same — its gray present sets no full flag).
+  _grayPending = _grayMaskReady;
+  _grayMaskReady = false;
+  // Preserve the base outside the gray mask; masked pixels are driven on the next frame.
 }
 
 void Ssd2677Driver::deepSleep(EpdBus& bus) {
-  // Sticky stock powers the rails off first if they are on.
-  if (isSticky() && !_needsPowerOn) {
-    bus.cmd(CMD_POWER_OFF);
-    bus.data(0x00);
-    bus.waitBusy(" SSD2677 power off");
-  }
+  powerOffBetweenFrames(bus);
   // Stock (FUN_4200b608): 0x07 with the 0xA5 check code.
   bus.cmd(CMD_DEEP_SLEEP);
   bus.data(0xA5);

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "X4ProTextAa.h"
+
 // UC8279 panel driver — Xteink X4 Pro production runs that ship an UltraChip
 // UC8279 (800x480) in place of the SSD1677. NOT the X3's UC8279d (792x528,
 // Uc8279Driver) — this variant has its own init (PSR 0x37/0x4D, stock-exact;
@@ -70,6 +72,7 @@ class Uc8279X4Driver : public PanelDriver {
   BusyPolarity busyPolarity() const override { return BusyPolarity::UcIdleHigh; }
   PanelGeometry geometry() const override;
 
+  void setReaderRefresh(bool reading) override { _readerRefresh = reading; }
   void begin(EpdBus& bus) override;
   void deepSleep(EpdBus& bus) override;
 
@@ -101,13 +104,14 @@ class Uc8279X4Driver : public PanelDriver {
   // the absolute fold + post-DRF base restore (base = plane0 & plane1) fixes
   // both. Single-byte CDI (constant 0x97), PSR rewritten before DRF, panel LEFT
   // POWERED (vendor).
-  // Defined in the .cpp: reports unsupported for LUT_VER 0x67, a variant
-  // stock's panel LUT registry (X4 Pro 260917 build) recognizes but ships no
-  // external-LUT tables for — that panel runs OTP waveforms only.
+  // Pro firmware 26110201 adds the calibrated image packet for LUT_VER 0x67.
+  // Other boards without that packet retain the unsupported image path.
   GrayscaleCapabilities grayscaleCapabilities(GrayscaleMode mode = GrayscaleMode::Overlay) const override;
   void beginGrayscale(EpdBus& bus, const uint8_t* fb, GrayscaleMode mode, RefreshMode fallback, bool turnOff) override;
   void copyGrayscaleLsb(EpdBus& bus, const uint8_t* lsb) override;
   void copyGrayscaleMsb(EpdBus& bus, const uint8_t* msb) override;
+  void writeGrayscalePlaneStrip(EpdBus& bus, GrayPlane plane, const uint8_t* rows,
+                                uint16_t yStart, uint16_t numRows) override;
   void displayGray(EpdBus& bus, const uint8_t* fb, bool turnOff, const unsigned char* lut, bool factoryMode) override;
   void cleanupGrayscaleBuffers(EpdBus& bus, const uint8_t* bw) override;
   // Base frame for a grayscale overlay. The periodic clean the reader asks for
@@ -119,6 +123,8 @@ class Uc8279X4Driver : public PanelDriver {
   void displayGrayscaleBase(EpdBus& bus, const uint8_t* fb, RefreshMode fallback, bool turnOff) override;
 
  private:
+  X4ProTextAa _textAa;
+  bool _readerRefresh = false;
   void initController(EpdBus& bus);
   void startBwRefresh(EpdBus& bus, bool fast);
   // Stream a framebuffer into a RAM plane: 0xFF padding for gates before the

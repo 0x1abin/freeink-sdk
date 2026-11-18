@@ -12,6 +12,7 @@ struct WireStub {
   unsigned remaining = 0;
   int failAt = -1;
   bool magicValid = true;
+  bool beginOk = true;
   bool ended = false;
   bool homeDown = false;
   bool screenDown = false;
@@ -20,7 +21,7 @@ struct WireStub {
 
   bool begin(int, int, uint32_t) {
     ended = false;
-    return true;
+    return beginOk;
   }
   void end() { ended = true; }
   void setTimeOut(int) {}
