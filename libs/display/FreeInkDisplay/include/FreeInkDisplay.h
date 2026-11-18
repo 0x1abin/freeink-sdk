@@ -106,6 +106,8 @@ class FreeInkDisplay {
   uint8_t getGrayscaleLevels() const { return BoardConfig::ACTIVE.grayscaleLevels; }
   uint8_t* beginGrayscale16();
   bool commitGrayscale16();
+  bool commitGrayscale16(RefreshMode mode);
+  bool supportsNativeGrayscaleRefreshCycle() const;
   void cancelGrayscale16();
 
   // Frame buffer operations

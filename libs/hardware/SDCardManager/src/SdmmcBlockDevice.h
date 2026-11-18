@@ -40,6 +40,15 @@ class SdmmcBlockDevice : public FsBlockDeviceInterface {
   bool writeSectors(Sector_t sector, const uint8_t* src, size_t ns) override;
   Sector_t sectorCount() override;
   bool syncDevice() override { return true; }
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+  struct InitDiagnostics {
+    const char* stage;
+    int error;
+    uint32_t capacity;
+  };
+  // Preserved in static RAM so HAL can report early failures after USB returns.
+  static InitDiagnostics getInitDiagnostics();
+#endif
 
  private:
   static constexpr size_t kSectorSize = 512;

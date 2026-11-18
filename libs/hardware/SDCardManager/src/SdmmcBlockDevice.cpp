@@ -10,6 +10,10 @@
 #include <string.h>
 
 #include "esp_heap_caps.h"
+#if FREEINK_MCU_S31
+#include "esp_memory_utils.h"
+#include "esp_private/esp_cache_private.h"
+#endif
 
 #include "driver/gpio.h"
 #include "driver/sdmmc_host.h"
@@ -18,6 +22,27 @@
 namespace freeink {
 
 namespace {
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+SdmmcBlockDevice::InitDiagnostics initDiagnostics{"not_started", 0, 0};
+void recordInit(const char* stage, int error, uint32_t capacity = 0) {
+  initDiagnostics = {stage, error, capacity};
+}
+#else
+void recordInit(const char*, int, uint32_t = 0) {}
+#endif
+#if FREEINK_MCU_S31
+bool s31DmaAligned(int slot, const void* buffer, size_t size) {
+  return esp_ptr_internal(buffer) && sdmmc_host_check_buffer_alignment(slot, buffer, size);
+}
+
+uint8_t* allocateS31DmaBuffer(size_t bytes) {
+  constexpr unsigned caps = MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
+  size_t alignment = 0;
+  if (esp_cache_get_alignment(caps, &alignment) != ESP_OK) return nullptr;
+  if (alignment < 4) alignment = 4;
+  return static_cast<uint8_t*>(heap_caps_aligned_alloc(alignment, bytes, caps));
+}
+#endif
 // Card clock and retry pacing are board properties that the SdmmcPins profile has
 // no field for, so they are selected here per target and nothing changes for the
 // boards that already mount:
@@ -39,7 +64,12 @@ constexpr uint32_t kSdmmcRetrySettleMs = 0;
 #endif
 }  // namespace
 
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+SdmmcBlockDevice::InitDiagnostics SdmmcBlockDevice::getInitDiagnostics() { return initDiagnostics; }
+#endif
+
 bool SdmmcBlockDevice::begin(const BoardConfig::SdmmcPins& pins) {
+  recordInit("pins", ESP_FAIL);
   if (pins.busWidth == 0) return false;
   // The sleep path may hold the bus pads (Picco); a held pad ignores the slot setup.
   for (const int8_t pin : {pins.clk, pins.cmd, pins.d0, pins.d1, pins.d2, pins.d3}) {
@@ -86,8 +116,12 @@ bool SdmmcBlockDevice::begin(const BoardConfig::SdmmcPins& pins) {
   slot.d3 = static_cast<gpio_num_t>(pins.d3);
   slot.flags |= SDMMC_SLOT_FLAG_INTERNAL_PULLUP;
 
-  if (sdmmc_host_init() != ESP_OK) return false;
-  if (sdmmc_host_init_slot(host.slot, &slot) != ESP_OK) {
+  const auto hostError = sdmmc_host_init();
+  recordInit("host", hostError);
+  if (hostError != ESP_OK) return false;
+  const auto slotError = sdmmc_host_init_slot(host.slot, &slot);
+  recordInit("slot", slotError);
+  if (slotError != ESP_OK) {
     sdmmc_host_deinit();
     return false;
   }
@@ -117,6 +151,7 @@ bool SdmmcBlockDevice::begin(const BoardConfig::SdmmcPins& pins) {
 
   auto* card = static_cast<sdmmc_card_t*>(malloc(sizeof(sdmmc_card_t)));
   if (!card) {
+    recordInit("card_alloc", ESP_FAIL);
     sdmmc_host_deinit();
     return false;
   }
@@ -135,13 +170,27 @@ bool SdmmcBlockDevice::begin(const BoardConfig::SdmmcPins& pins) {
   // live in PSRAM / at an unaligned address, while native SDMMC requires an
   // internal-RAM DMA buffer. Limiting each transfer to eight sectors keeps the
   // buffer bounded at 4 KiB and avoids heap churn in the USB-MSC callbacks.
+#if FREEINK_MCU_S31
+  // S31 internal RAM is cached too. Reuse this same bounded buffer for IDF's
+  // command/unaligned I/O path; no second allocation or per-transfer heap use.
+  _dmaBuffer = allocateS31DmaBuffer(kSectorSize * kMaxTransferSectors);
+#else
   _dmaBuffer = static_cast<uint8_t*>(heap_caps_malloc(kSectorSize * kMaxTransferSectors,
                                                       MALLOC_CAP_DMA | MALLOC_CAP_8BIT));
+#endif
   if (!_dmaBuffer) {
+    recordInit("dma", ESP_FAIL);
     free(card);
     sdmmc_host_deinit();
     return false;
   }
+
+#if FREEINK_MCU_S31
+  host.flags &= ~SDMMC_HOST_FLAG_ALLOC_ALIGNED_BUF;
+  host.check_buffer_alignment = s31DmaAligned;
+  host.dma_aligned_buffer = _dmaBuffer;
+  host.unaligned_multi_block_rw_max_chunk_size = kMaxTransferSectors;
+#endif
 
   // Retry the WHOLE mount — init AND a real sector-0 read — power-cycling the
   // configured gate before
@@ -165,12 +214,14 @@ bool SdmmcBlockDevice::begin(const BoardConfig::SdmmcPins& pins) {
       delay(kSdmmcRetrySettleMs);
     }
     esp_err_t e = sdmmc_card_init(&host, card);
+    recordInit("card", e, card->csd.capacity);
     if (e != ESP_OK && card->csd.capacity == 0) {
       mountErr = e;  // failed before CSD — nothing to read; power-cycle and retry
       continue;
     }
     // CSD is valid (capacity known); prove real block I/O before committing.
     e = sdmmc_read_sectors(card, _dmaBuffer, 0, 1);
+    recordInit("sector0", e, card->csd.capacity);
     mountErr = e;
     if (e == ESP_OK) break;
   }
@@ -184,6 +235,7 @@ bool SdmmcBlockDevice::begin(const BoardConfig::SdmmcPins& pins) {
     return false;
   }
   _card = card;
+  recordInit("ready", ESP_OK, card->csd.capacity);
   return true;
 }
 

@@ -1,0 +1,451 @@
+{
+  "repository": "https://github.com/CloudZao/Metalio-E-INK4-Plus",
+  "commit": "2b2c36ae58f32a9cb1a721d1000883a2693651a4",
+  "purpose": "Frozen vendor board/display subset; local integration files are outside src/vendor",
+  "files": [
+    {
+      "path": "LICENSE",
+      "git_blob_sha1": "e90b55454056bdf5b7c7a48565ef7bf2893bd1e1",
+      "size": 1140,
+      "local_path": "src/vendor/LICENSE.Metalio"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/README.md",
+      "git_blob_sha1": "5c22381a80bc215ea84aa6316a4c27585fd7b7b1",
+      "size": 1605,
+      "local_path": "src/vendor/README.md"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/bus/metalio_i2c1.c",
+      "git_blob_sha1": "ed0a448631db4844eb5ad2b43781ccb28447b31a",
+      "size": 10225,
+      "local_path": "src/vendor/bus/metalio_i2c1.c"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/bus/metalio_i2c1.h",
+      "git_blob_sha1": "afa47ae816fa21381f10617cf385f6af2a190a18",
+      "size": 1548,
+      "local_path": "src/vendor/bus/metalio_i2c1.h"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/bus/pca9555.c",
+      "git_blob_sha1": "20b466d1cff54ad2648cd8efb02c2509adb02e15",
+      "size": 4334,
+      "local_path": "src/vendor/bus/pca9555.c"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/bus/pca9555.h",
+      "git_blob_sha1": "c43e596698e75fe00a1038f3d2d46f24bc127722",
+      "size": 1412,
+      "local_path": "src/vendor/bus/pca9555.h"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/bus/tps65185.c",
+      "git_blob_sha1": "d8f66009ab503b812ce111ccfe0b7e878426a522",
+      "size": 4368,
+      "local_path": "src/vendor/bus/tps65185.c"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/bus/tps65185.h",
+      "git_blob_sha1": "bacb751f0f97ab2c54ff8ea16dcd2ab84ab20087",
+      "size": 1702,
+      "local_path": "src/vendor/bus/tps65185.h"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/config.h",
+      "git_blob_sha1": "bc6c7b98c5278c727dcbaef238c87dc6e5443d2a",
+      "size": 6805,
+      "local_path": "src/vendor/config.h"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/board_specific.c",
+      "git_blob_sha1": "e4c47362caecf489734703def4f93fbc7c942981",
+      "size": 164,
+      "local_path": "src/vendor/display/board_specific.c"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/builtin_waveforms.c",
+      "git_blob_sha1": "ba4ff8c19be11315ef9dffcebd1a5729f22118ce",
+      "size": 471,
+      "local_path": "src/vendor/display/builtin_waveforms.c"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/displays.c",
+      "git_blob_sha1": "e4f947024857d3001e728c16d7baafc439886b2f",
+      "size": 2456,
+      "local_path": "src/vendor/display/displays.c"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/epd_board.c",
+      "git_blob_sha1": "be4df807dab0b66a9a4c6f1cd1cfd8b43807bc29",
+      "size": 3035,
+      "local_path": "src/vendor/display/epd_board.c"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/epd_board.h",
+      "git_blob_sha1": "2cdcde1857473ceabcce58de16132906f1e57d03",
+      "size": 2761,
+      "local_path": "src/vendor/display/epd_board.h"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/epd_board_common.c",
+      "git_blob_sha1": "f8a8478557b4a6551a25ac6d3482804218a20203",
+      "size": 3211,
+      "local_path": "src/vendor/display/epd_board_common.c"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/epd_board_common.h",
+      "git_blob_sha1": "48ca856d56bb5d2e6dc3fab631f4e17ce04df358",
+      "size": 1284,
+      "local_path": "src/vendor/display/epd_board_common.h"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/epd_board_metalio_eink4_plus.c",
+      "git_blob_sha1": "7988c93dfb5b46f0616976205fc152e920472735",
+      "size": 39768,
+      "local_path": "src/vendor/display/epd_board_metalio_eink4_plus.c"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/epd_board_metalio_eink4_plus.h",
+      "git_blob_sha1": "768d9568b74e08efb0af2ca86d5e7fa8518f74eb",
+      "size": 5110,
+      "local_path": "src/vendor/display/epd_board_metalio_eink4_plus.h"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/epd_board_specific.h",
+      "git_blob_sha1": "abb0138f86bdf038ba8f54315c11c0d087379546",
+      "size": 1335,
+      "local_path": "src/vendor/display/epd_board_specific.h"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/epd_display.h",
+      "git_blob_sha1": "b056182a7a0f298101aab9f9909153f16d4ddff2",
+      "size": 1221,
+      "local_path": "src/vendor/display/epd_display.h"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/epd_highlevel.h",
+      "git_blob_sha1": "bc5ddde6461bcbbacd40c618824350e8b85ffcaf",
+      "size": 5680,
+      "local_path": "src/vendor/display/epd_highlevel.h"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/epd_internals.h",
+      "git_blob_sha1": "0cc5df3f6c237daf4aee40380976aa0949ad7015",
+      "size": 3114,
+      "local_path": "src/vendor/display/epd_internals.h"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/epdiy.c",
+      "git_blob_sha1": "c04725c11b4d2c614a0e55aeb7bbbf8a718e5142",
+      "size": 15387,
+      "local_path": "src/vendor/display/epdiy.c"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/epdiy.h",
+      "git_blob_sha1": "0104a4c22cb97d500638bbb54818a49d635149f6",
+      "size": 19937,
+      "local_path": "src/vendor/display/epdiy.h"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/epdiy_riscv_ve_stub.c",
+      "git_blob_sha1": "53ea6b5f761140cd7c8fc14f6dcd78849c5fa7c8",
+      "size": 8546,
+      "local_path": "src/vendor/display/epdiy_riscv_ve_stub.c"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/font.c",
+      "git_blob_sha1": "39e41122d9f1949d06ad2bc42f195e862065d176",
+      "size": 12243,
+      "local_path": "src/vendor/display/font.c"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/ft6336u_upgrade_protocol.h",
+      "git_blob_sha1": "06789ef81ab9ff4feb80f5566fd485188a48f24c",
+      "size": 4563,
+      "local_path": "src/vendor/display/ft6336u_upgrade_protocol.h"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/highlevel.c",
+      "git_blob_sha1": "df09f7e407f622b74ca3e411ac9824c2580083f0",
+      "size": 9495,
+      "local_path": "src/vendor/display/highlevel.c"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/metalio_display_setup.cc",
+      "git_blob_sha1": "e3782214dcaeadd8fdb0b979dbfe9772e502b241",
+      "size": 595,
+      "local_path": "src/vendor/display/metalio_display_setup.cc"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/metalio_display_setup.h",
+      "git_blob_sha1": "f702cf147b38c13e51da14af6b65492312ac1523",
+      "size": 343,
+      "local_path": "src/vendor/display/metalio_display_setup.h"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/metalio_epd.c",
+      "git_blob_sha1": "622450be0c839ebc1914f4dd9180a7497ddb7faa",
+      "size": 2871,
+      "local_path": "src/vendor/display/metalio_epd.c"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/metalio_epd.h",
+      "git_blob_sha1": "7c3f546dafeb1580ca763ca3acaa5e9199538966",
+      "size": 448,
+      "local_path": "src/vendor/display/metalio_epd.h"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/metalio_touch.c",
+      "git_blob_sha1": "cf569976eea01123b22ba64e2eafce58a354d403",
+      "size": 12481,
+      "local_path": "src/vendor/display/metalio_touch.c"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/metalio_touch.h",
+      "git_blob_sha1": "c5878d81fc71d773f500135c9e0780679c97c8e8",
+      "size": 1954,
+      "local_path": "src/vendor/display/metalio_touch.h"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/metalio_touch_upgrade.cc",
+      "git_blob_sha1": "c5a375ff4c7d39ab82821b54d2f245e19f6dd4b5",
+      "size": 2002,
+      "local_path": "src/vendor/display/metalio_touch_upgrade.cc"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/metalio_touch_upgrade.h",
+      "git_blob_sha1": "a8f5a41c8f9c30b703a1216e39fc509f23d6797c",
+      "size": 225,
+      "local_path": "src/vendor/display/metalio_touch_upgrade.h"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/output_common/line_queue.c",
+      "git_blob_sha1": "1ef80bb47569bf108dc6da6ab2a509c460f6b801",
+      "size": 2560,
+      "local_path": "src/vendor/display/output_common/line_queue.c"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/output_common/line_queue.h",
+      "git_blob_sha1": "e6fa81de2f3fcb1667ecf4412aa272e4e5244960",
+      "size": 1047,
+      "local_path": "src/vendor/display/output_common/line_queue.h"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/output_common/lut.c",
+      "git_blob_sha1": "64843175b52244155dcceb0e4cdaf2cef5ffd0ad",
+      "size": 24980,
+      "local_path": "src/vendor/display/output_common/lut.c"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/output_common/lut.h",
+      "git_blob_sha1": "364636e4af7452d15b0f04d87a306f4883a59cfe",
+      "size": 1281,
+      "local_path": "src/vendor/display/output_common/lut.h"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/output_common/render_context.c",
+      "git_blob_sha1": "1705313c7908b311913c79bbbf7d65ffed0f7eb4",
+      "size": 4096,
+      "local_path": "src/vendor/display/output_common/render_context.c"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/output_common/render_context.h",
+      "git_blob_sha1": "4b0b3e0960ea1c5a0ccd86b164ab6f4fc8d2528d",
+      "size": 3842,
+      "local_path": "src/vendor/display/output_common/render_context.h"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/output_common/render_method.c",
+      "git_blob_sha1": "5c739b63b7ddefad8973299ebe61de914ddb0edc",
+      "size": 374,
+      "local_path": "src/vendor/display/output_common/render_method.c"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/output_common/render_method.h",
+      "git_blob_sha1": "0f386f48c9c4db237a26ae0c9c380aa85c833233",
+      "size": 764,
+      "local_path": "src/vendor/display/output_common/render_method.h"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/output_common/spatial_wipe.h",
+      "git_blob_sha1": "83385ac9e895dd0a62066ff888fc536bec2fe15a",
+      "size": 6238,
+      "local_path": "src/vendor/display/output_common/spatial_wipe.h"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/output_common/white_border.h",
+      "git_blob_sha1": "852cb35f7d1fa200b771b173df883123e0c6ac2f",
+      "size": 744,
+      "local_path": "src/vendor/display/output_common/white_border.h"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/output_lcd/epdiy_idf6_compat.h",
+      "git_blob_sha1": "45e0893d926df34090607c0022219dbb7e7fa92c",
+      "size": 1064,
+      "local_path": "src/vendor/display/output_lcd/epdiy_idf6_compat.h"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/output_lcd/idf-4-backports.h",
+      "git_blob_sha1": "916789a8d8b8d031b62dbecc7a8c238f736cfb22",
+      "size": 758,
+      "local_path": "src/vendor/display/output_lcd/idf-4-backports.h"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/output_lcd/lcd_driver.c",
+      "git_blob_sha1": "215971ba77216290bc473b0fe991798982cb18cc",
+      "size": 52907,
+      "local_path": "src/vendor/display/output_lcd/lcd_driver.c"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/output_lcd/lcd_driver.h",
+      "git_blob_sha1": "4f5feda81312bb2caf620ad04b8fe41cd9e18b5d",
+      "size": 2392,
+      "local_path": "src/vendor/display/output_lcd/lcd_driver.h"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/output_lcd/render_lcd.c",
+      "git_blob_sha1": "8454543cde870e2cb50cb2e7c243262ebed1c92f",
+      "size": 19289,
+      "local_path": "src/vendor/display/output_lcd/render_lcd.c"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/output_lcd/render_lcd.h",
+      "git_blob_sha1": "3c521e85675e259e50907e79c75f10c3de3622e3",
+      "size": 461,
+      "local_path": "src/vendor/display/output_lcd/render_lcd.h"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/render.c",
+      "git_blob_sha1": "79c2fed563e3dd98284d37c4aaedd5d367ee0676",
+      "size": 22696,
+      "local_path": "src/vendor/display/render.c"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/render.h",
+      "git_blob_sha1": "9a0810e62c82bfdbf092741145db9cfcf70f3485",
+      "size": 246,
+      "local_path": "src/vendor/display/render.h"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/waveforms/LICENSE.gray8",
+      "git_blob_sha1": "500992f07a65f5f431fabc22cca8e01ac10ca7a9",
+      "size": 624,
+      "local_path": "src/vendor/display/waveforms/LICENSE.gray8"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/waveforms/epdiy_ED047TC1.h",
+      "git_blob_sha1": "6e1175cc2342f4d3c23336d385753505c56465f2",
+      "size": 36977,
+      "local_path": "src/vendor/display/waveforms/epdiy_ED047TC1.h"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/waveforms/epdiy_ED047TC2.h",
+      "git_blob_sha1": "eb7eda180212397407cb506ff7e6f348e73f94ad",
+      "size": 273271,
+      "local_path": "src/vendor/display/waveforms/epdiy_ED047TC2.h"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/waveforms/epdiy_ED060SC4.h",
+      "git_blob_sha1": "f9871cc8c5ebbd6935922440365649074e63ad35",
+      "size": 36612,
+      "local_path": "src/vendor/display/waveforms/epdiy_ED060SC4.h"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/waveforms/epdiy_ED060SCT.h",
+      "git_blob_sha1": "97a1f435842edb42ef8e51073c0dd6c94276d565",
+      "size": 36941,
+      "local_path": "src/vendor/display/waveforms/epdiy_ED060SCT.h"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/waveforms/epdiy_ED060XC3.h",
+      "git_blob_sha1": "4736000b4a17bd3dc7d24dea7f9de7d4ef902b0e",
+      "size": 36615,
+      "local_path": "src/vendor/display/waveforms/epdiy_ED060XC3.h"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/waveforms/epdiy_ED097OC4.h",
+      "git_blob_sha1": "e766e941b2b2066a423861e48c11b5266c222245",
+      "size": 36618,
+      "local_path": "src/vendor/display/waveforms/epdiy_ED097OC4.h"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/waveforms/epdiy_ED097TC2.h",
+      "git_blob_sha1": "31bb2c6cf11103f657079e83e8df3af90f782afc",
+      "size": 36941,
+      "local_path": "src/vendor/display/waveforms/epdiy_ED097TC2.h"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/waveforms/epdiy_ED133UT2.h",
+      "git_blob_sha1": "186743e40e9c98ac7527f40fcfec4f39b5cad581",
+      "size": 36633,
+      "local_path": "src/vendor/display/waveforms/epdiy_ED133UT2.h"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/waveforms/epdiy_NULL.h",
+      "git_blob_sha1": "ffa1612ee4939b6b9aa3b88b1b06b3b7c616a059",
+      "size": 36721,
+      "local_path": "src/vendor/display/waveforms/epdiy_NULL.h"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/waveforms/my_gray8_gc16.h",
+      "git_blob_sha1": "b8e784cd2b770a1d4fbefb440ee593811fb86728",
+      "size": 11717,
+      "local_path": "src/vendor/display/waveforms/my_gray8_gc16.h"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/waveforms/my_gray8_gl16.h",
+      "git_blob_sha1": "6cb7e1533c3cdb3eb4e0bd93764ba022cb3d6800",
+      "size": 11717,
+      "local_path": "src/vendor/display/waveforms/my_gray8_gl16.h"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/waveforms/my_waveform.c",
+      "git_blob_sha1": "7d816c34830dd7eb70bfd3a96de5ec10693016ae",
+      "size": 13532,
+      "local_path": "src/vendor/display/waveforms/my_waveform.c"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/waveforms/my_waveform.h",
+      "git_blob_sha1": "3d2f62dc083140facf92f7fec32417d2f6f3576b",
+      "size": 1074,
+      "local_path": "src/vendor/display/waveforms/my_waveform.h"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/waveforms/my_waveform_du.h",
+      "git_blob_sha1": "e2ab4e72059863dd5de6d2359bb127e4d1e63254",
+      "size": 7672,
+      "local_path": "src/vendor/display/waveforms/my_waveform_du.h"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/waveforms/my_waveform_gc.h",
+      "git_blob_sha1": "dffab53de7f62030fc51f7e1eae84cff3818263a",
+      "size": 17444,
+      "local_path": "src/vendor/display/waveforms/my_waveform_gc.h"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/waveforms/my_waveform_gl.h",
+      "git_blob_sha1": "df246594ec7be6045a458b8cb420385cabe3657f",
+      "size": 17803,
+      "local_path": "src/vendor/display/waveforms/my_waveform_gl.h"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/waveforms/my_waveform_trim.c",
+      "git_blob_sha1": "300c823aa6f33c25a967fea6e0c92a89ded39639",
+      "size": 3399,
+      "local_path": "src/vendor/display/waveforms/my_waveform_trim.c"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/display/waveforms/my_waveform_trim.h",
+      "git_blob_sha1": "285b0d68e951848edd505af6b0b5a86ab3fea43a",
+      "size": 872,
+      "local_path": "src/vendor/display/waveforms/my_waveform_trim.h"
+    },
+    {
+      "path": "main/boards/metalio-e-ink4-plus/periph/metalio_sd.h",
+      "git_blob_sha1": "288ea2c34a680f52ff923399eed8515e98acbfb5",
+      "size": 638,
+      "local_path": "src/vendor/periph/metalio_sd.h"
+    }
+  ]
+}

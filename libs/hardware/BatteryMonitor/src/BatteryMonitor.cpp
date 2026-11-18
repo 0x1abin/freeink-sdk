@@ -29,6 +29,9 @@ void BatteryMonitor::setPmuBatteryHook(const PmuBatteryHook hook) { g_pmuBattery
 
 #if FREEINK_BATTERY_I2C_GAUGE
 #include <Wire.h>
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+#include <MetalioPlusIo.h>
+#endif
 #if FREEINK_DEVICE_WS397
 #include <Axp2101.h>
 #endif
@@ -54,15 +57,25 @@ TwoWire& gaugeWire() {
   return Wire;
 }
 
+#if !FREEINK_DEVICE_METALIO_EINK4_PLUS
 bool g_wireReady = false;
+#endif
 bool ensureWire() {
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+  // The native BSP owns I2C1. Unsupported legacy helpers must fail closed.
+  return false;
+#else
   if (g_wireReady) return true;
   const auto& g = BoardConfig::ACTIVE.batteryGauge;
   g_wireReady = gaugeWire().begin(g.i2cSda, g.i2cScl, g.i2cHz);
   return g_wireReady;
+#endif
 }
 
 bool readReg16(uint8_t addr, uint8_t reg, uint16_t& out) {
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+  return addr == 0x55 && freeink::metalioPlusReadGauge16(reg, out);
+#else
   const freeink::I2cBusLock busLock;
   if (addr == 0 || !ensureWire()) return false;
   TwoWire& w = gaugeWire();
@@ -77,6 +90,7 @@ bool readReg16(uint8_t addr, uint8_t reg, uint16_t& out) {
   const uint8_t hi = w.read();
   out = static_cast<uint16_t>(lo) | (static_cast<uint16_t>(hi) << 8);
   return true;
+#endif
 }
 
 bool readReg8(uint8_t addr, uint8_t reg, uint8_t& out) {

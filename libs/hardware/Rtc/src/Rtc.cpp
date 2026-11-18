@@ -20,6 +20,9 @@ void Rtc::setPmuTimeHooks(const PmuTimeHooks& hooks) { g_pmuTimeHooks = hooks; }
 #if FREEINK_DEVICE_MURPHY_M4
 #include <MurphyM4I2c.h>
 #endif
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+#include <MetalioPlusIo.h>
+#endif
 
 namespace freeink {
 namespace {
@@ -71,6 +74,7 @@ constexpr uint8_t RX8010_FLAG_VLF = 0x02;
 // by the newlib <time.h> this project builds against, so the civil-days formula
 // is the only timezone-independent route. HalClock.cpp carries the same copy for
 // its own epoch conversions.
+#if !FREEINK_DEVICE_METALIO_EINK4_PLUS
 int64_t daysFromCivil(int year, unsigned month, unsigned day) {
   year -= month <= 2;
   const int era = (year >= 0 ? year : year - 399) / 400;
@@ -79,7 +83,9 @@ int64_t daysFromCivil(int year, unsigned month, unsigned day) {
   const unsigned dayOfEra = yearOfEra * 365 + yearOfEra / 4 - yearOfEra / 100 + dayOfYear;
   return static_cast<int64_t>(era) * 146097 + static_cast<int64_t>(dayOfEra) - 719468;
 }
+#endif
 
+#if !FREEINK_DEVICE_METALIO_EINK4_PLUS
 bool g_wireReady[2] = {false, false};
 
 TwoWire& sensorWire() {
@@ -104,11 +110,18 @@ void ensureWire() {
   wire.begin(s.i2cSda, s.i2cScl, s.i2cHz);
   g_wireReady[bus] = true;
 }
+#endif
 
 uint8_t bcdToDec(uint8_t v) { return static_cast<uint8_t>((v >> 4) * 10U + (v & 0x0FU)); }
 uint8_t decToBcd(uint8_t v) { return static_cast<uint8_t>((v / 10U) << 4 | (v % 10U)); }
 
 bool writeReg(uint8_t addr, uint8_t reg, uint8_t value) {
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+  (void)addr;
+  (void)reg;
+  (void)value;
+  return false;  // Plus only exposes the atomic PCF8563 time-set operation.
+#else
   const freeink::I2cBusLock busLock;
   ensureWire();
   auto& wire = sensorWire();
@@ -116,9 +129,13 @@ bool writeReg(uint8_t addr, uint8_t reg, uint8_t value) {
   wire.write(reg);
   wire.write(value);
   return wire.endTransmission() == 0;
+#endif
 }
 
 bool readRegs(uint8_t addr, uint8_t reg, uint8_t* dst, uint8_t len) {
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+  return addr == 0x51 && metalioPlusRtcRead(reg, dst, len);
+#else
   const freeink::I2cBusLock busLock;
   ensureWire();
   auto& wire = sensorWire();
@@ -128,7 +145,28 @@ bool readRegs(uint8_t addr, uint8_t reg, uint8_t* dst, uint8_t len) {
   if (wire.requestFrom(addr, len, static_cast<uint8_t>(true)) < len) return false;
   for (uint8_t i = 0; i < len; ++i) dst[i] = wire.read();
   return true;
+#endif
 }
+
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+bool validPlusDate(const Rtc::DateTime& dt) {
+  if (dt.year < 2000 || dt.year > 2099 || dt.month < 1 || dt.month > 12 || dt.day < 1 || dt.hour > 23 ||
+      dt.minute > 59 || dt.second > 59 || dt.weekday > 6)
+    return false;
+  constexpr uint8_t days[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+  const unsigned maxDay = days[dt.month - 1] + (dt.month == 2 && dt.year % 4 == 0);
+  return dt.day <= maxDay;
+}
+
+bool validPlusBcd(const uint8_t* raw) {
+  constexpr uint8_t masks[] = {0x7f, 0x7f, 0x3f, 0x3f, 0x07, 0x1f, 0xff};
+  for (unsigned i = 0; i < 7; ++i) {
+    const uint8_t value = raw[i] & masks[i];
+    if ((value & 0x0f) > 9 || (value >> 4) > 9) return false;
+  }
+  return true;
+}
+#endif
 
 #if FREEINK_DEVICE_MURPHY_M4
 bool m4ReadRegs(uint8_t addr, uint8_t reg, uint8_t* dst, uint8_t len) {
@@ -161,10 +199,18 @@ bool readRegsRetry(uint8_t addr, uint8_t reg, uint8_t* dst, uint8_t len) {
 }  // namespace
 
 bool Rtc::begin() {
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+  begun_ = false;
+#endif
   const uint8_t addr = BoardConfig::ACTIVE.sensors.rtcAddr;
   if (addr == 0) return false;
   const auto& s = BoardConfig::ACTIVE.sensors;
   if (s.i2cSda < 0 || s.i2cScl < 0 || s.i2cHz == 0) return false;
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+  if (addr != 0x51 || s.rtcType != BoardConfig::RtcType::Pcf8563 || s.i2cSda != 0 || s.i2cScl != 1 || s.i2cBus != 1 ||
+      s.i2cHz != 100000)
+    return false;
+#endif
 #if FREEINK_DEVICE_MURPHY_M4
   if (s.rtcType == BoardConfig::RtcType::Rx8010) {
     uint8_t status = 0;
@@ -176,12 +222,16 @@ bool Rtc::begin() {
   // The PMU RTC is not on the Wire register interface at all: the board owns the
   // CW32L010 frame protocol and its own bus bring-up, so re-begin()ing Wire here
   // would only reconfigure a bus the board handshake already set up.
+#if !FREEINK_DEVICE_METALIO_EINK4_PLUS
   if (s.rtcType != BoardConfig::RtcType::Cw32L010Pmu) ensureWire();
+#endif
   uint8_t status = 0;
   switch (s.rtcType) {
     case BoardConfig::RtcType::Pcf8563:
       if (!readRegsRetry(addr, PCF8563_REG_CONTROL_STATUS1, &status, 1)) return false;
+#if !FREEINK_DEVICE_METALIO_EINK4_PLUS
       writeReg(addr, PCF8563_REG_CLKOUT, PCF8563_CLKOUT_DISABLED);  // we don't use the 32 kHz CLKOUT
+#endif
       break;
     case BoardConfig::RtcType::Pcf85063:
       // No CLKOUT write: the PCF85063's CLKOUT lives in Control_2 alongside bits
@@ -224,14 +274,19 @@ bool Rtc::now(DateTime& out) {
     case BoardConfig::RtcType::Pcf8563: {
       if (!readRegs(addr, PCF8563_REG_TIME, raw, sizeof(raw))) return false;
       if (raw[0] & PCF8563_VL_FLAG) return false;  // oscillator stopped -> time not trustworthy
-      out.second = bcdToDec(raw[0] & 0x7FU);
-      out.minute = bcdToDec(raw[1] & 0x7FU);
-      out.hour = bcdToDec(raw[2] & 0x3FU);
-      out.day = bcdToDec(raw[3] & 0x3FU);
-      out.weekday = bcdToDec(raw[4] & 0x07U);
-      out.month = bcdToDec(raw[5] & 0x1FU);
+      DateTime value;
+      value.second = bcdToDec(raw[0] & 0x7FU);
+      value.minute = bcdToDec(raw[1] & 0x7FU);
+      value.hour = bcdToDec(raw[2] & 0x3FU);
+      value.day = bcdToDec(raw[3] & 0x3FU);
+      value.weekday = bcdToDec(raw[4] & 0x07U);
+      value.month = bcdToDec(raw[5] & 0x1FU);
       const uint8_t yy = bcdToDec(raw[6]);
-      out.year = (raw[5] & 0x80U) ? static_cast<uint16_t>(1900 + yy) : static_cast<uint16_t>(2000 + yy);
+      value.year = (raw[5] & 0x80U) ? static_cast<uint16_t>(1900 + yy) : static_cast<uint16_t>(2000 + yy);
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+      if (!validPlusBcd(raw) || !validPlusDate(value)) return false;
+#endif
+      out = value;
       return true;
     }
     case BoardConfig::RtcType::Pcf85063: {
@@ -338,6 +393,19 @@ bool Rtc::now(DateTime& out) {
 }
 
 bool Rtc::set(const DateTime& dt) {
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+  if (!begun_ || BoardConfig::ACTIVE.sensors.rtcAddr != 0x51 ||
+      BoardConfig::ACTIVE.sensors.rtcType != BoardConfig::RtcType::Pcf8563 || !validPlusDate(dt))
+    return false;
+  const uint8_t time[] = {decToBcd(dt.second),
+                          decToBcd(dt.minute),
+                          decToBcd(dt.hour),
+                          decToBcd(dt.day),
+                          decToBcd(dt.weekday),
+                          decToBcd(dt.month),
+                          decToBcd(static_cast<uint8_t>(dt.year % 100))};
+  return metalioPlusRtcWriteTime(time);
+#else
   const freeink::I2cBusLock busLock;  // direct transfers below, not only helpers
   const uint8_t addr = BoardConfig::ACTIVE.sensors.rtcAddr;
   if (!begun_ || addr == 0) return false;
@@ -439,6 +507,7 @@ bool Rtc::set(const DateTime& dt) {
     }
   }
   return true;
+#endif
 }
 
 bool Rtc::cancelWakeTimer() {
@@ -457,6 +526,10 @@ bool Rtc::cancelWakeTimer() {
 }
 
 bool Rtc::armWakeTimer(const uint32_t seconds) {
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+  (void)seconds;
+  return false;  // V1.4 PCF8563 alarm routing is not part of timekeeping bring-up.
+#else
   const freeink::I2cBusLock busLock;  // direct transfers below, not only helpers
   if (!begun_ || BoardConfig::ACTIVE.sensors.rtcType != BoardConfig::RtcType::Rx8130 || seconds == 0 ||
       seconds > 65535UL * 60UL)
@@ -494,6 +567,7 @@ bool Rtc::armWakeTimer(const uint32_t seconds) {
        finalExtension == static_cast<uint8_t>(extension | RX8130_TIMER) && finalControl == control;
   if (!ok) cancelWakeTimer();  // Caller must also disarm the external wake route on failure.
   return ok;
+#endif
 }
 
 bool Rtc::readWakeTimer(bool& fired) {

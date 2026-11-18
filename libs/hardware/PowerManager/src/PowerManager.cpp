@@ -229,8 +229,13 @@ void PowerManager::deepSleep() {
       delay(1000);
     }
   }
+#if !FREEINK_MCU_S31 || CONFIG_ESP_SLEEP_GPIO_RESET_WORKAROUND || CONFIG_PM_SLP_DISABLE_GPIO
+  // IDF6/S31 only links this helper under these Kconfig options; its normal
+  // sleep implementation performs the target-specific isolation itself.
   esp_sleep_config_gpio_isolate();
-#if !FREEINK_MCU_C61
+#endif
+#if !FREEINK_MCU_C61 && !SOC_GPIO_SUPPORT_HOLD_SINGLE_IO_IN_DSLP
+  // S31 holds each pad individually in deep sleep and omits the global API.
   gpio_deep_sleep_hold_en();
 #endif
   esp_deep_sleep_start();
