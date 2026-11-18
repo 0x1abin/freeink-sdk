@@ -53,12 +53,12 @@ class TextRoutingTest(unittest.TestCase):
             text = text.replace("writes.push_back({c,{}});", "assert(!busy); writes.push_back({c,{}}); if (c==0x20) { busy=true; ++activation; } if (c==0x10 && sleepBusyUntilReset) busy=true;")
             text = text.replace("void reset(uint16_t=0) {}", "void reset(uint16_t=0) { ++resets; if (resetClearsFailure) failAt=0; if (!resetKeepsBusy) busy=false; }")
             text = text.replace("++waits;", "++waits; if (!sleepBusyUntilReset || !busy || writes.empty() || writes.back().command != 0x10) busy=failAt && activation==failAt;")
-            text = text.replace("return false;", "return busy;")
+            text = text.replace("return blocked;", "return busy;")
             bus.write_text(text)
             shutil.copy2(HERE / "ssd1677_stubs/esp_heap_caps.h", root / "esp_heap_caps.h")
             shutil.copy2(LIB.parents[1] / "hardware/BoardConfig/include/MurphyM4Batch.h", root / "MurphyM4Batch.h")
             board = root / "BoardConfig.h"
-            board.write_text(board.read_text().replace("XteinkX4Pro,", "XteinkX4Pro, XteinkX4Classic, MurphyM4, PaperMono,"))
+            board.write_text(board.read_text().replace("XteinkX4Pro,", "XteinkX4Pro, MurphyM4, PaperMono,"))
             arduino = root / "Arduino.h"
             arduino.write_text(arduino.read_text().replace('inline int digitalRead(int) { return 0; }', 'inline bool fakeSticky2677=false; inline int digitalRead(int p) { return fakeSticky2677 && p==6; }') + '\n#define LOW 0\n#define HIGH 1\n#define INPUT 1\n#define OUTPUT 3\n#define INPUT_PULLUP 5\nusing gpio_num_t = int;\ninline void gpio_hold_dis(gpio_num_t) {}\ninline void pinMode(int,int) {}\ninline void digitalWrite(int,int) {}\ninline void delayMicroseconds(unsigned) {}\n\n#define DRAM_ATTR\nstruct FakeSerial { template<class... T> void printf(const char*, T...) {} }; inline FakeSerial Serial;\n')
             cases = [(device, False, True) for device in

@@ -340,6 +340,8 @@ int main(int argc, char** argv) {
   // An actual BUSY timeout must not make the original grayscale cleanup write RAM.
   bus.busy = true;
   const auto stoppedOriginal = bus.writes.size();
+  d.controllerIdle();
+  assert(bus.writes.size() == stoppedOriginal); // idle must not bypass an unresolved BUSY
   d.cleanupGrayscaleBuffers(bw.data());
   assert(bus.writes.size() == stoppedOriginal && !d._textDriverReady);
   bus.busy = false;

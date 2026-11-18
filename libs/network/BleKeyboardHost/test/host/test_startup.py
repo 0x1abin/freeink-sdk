@@ -60,6 +60,7 @@ with tempfile.TemporaryDirectory() as directory:
 # The callback-only scanner releases advertisements after onResult. Exercise
 # the real SDK ingestion with temporary buffers, including later name updates.
 ingest = source[source.index('void BleKeyboardHost::onScanResultIngest('):source.index('\nvoid BleKeyboardHost::onLinkUp(')]
+bonded_state = source[source.index('bool g_bondedArmed ='):source.index('// The connect being made')]
 scan = r'''
 #include <cassert>
 #include <cstring>
@@ -70,7 +71,9 @@ scan = r'''
 #define portENTER_CRITICAL(x) ((void)0)
 #define portEXIT_CRITICAL(x) ((void)0)
 namespace freeink {
-''' + ingest + r'''
+bool g_connecting = false;
+unsigned long millis() { return 0; }
+''' + bonded_state + ingest + r'''
 }
 int main() {
   freeink::BleKeyboardHost host;
