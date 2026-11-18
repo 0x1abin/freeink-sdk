@@ -7,6 +7,9 @@
 #include <Wire.h>
 #include <I2cBusLock.h>
 #include <soc/soc_caps.h>
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+#include <MetalioPlusIo.h>
+#endif
 
 #include <cstring>
 
@@ -330,6 +333,15 @@ bool Imu::begin() {
   const uint8_t configuredAddr = s.imuAddr;
   if (configuredAddr == 0) return false;
   if (s.i2cSda < 0 || s.i2cScl < 0 || s.i2cHz == 0) return false;
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+  if (configuredAddr != 0x19 || s.i2cSda != 0 || s.i2cScl != 1 || s.i2cBus != 1 || s.i2cHz != 100000 ||
+      s.imuType != BoardConfig::ImuType::Sc7a20h || !metalioPlusImuBegin())
+    return false;
+  addr_ = configuredAddr;
+  sleeping_ = true;
+  begun_ = true;
+  return true;
+#endif
 #if FREEINK_DEVICE_METALIO_EINK4
   if (BoardConfig::isMetalioEInk4() && !metalio::ensureBooted()) return false;
 #endif
@@ -445,6 +457,21 @@ bool Imu::read(Sample& out) {
   const uint8_t addr = addr_;
   if (!begun_ || addr == 0) return false;
   const auto& s = BoardConfig::ACTIVE.sensors;
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+  if (sleeping_) return false;
+  int16_t axes[3] = {};
+  if (!metalioPlusImuRead(axes)) return false;
+  Sample sample{axes[0] * SC7_G_PER_RAW_LSB, axes[1] * SC7_G_PER_RAW_LSB, axes[2] * SC7_G_PER_RAW_LSB, 0, 0, 0};
+  if (s.imuSwapXY) {
+    const float x = sample.ax;
+    sample.ax = sample.ay;
+    sample.ay = x;
+  }
+  if (s.imuFlipX) sample.ax = -sample.ax;
+  if (s.imuFlipY) sample.ay = -sample.ay;
+  out = sample;
+  return true;
+#endif
 #if !FREEINK_DEVICE_READPICO
   if (s.imuType == BoardConfig::ImuType::Sc7a20h) {
     if (sleeping_) return false;
@@ -577,6 +604,11 @@ bool Imu::read(Sample& out) {
 bool Imu::sleep() {
   const uint8_t addr = addr_;
   if (!begun_ || addr == 0) return false;
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+  if (!metalioPlusImuSleep()) return false;
+  sleeping_ = true;
+  return true;
+#endif
   switch (BoardConfig::ACTIVE.sensors.imuType) {
     case BoardConfig::ImuType::Lsm6ds3:
       return writeReg(addr, REG_CTRL1_XL, CTRL_ODR_POWER_DOWN) && writeReg(addr, REG_CTRL2_G, CTRL_ODR_POWER_DOWN);
@@ -610,6 +642,11 @@ bool Imu::sleep() {
 bool Imu::wake() {
   const uint8_t addr = addr_;
   if (!begun_ || addr == 0) return false;
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+  if (!metalioPlusImuWake()) return false;
+  sleeping_ = false;
+  return true;
+#endif
   switch (BoardConfig::ACTIVE.sensors.imuType) {
     case BoardConfig::ImuType::Lsm6ds3:
       return writeReg(addr, REG_CTRL1_XL, CTRL1_XL_104HZ_2G) && writeReg(addr, REG_CTRL2_G, CTRL2_G_104HZ_245DPS);

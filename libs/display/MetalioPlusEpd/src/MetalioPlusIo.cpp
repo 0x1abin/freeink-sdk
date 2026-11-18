@@ -12,6 +12,8 @@ constexpr int kTimeoutMs = 50;
 constexpr uint8_t kTouchAddress = 0x38;
 bool attempted = false;
 bool ready = false;
+bool imuReady = false;
+bool imuAwake = false;
 
 // All gauge cache access is protected by the existing native bus mutex.
 struct GaugeSnapshot {
@@ -53,6 +55,24 @@ bool readRegister(uint8_t reg, uint8_t* data, size_t size) {
   const auto err = metalio_i2c1_transmit_receive_locked(I2C_NUM_1, kTouchAddress, &reg, 1, data, size, kTimeoutMs);
   metalio_i2c1_unlock();
   return err == ESP_OK;
+}
+
+// Caller holds the native mutex; reject unowned IRQ/FIFO/filter configuration.
+bool imuReadByte(uint8_t reg, uint8_t& value) {
+  return metalio_i2c1_transmit_receive_locked(I2C_NUM_1, 0x19, &reg, 1, &value, 1, kTimeoutMs) == ESP_OK;
+}
+
+bool imuWriteByte(uint8_t reg, uint8_t value) {
+  return metalio_i2c1_write_reg_locked(I2C_NUM_1, 0x19, reg, &value, 1, kTimeoutMs) == ESP_OK;
+}
+
+bool imuPollingConfigSafe() {
+  constexpr uint8_t preserved[] = {0x21, 0x22, 0x24, 0x25, 0x2e};
+  for (const auto reg : preserved) {
+    uint8_t value = 0;
+    if (!imuReadByte(reg, value) || value != 0) return false;
+  }
+  return true;
 }
 }  // namespace
 
@@ -130,6 +150,56 @@ bool metalioPlusRtcWriteTime(const uint8_t* bcd) {
   if (err == ESP_OK) err = metalio_i2c1_write_reg_locked(I2C_NUM_1, 0x51, 0, &run, 1, kTimeoutMs);
   metalio_i2c1_unlock();
   return err == ESP_OK;
+}
+
+bool metalioPlusImuBegin() {
+  if (!metalio_i2c1_lock(kTimeoutMs)) return false;
+  imuReady = imuAwake = false;
+  uint8_t who = 0, version = 0;
+  const bool ok = imuReadByte(0x0f, who) && who == 0x11 && imuReadByte(0x70, version) && version == 0x28 &&
+                  imuPollingConfigSafe() && imuWriteByte(0x20, 0x07);
+  imuReady = ok;
+  metalio_i2c1_unlock();
+  return ok;
+}
+
+bool metalioPlusImuWake() {
+  if (!metalio_i2c1_lock(kTimeoutMs)) return false;
+  if (!imuReady) {
+    metalio_i2c1_unlock();
+    return false;
+  }
+  imuAwake = false;
+  // SC7A20H high-resolution +/-2g, BDU; do not touch the shared GPIO2 IRQ routes.
+  const bool ok = imuPollingConfigSafe() && imuWriteByte(0x20, 0x07) && imuWriteByte(0x1f, 0x01) &&
+                  imuWriteByte(0x23, 0x80) && imuWriteByte(0x20, 0x57);
+  if (!ok) imuWriteByte(0x20, 0x07);  // Bounded standby attempt after a partial/ambiguous write.
+  imuAwake = ok;
+  metalio_i2c1_unlock();
+  if (ok) delay(10);
+  return ok;
+}
+
+bool metalioPlusImuSleep() {
+  if (!metalio_i2c1_lock(kTimeoutMs)) return false;
+  const bool ok = imuReady && imuWriteByte(0x20, 0x07);
+  imuAwake = false;  // An uncertain hardware state must never expose a fresh sample.
+  metalio_i2c1_unlock();
+  return ok;
+}
+
+bool metalioPlusImuRead(int16_t* axes) {
+  if (!axes || !metalio_i2c1_lock(kTimeoutMs)) return false;
+  uint8_t status = 0, raw[6] = {};
+  const uint8_t reg = 0xa8;
+  const bool ok =
+      imuReady && imuAwake && imuReadByte(0x27, status) && (status & 0x08) &&
+      metalio_i2c1_transmit_receive_locked(I2C_NUM_1, 0x19, &reg, 1, raw, sizeof(raw), kTimeoutMs) == ESP_OK;
+  metalio_i2c1_unlock();
+  if (!ok) return false;
+  for (size_t i = 0; i < 3; ++i)
+    axes[i] = static_cast<int16_t>((raw[i * 2] & 0xf0) | (static_cast<uint16_t>(raw[i * 2 + 1]) << 8));
+  return true;
 }
 
 bool metalioPlusTouchRead(uint8_t* frame, size_t size) {

@@ -18,7 +18,11 @@ static_assert(BoardConfig::DEFAULT_DEVICE.displayWidth==1216 && BoardConfig::DEF
 static_assert(BoardConfig::MAX_FRAMEBUFFER_BYTES==103968);
 static_assert(BoardConfig::DEFAULT_DEVICE.display.sclk==BoardConfig::PIN_UNASSIGNED);
 static_assert(BoardConfig::DEFAULT_DEVICE.grayscaleLevels==4);
-static_assert(FREEINK_CAP_RTC && !FREEINK_CAP_IMU && !FREEINK_CAP_TEMP_HUMIDITY);
+static_assert(FREEINK_CAP_RTC && FREEINK_CAP_IMU && !FREEINK_CAP_TEMP_HUMIDITY);
+static_assert(BoardConfig::DEFAULT_DEVICE.sensors.imuType==BoardConfig::ImuType::Sc7a20h);
+static_assert(BoardConfig::DEFAULT_DEVICE.sensors.imuAddr==0x19);
+static_assert(BoardConfig::DEFAULT_DEVICE.sensors.imuSwapXY);
+static_assert(BoardConfig::DEFAULT_DEVICE.sensors.imuFlipX && BoardConfig::DEFAULT_DEVICE.sensors.imuFlipY);
 static_assert(BoardConfig::DEFAULT_DEVICE.sensors.rtcType==BoardConfig::RtcType::Pcf8563);
 static_assert(BoardConfig::DEFAULT_DEVICE.sensors.rtcAddr==0x51 && BoardConfig::DEFAULT_DEVICE.sensors.i2cBus==1);
 static_assert(BoardConfig::DEFAULT_DEVICE.sensors.i2cSda==0 && BoardConfig::DEFAULT_DEVICE.sensors.i2cScl==1);

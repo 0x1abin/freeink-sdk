@@ -426,9 +426,10 @@
 #define FREEINK_CAP_TEMP_HUMIDITY (FREEINK_DEVICE_STICKY)
 #endif
 #ifndef FREEINK_CAP_IMU
-#define FREEINK_CAP_IMU                                                                                 \
-  (FREEINK_DEVICE_X3 || FREEINK_DEVICE_STICKY || FREEINK_DEVICE_X4CLASSIC || FREEINK_DEVICE_READPICO || \
-   FREEINK_DEVICE_WS397 || FREEINK_DEVICE_METALIO_EINK4 || FREEINK_DEVICE_PICCO || FREEINK_DEVICE_PAPERMONO)
+#define FREEINK_CAP_IMU                                                                                        \
+  (FREEINK_DEVICE_X3 || FREEINK_DEVICE_STICKY || FREEINK_DEVICE_X4CLASSIC || FREEINK_DEVICE_READPICO ||        \
+   FREEINK_DEVICE_WS397 || FREEINK_DEVICE_METALIO_EINK4 || FREEINK_DEVICE_PICCO || FREEINK_DEVICE_PAPERMONO || \
+   FREEINK_DEVICE_METALIO_EINK4_PLUS)
 #endif
 // LEDC PWM buzzer (tone beeper). The Buzzer lib drives the AudioConfig.buzzer
 // pin; on for boards that wire one (Sticky GPIO48, Murphy GPIO46, PaperS3
@@ -1774,8 +1775,9 @@ constexpr BoardProfile METALIO_EINK4_PLUS = {
     // Native I2C1; CX25601N charger and gauge calibration remain untouched.
     {0, 1, 100000, 0x55, 0, 1, GaugeType::Bq27220, 0},
     NO_MIC,
-    // V1.4 PCF8563; native transport only. RTC_INT on TCA P16 is not armed.
-    {0, 1, 100000, 0x51, 0, 0, 1, RtcType::Pcf8563},
+    // Native RTC/SC7A20H; no IRQ routing changes on the GPIO2 wake line.
+    // V1.4 mount to the portrait gravity frame: (x, y) = (-rawY, -rawX).
+    {0, 1, 100000, 0x51, 0, 0x19, 1, RtcType::Pcf8563, ImuType::Sc7a20h, true, true, true},
     1.25f,
     {},
     0,
