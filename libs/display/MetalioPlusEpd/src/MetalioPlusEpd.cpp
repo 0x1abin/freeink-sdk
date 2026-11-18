@@ -2,6 +2,8 @@
 #include <MetalioPlusEpd.h>
 #include <esp_log.h>
 
+#include <cstring>
+
 extern "C" {
 #include <epd_board_metalio_eink4_plus.h>
 #include <epdiy.h>
@@ -62,6 +64,16 @@ uint8_t* metalioPlusEpdStageBase(const uint8_t* framebuffer) {
       target[byte * 4 + pair] = even | odd;
     }
   }
+  targetStaged = true;
+  return target;
+}
+
+uint8_t* metalioPlusEpdStageNative() {
+  targetStaged = false;
+  if (!ready || powerFault) return nullptr;
+  auto* target = epd_hl_get_framebuffer(MetalioEpd_Hl());
+  if (!target) return nullptr;
+  std::memset(target, 0xff, kFrameBytes * 4);  // Existing vendor PSRAM, not a new allocation.
   targetStaged = true;
   return target;
 }

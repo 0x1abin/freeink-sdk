@@ -56,7 +56,10 @@ EpdDrawError epd_hl_update_screen(EpdiyHighlevelState*,int,int);
                str(HERE / "test.cpp"), str(LIB / "src/MetalioPlusEpd.cpp"),
                str(root / "src/driver/MetalioPlusDriver.cpp"), "-o", str(root / "test")]
     subprocess.run(command, check=True)
-    for case in ["gray_whole", "gray_strips", "gray_repeat", "gray_to_bw", "gray_missing", "gray_reordered",
+    for case in ["native_cadence", "native_levels", "native_repeat", "native_cancel", "native_resync", "native_sleep",
+                 "native_overlay", "native_from_overlay", "native_to_bw", "native_draw_failure",
+                 "native_power_failure", "native_off_failure",
+                 "gray_whole", "gray_strips", "gray_repeat", "gray_to_bw", "gray_missing", "gray_reordered",
                  "gray_gap", "gray_bounds", "gray_zero_rows", "gray_null", "gray_invalid_mask", "gray_cancel",
                  "gray_fallback", "gray_sleep", "gray_resync", "gray_new_base", "gray_full",
                  "gray_draw_failure", "gray_power_failure", "gray_off_failure",

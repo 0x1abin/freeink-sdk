@@ -17,7 +17,7 @@ static_assert(BoardConfig::DEFAULT_DEVICE.board==BoardConfig::Board::MetalioEink
 static_assert(BoardConfig::DEFAULT_DEVICE.displayWidth==1216 && BoardConfig::DEFAULT_DEVICE.displayHeight==684);
 static_assert(BoardConfig::MAX_FRAMEBUFFER_BYTES==103968);
 static_assert(BoardConfig::DEFAULT_DEVICE.display.sclk==BoardConfig::PIN_UNASSIGNED);
-static_assert(BoardConfig::DEFAULT_DEVICE.grayscaleLevels==4);
+static_assert(BoardConfig::DEFAULT_DEVICE.grayscaleLevels==16);
 static_assert(FREEINK_CAP_RTC && FREEINK_CAP_IMU && !FREEINK_CAP_TEMP_HUMIDITY);
 static_assert(BoardConfig::DEFAULT_DEVICE.sensors.imuType==BoardConfig::ImuType::Sc7a20h);
 static_assert(BoardConfig::DEFAULT_DEVICE.sensors.imuAddr==0x19);

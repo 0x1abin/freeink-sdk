@@ -339,10 +339,11 @@ static void testNativeTransaction() {
          display.beginGrayscale16() == nullptr);
   BoardConfig::ACTIVE.grayscaleLevels = 16;
   display._refreshPending = true;
+  assert(!display.supportsNativeGrayscaleRefreshCycle());
   assert(display.beginGrayscale16() == driver.frame &&
          !display.isRefreshPending());
   assert(display.beginGrayscale16() == nullptr);
-  assert(display.commitGrayscale16() && !display.commitGrayscale16());
+  assert(display.commitGrayscale16(FreeInkDisplay::FAST_REFRESH) && !display.commitGrayscale16());
   assert(display.beginGrayscale16() == driver.frame);
   display.cancelGrayscale16();
   display.cancelGrayscale16();
@@ -356,6 +357,23 @@ static void testNativeTransaction() {
   assert(display.beginGrayscale16() == driver.frame);
   display.deepSleep();
   assert(driver.cancels == 2);
+  class ModeDriver : public NativeDriver {
+   public:
+    freeink::RefreshMode seen = freeink::RefreshMode::Full;
+    bool supportsNativeGrayscaleRefreshCycle() const override { return true; }
+    bool commitGrayscale16WithMode(const uint8_t* proxy, freeink::RefreshMode mode) override {
+      seen = mode;
+      return NativeDriver::commitGrayscale16(proxy);
+    }
+  } modeDriver;
+  FreeInkDisplay modeDisplay(1, 2, 3, 4, 5, 6);
+  modeDisplay._driver = &modeDriver;
+  modeDisplay.begin();
+  modeDisplay._refreshPending = true;
+  assert(modeDisplay.supportsNativeGrayscaleRefreshCycle());
+  assert(modeDisplay.beginGrayscale16() == modeDriver.frame);
+  assert(modeDisplay.commitGrayscale16(FreeInkDisplay::HALF_REFRESH));
+  assert(modeDriver.seen == freeink::RefreshMode::Half);
   BoardConfig::ACTIVE.grayscaleLevels = 4;
 }
 

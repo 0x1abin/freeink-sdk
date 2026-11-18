@@ -59,6 +59,36 @@ GrayscaleCapabilities MetalioPlusDriver::grayscaleCapabilities(GrayscaleMode mod
   return {GrayscaleEncoding::OverlayMasks, GrayscaleBase::Combined, true, false, false};
 }
 
+uint8_t* MetalioPlusDriver::beginGrayscale16() {
+  discardGrayPass();
+  committed = false;
+  grayTarget = ready ? metalioPlusEpdStageNative() : nullptr;
+  grayPass = grayTarget ? GrayPass::Native16 : GrayPass::Invalid;
+  return grayTarget;
+}
+
+bool MetalioPlusDriver::commitGrayscale16(const uint8_t* bwProxy) {
+  return commitGrayscale16WithMode(bwProxy, RefreshMode::Full);
+}
+
+bool MetalioPlusDriver::commitGrayscale16WithMode(const uint8_t* bwProxy, RefreshMode mode) {
+  (void)bwProxy;  // The caller maintains a B/W proxy; native ink remains the real baseline.
+  committed = false;
+  if (grayPass != GrayPass::Native16 || !grayTarget) return false;
+  committed = metalioPlusEpdCommit(mode == RefreshMode::Full ? MetalioPlusRefresh::Full : MetalioPlusRefresh::Half);
+  if (committed) {
+    lastWasGray = true;
+    discardGrayPass();
+  } else {
+    grayPass = GrayPass::Failed;
+  }
+  return committed;
+}
+
+void MetalioPlusDriver::cancelGrayscale16() {
+  if (grayPass == GrayPass::Native16 || grayPass == GrayPass::Failed) discardGrayPass();
+}
+
 void MetalioPlusDriver::beginGrayscale(EpdBus& bus, const uint8_t* fb, GrayscaleMode mode, RefreshMode fallback,
                                        bool turnOff) {
   (void)bus;
@@ -154,6 +184,8 @@ void MetalioPlusDriver::cleanupGrayscaleBuffers(EpdBus& bus, const uint8_t* bw) 
       break;
     case GrayPass::Failed:
       break;  // Do not immediately retry failed hardware work.
+    case GrayPass::Native16:
+      break;  // Cancellation is not permission to display a native target or its proxy.
   }
   discardGrayPass();
 }

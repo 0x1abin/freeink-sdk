@@ -18,6 +18,11 @@ class MetalioPlusDriver : public PanelDriver {
   void display(EpdBus& bus, const uint8_t* fb, const uint8_t* prev, RefreshMode mode, bool turnOff) override;
   void requestResync(uint8_t) override;
   bool displayCommitted() const override { return committed; }
+  uint8_t* beginGrayscale16() override;
+  bool commitGrayscale16(const uint8_t* bwProxy) override;
+  bool supportsNativeGrayscaleRefreshCycle() const override { return true; }
+  bool commitGrayscale16WithMode(const uint8_t* bwProxy, RefreshMode mode) override;
+  void cancelGrayscale16() override;
   GrayscaleCapabilities grayscaleCapabilities(GrayscaleMode mode = GrayscaleMode::Overlay) const override;
   void beginGrayscale(EpdBus& bus, const uint8_t* fb, GrayscaleMode mode, RefreshMode fallback, bool turnOff) override;
   void displayGrayscaleBase(EpdBus& bus, const uint8_t* fb, RefreshMode fallback, bool turnOff) override;
@@ -31,7 +36,7 @@ class MetalioPlusDriver : public PanelDriver {
   void cleanupGrayscaleBuffers(EpdBus& bus, const uint8_t* bw) override;
 
  private:
-  enum class GrayPass : uint8_t { Idle, Collecting, Invalid, Failed };
+  enum class GrayPass : uint8_t { Idle, Collecting, Native16, Invalid, Failed };
   void discardGrayPass();
   bool ready = false;
   bool committed = false;

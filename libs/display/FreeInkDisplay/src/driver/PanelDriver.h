@@ -124,6 +124,12 @@ class PanelDriver {
     (void)bwProxy;
     return false;
   }
+  // Compatible extension: old native drivers keep their established waveform.
+  virtual bool supportsNativeGrayscaleRefreshCycle() const { return false; }
+  virtual bool commitGrayscale16WithMode(const uint8_t* bwProxy, RefreshMode mode) {
+    (void)mode;
+    return commitGrayscale16(bwProxy);
+  }
   virtual void cancelGrayscale16() {}
 
   // --- grayscale (dual-plane LSB/MSB) ---

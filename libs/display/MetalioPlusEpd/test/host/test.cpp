@@ -58,6 +58,7 @@ EpdDrawError epd_hl_update_screen(EpdiyHighlevelState* hl, int mode, int tempera
 }
 
 #include "gray_cases.h"
+#include "native_cases.h"
 
 int main(int argc, char** argv) {
   assert(argc == 2);
@@ -76,6 +77,11 @@ int main(int argc, char** argv) {
   std::vector<uint8_t> frame(103968, 0xff);
   frame.front() = 0x81;
   frame.back() = 0x01;
+  if (scenario.rfind("native_", 0) == 0) {
+    runNativeScenario(driver, bus, scenario, frame);
+    std::printf("Metalio Plus %s: passed\n", scenario.c_str());
+    return 0;
+  }
   if (scenario.rfind("gray_", 0) == 0) {
     runGrayScenario(driver, bus, scenario, frame);
     std::printf("Metalio Plus %s: passed\n", scenario.c_str());

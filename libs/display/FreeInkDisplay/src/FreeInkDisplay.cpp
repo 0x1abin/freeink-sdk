@@ -1258,14 +1258,20 @@ uint8_t *FreeInkDisplay::beginGrayscale16() {
   return buffer;
 }
 
-bool FreeInkDisplay::commitGrayscale16() {
+bool FreeInkDisplay::commitGrayscale16() { return commitGrayscale16(FULL_REFRESH); }
+
+bool FreeInkDisplay::supportsNativeGrayscaleRefreshCycle() const {
+  return _driver && _driver->supportsNativeGrayscaleRefreshCycle();
+}
+
+bool FreeInkDisplay::commitGrayscale16(RefreshMode mode) {
   if (!_nativeGrayActive || !_driver)
     return false;
   DisplayPmLock pmLock;
   _nativeGrayActive = false;
   _shadowValid = false;
   _redRamSynced = false;
-  return _driver->commitGrayscale16(frameBuffer);
+  return _driver->commitGrayscale16WithMode(frameBuffer, toInternal(mode));
 }
 
 void FreeInkDisplay::cancelGrayscale16() {
