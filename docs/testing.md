@@ -313,3 +313,23 @@ and VL while TEST1 external-clock mode still rejects writes; each recovery
 transfer failure is covered. No RTC alarm wake is enabled. The native bus owner's
 lazy IDF handle allocation, physical UTC convention, time continuity and
 current/heap costs remain separate device checks.
+
+## Plus IMU and native16 coverage (2026-11-18)
+
+`python3 libs/hardware/Imu/test/host/run_metalio_plus.py` exercises production
+IMU/native-I2C ownership with 33 recording cases. Identity 0x11/version 0x28,
+conservative IRQ/FIFO/filter guards, polled BDU/read-ready, and failed standby
+preserve caller samples. It also compiles the actual V1.4 profile and checks all
+four mounted axes. Four reader orientations and touch/page/Home actions were
+accepted on one unit; raw identity/register capture, flat/shaking suppression,
+sleep lifecycle, and idle current remain separate physical checks.
+
+`python3 libs/display/MetalioPlusEpd/test/host/run.py` covers 46 cases with frame
+fingerprints disabled and enabled (92 scenario executions), plus the standalone
+fingerprint helper. Cases include native16 packing, cancellation, native/overlay
+transitions, one activation, resync/sleep, failures, and GC16/GL16 cadence.
+`python3 libs/display/FreeInkDisplay/test/host/run_pro.py` checks native mode
+dispatch and the legacy virtual fallback. Native16 optical separation and
+bounded reader/image acceptance were recorded in CrossMux on one V1.4 unit;
+these host checks alone do not establish optical output, low-power behavior,
+or field endurance.
