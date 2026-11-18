@@ -4,6 +4,10 @@
 
 #include <cstring>
 
+#if defined(METALIO_PLUS_FRAME_DIAGNOSTICS)
+#include "FrameDiagnostics.h"
+#endif
+
 extern "C" {
 #include <epd_board_metalio_eink4_plus.h>
 #include <epdiy.h>
@@ -84,6 +88,11 @@ bool metalioPlusEpdCommit(MetalioPlusRefresh mode) {
   const auto started = millis();
   const bool clean = !baselineKnown || mode == MetalioPlusRefresh::Full;
   const auto waveform = clean ? MODE_GC16 : (mode == MetalioPlusRefresh::Half ? MODE_GL16 : MODE_DU);
+#if defined(METALIO_PLUS_FRAME_DIAGNOSTICS)
+  const auto frame = frameDiagnostics(epd_hl_get_framebuffer(MetalioEpd_Hl()), kWidth, kHeight);
+  ESP_LOGI("PlusFrame", "source=%08lx center=%08lx baseline=%d requested=%u", static_cast<unsigned long>(frame.entire),
+           static_cast<unsigned long>(frame.center), baselineKnown, static_cast<unsigned>(mode));
+#endif
   // Once hardware work begins the physical image is uncertain until the entire
   // checked operation completes. A failed frame must never become a diff base.
   baselineKnown = false;

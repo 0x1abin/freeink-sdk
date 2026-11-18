@@ -14,6 +14,10 @@ required = [LIB / "src/MetalioPlusEpd.cpp", LIB / "include/MetalioPlusEpd.h",
 assert all(p.is_file() for p in required), "Plus production adapter and PanelDriver are not implemented"
 with tempfile.TemporaryDirectory(prefix="freeink-metalio-plus-") as tmp:
     root = Path(tmp)
+    diagnostics = root / "frame-diagnostics"
+    subprocess.run([os.environ.get("CXX", "c++"), "-std=c++17", "-Wall", "-Wextra", "-Werror",
+                    "-I" + str(LIB / "src"), str(HERE / "frame_diagnostics.cpp"), "-o", str(diagnostics)], check=True)
+    subprocess.run([str(diagnostics)], check=True)
     for folder in ["src/driver", "src/bus", "include"]:
         (root / folder).mkdir(parents=True)
     for name in ["MetalioPlusDriver.h", "MetalioPlusDriver.cpp", "PanelDriver.h"]:
@@ -55,14 +59,16 @@ EpdDrawError epd_hl_update_screen(EpdiyHighlevelState*,int,int);
                "-I" + str(root), "-I" + str(root / "include"), "-I" + str(LIB / "include"),
                str(HERE / "test.cpp"), str(LIB / "src/MetalioPlusEpd.cpp"),
                str(root / "src/driver/MetalioPlusDriver.cpp"), "-o", str(root / "test")]
-    subprocess.run(command, check=True)
-    for case in ["native_cadence", "native_levels", "native_repeat", "native_cancel", "native_resync", "native_sleep",
-                 "native_overlay", "native_from_overlay", "native_to_bw", "native_draw_failure",
-                 "native_power_failure", "native_off_failure",
-                 "gray_whole", "gray_strips", "gray_repeat", "gray_to_bw", "gray_missing", "gray_reordered",
-                 "gray_gap", "gray_bounds", "gray_zero_rows", "gray_null", "gray_invalid_mask", "gray_cancel",
-                 "gray_fallback", "gray_sleep", "gray_resync", "gray_new_base", "gray_full",
-                 "gray_draw_failure", "gray_power_failure", "gray_off_failure",
-                 "modes", "resync", "sleep_recovery", "diff_failure", "diff_power_failure", "diff_off_failure", "success", "init_failure", "geometry_failure", "power_failure", "clear_failure",
-                 "draw_failure", "off_failure", "port_failure"]:
-        subprocess.run([str(root / "test"), case], check=True)
+    for diagnostics_enabled in (False, True):
+        variant = command + (["-DMETALIO_PLUS_FRAME_DIAGNOSTICS=1"] if diagnostics_enabled else [])
+        subprocess.run(variant, check=True)
+        for case in ["native_cadence", "native_levels", "native_repeat", "native_cancel", "native_resync", "native_sleep",
+                     "native_overlay", "native_from_overlay", "native_to_bw", "native_draw_failure",
+                     "native_power_failure", "native_off_failure",
+                     "gray_whole", "gray_strips", "gray_repeat", "gray_to_bw", "gray_missing", "gray_reordered",
+                     "gray_gap", "gray_bounds", "gray_zero_rows", "gray_null", "gray_invalid_mask", "gray_cancel",
+                     "gray_fallback", "gray_sleep", "gray_resync", "gray_new_base", "gray_full",
+                     "gray_draw_failure", "gray_power_failure", "gray_off_failure",
+                     "modes", "resync", "sleep_recovery", "diff_failure", "diff_power_failure", "diff_off_failure", "success", "init_failure", "geometry_failure", "power_failure", "clear_failure",
+                     "draw_failure", "off_failure", "port_failure"]:
+            subprocess.run([str(root / "test"), case], check=True)
