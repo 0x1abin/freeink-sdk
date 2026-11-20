@@ -15,6 +15,9 @@
 #include <freertos/task.h>
 
 #include <cstdint>
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+#include <atomic>
+#endif
 
 #if FREEINK_DEVICE_WAVESHARE_EPAPER_397
 #include "FunctionButtonGesture.h"
@@ -30,9 +33,18 @@
 class InputManager {
 public:
   InputManager();
+  ~InputManager();
   void begin();
-  // A4: stop touch and release the shared I2C bus after all other bus users
-  // finish.
+  // Metalio Plus: capture touch every 10 ms while update()/queries stay on the main thread.
+  // Requires PSRAM. Returns false on unsupported boards or allocation failure; synchronous polling remains usable.
+  // Mutually exclusive with beginAsync(). Stop before destroying this object or changing boards.
+  bool beginBufferedTouch();
+  void endBufferedTouch();
+  // Screen transition: discard queued input and ignore an inherited contact until release.
+  void discardBufferedTouch();
+  // Capture clock of the delivered touch frame; use for downstream gesture timers.
+  uint32_t touchFrameTime() const;
+  // A4: stop touch and release the shared I2C bus after all other bus users finish.
   bool prepareForDeepSleep();
   uint8_t getState();
 
@@ -234,6 +246,9 @@ public:
   // of wasAnyPressed/Released) for resetting idle/sleep timers and restoring
   // CPU frequency. False on non-touch boards.
   bool wasTouchActivity() const;
+  // True while Metalio touch needs sampling (IRQ, held contact or Plus confirmation).
+  // Idle loops should keep polling while this is set; it does not accept a tap.
+  bool touchContactPending() const;
   // True on the press edge of the GT911 capacitive home key (controllers
   // without one never report it). Cleared each #update().
   bool wasHomeKeyPressed() const;
@@ -434,6 +449,36 @@ private:
   void updateTouchFromIrq(unsigned long now,
                           int irqRaw); // CHSC6x I2C poll + touch-bit gate
   void pollGt911(unsigned long now);   // GT911 polled read
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+  struct BufferedTouchSample {
+    uint32_t atMs;
+    uint32_t generation;
+    uint8_t data[11];
+    bool ok;
+  };
+  static constexpr unsigned TOUCH_QUEUE_LENGTH = 256;  // 2.56 s at 100 Hz; overflow cancels the contact.
+  QueueHandle_t touchQueue = nullptr;
+  StaticQueue_t* touchQueueControl = nullptr;
+  uint8_t* touchQueueStorage = nullptr;
+  std::atomic<bool> touchWorkerStop{false};
+  std::atomic<bool> touchWorkerRunning{false};
+  std::atomic<bool> touchQueueOverflow{false};
+  std::atomic<uint32_t> touchGeneration{0};
+  std::atomic<uint32_t> lastCapturedContactAt{0};
+  uint32_t bufferedTouchAt = 0;
+  bool bufferedTouchWaitRelease = false;
+  uint32_t bufferedTouchWaitSince = 0;
+  bool bufferedButtonsSettling = false;
+  uint8_t bufferedPageButtons = 0;
+  static void bufferedTouchTask(void* self);
+  void captureTouchSample();
+  uint8_t serviceBufferedTouch();
+  void beginPlusTouch();
+  void pollPlusTouch(unsigned long now);
+  void processPlusTouch(unsigned long now, const uint8_t* data, bool ok);
+  unsigned long cstLastSample = 0;
+#endif
+  void classifyTouchLongPress(unsigned long now);
   void beginFt5x06();
   void pollFt5x06(unsigned long now);
   bool ft5x06WriteReg(uint8_t reg, uint8_t value);

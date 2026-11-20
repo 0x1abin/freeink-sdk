@@ -1,6 +1,9 @@
 #include "InputManager.h"
 
 #include <algorithm>
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+#include <esp_heap_caps.h>
+#endif
 
 #include "MultiTouchGestureMath.h"
 #if FREEINK_DEVICE_METALIO_EINK4
@@ -75,6 +78,10 @@ bool movedBeyondSlop(const int dx, const int dy, const int slop) {
   return absInt(dx) > slop || absInt(dy) > slop;
 }
 #endif
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+volatile bool cstInterrupt = false;
+void IRAM_ATTR cstTouchInterrupt() { cstInterrupt = true; }
+#endif
 
 #if defined(TOUCH_PROBE_DEBUG)
 void touchDebugPrintf(const char *format, ...) {
@@ -109,7 +116,7 @@ InputManager::InputManager()
       twoButtonPhysicalState(0), twoButtonPressStart(0),
       twoButtonLongPressActive(false) {}
 
-#if FREEINK_DEVICE_METALIO_EINK4
+#if FREEINK_DEVICE_METALIO_EINK4 || FREEINK_DEVICE_METALIO_EINK4_PLUS
 // The vendor firmware waits up to ~2 s for the expander on slow-starting boards.
 static constexpr uint32_t METALIO_BOOT_WAIT_MS = 3000;
 #endif
@@ -124,6 +131,9 @@ void InputManager::begin() {
 
 #if FREEINK_DEVICE_METALIO_EINK4
   if (BoardConfig::isMetalioEInk4()) freeink::metalio::ensureBooted(METALIO_BOOT_WAIT_MS);
+#endif
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+  if (BoardConfig::isMetalioEInk4Plus()) freeink::metalioplus::ensureBooted(METALIO_BOOT_WAIT_MS);
 #endif
   if (hasToggleSwitch()) {
     pinMode(BoardConfig::ACTIVE.input.toggleSwitch, INPUT_PULLUP);
@@ -293,6 +303,7 @@ bool piccoWaitInt(int8_t irq, unsigned long timeoutMs);
 #endif
 
 bool InputManager::prepareForDeepSleep() {
+  endBufferedTouch();
 #if FREEINK_CAP_TOUCH
   const auto &t = BoardConfig::ACTIVE.touch;
 #endif
@@ -355,7 +366,10 @@ bool InputManager::prepareForDeepSleep() {
 #if FREEINK_CAP_TOUCH
   switch (t.controller) {
   case BoardConfig::TouchController::Ft6336u:
-#if FREEINK_DEVICE_MURPHY_M4
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+    detachInterrupt(t.irq);
+    return !touchDataEnabled || ft5x06WriteReg(0xA5, 0x03);
+#elif FREEINK_DEVICE_MURPHY_M4
     pauseFt6336uPolling();
     if (t.powerEnable >= 0) {
       pinMode(t.powerEnable, OUTPUT);
@@ -404,10 +418,155 @@ bool InputManager::prepareForDeepSleep() {
   return true;
 }
 
-void InputManager::beginAsync(const uint8_t taskPriority, const uint32_t pollMs,
-                              const uint8_t queueLen) {
-  if (_asyncTask)
-    return; // already running
+InputManager::~InputManager() { endBufferedTouch(); }
+
+bool InputManager::beginBufferedTouch() {
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+  if (touchQueue) return true;
+  if (_asyncTask || !touchDataEnabled || !BoardConfig::isMetalioEInk4Plus()) return false;
+  // FreeRTOS borrows these buffers; this InputManager frees them after deleting the queue.
+  touchQueueControl = static_cast<StaticQueue_t*>(
+      heap_caps_malloc(sizeof(StaticQueue_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
+  touchQueueStorage = static_cast<uint8_t*>(heap_caps_malloc(TOUCH_QUEUE_LENGTH * sizeof(BufferedTouchSample),
+                                                           MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT));
+  if (touchQueueControl && touchQueueStorage) {
+    touchQueue = xQueueCreateStatic(TOUCH_QUEUE_LENGTH, sizeof(BufferedTouchSample), touchQueueStorage, touchQueueControl);
+  }
+  if (!touchQueue) {
+    endBufferedTouch();
+    return false;
+  }
+  touchWorkerStop = false;
+  touchQueueOverflow = false;
+  bufferedTouchWaitRelease = false;
+  bufferedTouchAt = millis();
+  lastCapturedContactAt = bufferedTouchAt;
+  touchWorkerRunning = true;
+  // SDK owns the queue and task until endBufferedTouch(); no hot-path allocations.
+  if (xTaskCreate(bufferedTouchTask, "fi_touch", 4096, this, 2, nullptr) != pdPASS) {
+    touchWorkerRunning = false;
+    endBufferedTouch();
+    return false;
+  }
+  return true;
+#else
+  return false;
+#endif
+}
+
+void InputManager::endBufferedTouch() {
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+  touchWorkerStop = true;
+  // Let an in-flight I2C read release the shared bus before stopping.
+  while (touchWorkerRunning.load()) vTaskDelay(pdMS_TO_TICKS(1));
+  if (touchQueue) {
+    discardBufferedTouch();
+    vQueueDelete(touchQueue);
+    touchQueue = nullptr;
+  }
+  heap_caps_free(touchQueueStorage);
+  heap_caps_free(touchQueueControl);
+  touchQueueStorage = nullptr;
+  touchQueueControl = nullptr;
+#endif
+}
+
+void InputManager::discardBufferedTouch() {
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+  if (!touchQueue) {
+    suppressTouchContact();
+    if (cstContact.region != freeink::Cst816sRegion::None) cstContact.region = freeink::Cst816sRegion::Invalid;
+    return;
+  }
+  cstContact = {};
+  ++touchGeneration;  // Reject a read already in flight when the screen changed.
+  xQueueReset(touchQueue);
+  bufferedTouchWaitRelease = true;
+  bufferedTouchWaitSince = millis();
+  bufferedTouchAt = bufferedTouchWaitSince;
+  touchPressed = touchPressedEvent = touchReleasedEvent = false;
+  touchPoint.valid = false;
+  touchHomeKeyDown = touchHomeKeyEvent = touchHomeKeyTapEvent = touchHomeKeyLongEvent = touchHomeKeyLongFired = false;
+  touchSuppressed = touchLongPressEvent = touchLongPressFired = false;
+  // Cancel only outstanding synthetic page-key edges, not independent physical keys.
+  currentState &= ~bufferedPageButtons;
+  lastState &= ~bufferedPageButtons;
+  pressedEvents &= ~bufferedPageButtons;
+  releasedEvents &= ~bufferedPageButtons;
+  bufferedPageButtons = cstVirtualButtons = 0;
+  touchSnapshot = {};
+  multiTouchSwipeEvent = multiTouchRotationEvent = multiTouchPinchEvent = false;
+  bufferedButtonsSettling = false;
+  resetMultiTouchGesture();
+#endif
+}
+
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+void InputManager::bufferedTouchTask(void* arg) {
+  auto* self = static_cast<InputManager*>(arg);
+  while (!self->touchWorkerStop.load()) {
+    self->captureTouchSample();
+    vTaskDelay(pdMS_TO_TICKS(10));
+  }
+  self->touchWorkerRunning = false;
+  vTaskDelete(nullptr);
+}
+
+void InputManager::captureTouchSample() {
+  BufferedTouchSample sample{};
+  sample.generation = touchGeneration.load();
+  sample.ok = ft5x06ReadReg(0x02, sample.data, 11);
+  sample.atMs = millis();
+  if (sample.ok && (sample.data[0] & 0x0F)) lastCapturedContactAt = sample.atMs;
+  if (xQueueSend(touchQueue, &sample, 0) != pdTRUE) touchQueueOverflow = true;
+}
+
+uint8_t InputManager::serviceBufferedTouch() {
+  cstInterrupt = false;
+  if (touchQueueOverflow.exchange(false)) discardBufferedTouch();
+  if (!cstVirtualButtons && !((currentState | lastState) & bufferedPageButtons)) bufferedPageButtons = 0;
+  // Give the existing button debounce a stable frame before replaying a bezel-key release.
+  if (bufferedButtonsSettling) return cstVirtualButtons;
+  BufferedTouchSample sample{};
+  // Stop at semantic edges so one update never hides a press behind its release.
+  for (unsigned i = 0; i < TOUCH_QUEUE_LENGTH && xQueueReceive(touchQueue, &sample, 0) == pdTRUE; ++i) {
+    if (sample.generation != touchGeneration.load()) continue;
+    bufferedTouchAt = sample.atMs;
+    if (bufferedTouchWaitRelease) {
+      if (sample.ok) {
+        bufferedTouchWaitRelease = (sample.data[0] & 0x0F) != 0;
+        bufferedTouchWaitSince = sample.atMs;
+      } else if (sample.atMs - bufferedTouchWaitSince >= 100) {
+        // CST816S can NACK when idle; use the normal stale-contact release timeout.
+        bufferedTouchWaitRelease = false;
+      }
+      continue;
+    }
+    if (!touchPressed && !touchReleasedEvent && cstContact.region == freeink::Cst816sRegion::None) {
+      touchSuppressed = false;
+      touchLongPressFired = false;
+      resetMultiTouchGesture();
+    }
+    const uint8_t previousButtons = cstVirtualButtons;
+    processPlusTouch(sample.atMs, sample.data, sample.ok);
+    classifyTouchLongPress(sample.atMs);
+    if (cstVirtualButtons != previousButtons) {
+      bufferedPageButtons |= cstVirtualButtons;
+      bufferedButtonsSettling = true;
+    }
+    if (touchPressedEvent || touchReleasedEvent || touchLongPressEvent || touchHomeKeyEvent || touchHomeKeyTapEvent ||
+        touchHomeKeyLongEvent || multiTouchSwipeEvent || multiTouchRotationEvent || multiTouchPinchEvent ||
+        cstVirtualButtons != previousButtons) break;
+  }
+  return cstVirtualButtons;
+}
+#endif
+
+void InputManager::beginAsync(const uint8_t taskPriority, const uint32_t pollMs, const uint8_t queueLen) {
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+  if (touchQueue) return;  // buffered touch leaves update() owned by the main loop
+#endif
+  if (_asyncTask) return;  // already running
   _asyncPollMs = pollMs;
   _asyncQueue = xQueueCreate(queueLen, sizeof(uint8_t));
   if (!_asyncQueue)
@@ -551,7 +710,13 @@ bool InputManager::isDigitalPressed(const int8_t pin) const {
 
 uint8_t InputManager::getDigitalState() const {
   uint8_t state = 0;
-
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+  if (BoardConfig::isMetalioEInk4Plus()) {
+    const uint16_t keys = freeink::metalioplus::readPressedKeys();
+    if (keys & (1u << freeink::metalioplus::PIN_VOLUME_UP)) state |= (1 << BTN_UP);
+    if (keys & (1u << freeink::metalioplus::PIN_VOLUME_DOWN)) state |= (1 << BTN_DOWN);
+  }
+#endif
   if (BoardConfig::ACTIVE.inputStyle !=
           BoardConfig::InputStyle::DigitalConfirmBackHold &&
       BoardConfig::ACTIVE.inputStyle !=
@@ -897,6 +1062,9 @@ void InputManager::update() {
       physicalPressedEvents = pressedEvents & physicalState;
     }
   }
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+  if (touchQueue && state == currentState) bufferedButtonsSettling = false;
+#endif
 }
 
 void InputManager::updateToggleSwitch(const unsigned long now) {
@@ -919,6 +1087,12 @@ bool InputManager::isPressed(const uint8_t buttonIndex) const {
 }
 
 bool InputManager::isPowerButtonPhysicallyPressed() const {
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+  // The Plus's power key is an expander input, not a GPIO.
+  if (BoardConfig::isMetalioEInk4Plus()) {
+    return freeink::metalioplus::readPressedKeys() & (1u << freeink::metalioplus::PIN_POWER_KEY);
+  }
+#endif
   const int8_t pin = BoardConfig::ACTIVE.input.power;
   if (pin < 0)
     return false;
@@ -1024,6 +1198,7 @@ bool InputManager::supportsMultiTouch() const {
 #if FREEINK_TOUCH_TMA525C
   if (BoardConfig::ACTIVE.touch.controller == BoardConfig::TouchController::Tma525c) return piccoMaxContacts >= 2;
 #endif
+  if (BoardConfig::isMetalioEInk4Plus()) return true;  // FT6336U, two contacts
   const auto controller = BoardConfig::ACTIVE.touch.controller;
   return controller == BoardConfig::TouchController::Gt911 || controller == BoardConfig::TouchController::Cst836u ||
          controller == BoardConfig::TouchController::Gslx680;
@@ -1038,6 +1213,28 @@ InputManager::TouchSnapshot InputManager::getTouchSnapshot() const {
 #else
   return {};
 #endif
+}
+
+uint32_t InputManager::touchFrameTime() const {
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+  if (touchQueue) return bufferedTouchAt;
+#endif
+  return millis();
+}
+
+bool InputManager::touchContactPending() const {
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+  if (touchQueue && (touchQueueOverflow.load() ||
+                     static_cast<int32_t>(lastCapturedContactAt.load() - bufferedTouchAt) > 0)) return true;
+#endif
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+  if (touchDataEnabled) {
+    const auto irq = BoardConfig::ACTIVE.touch.irq;
+    if (cstInterrupt || (irq >= 0 && digitalRead(irq) == LOW) || touchPressed || touchHomeKeyDown || cstVirtualButtons)
+      return true;
+  }
+#endif
+  return false;
 }
 
 bool InputManager::isTouchPressed() const { return touchPressed; }
@@ -1114,7 +1311,11 @@ bool InputManager::isTouchTapCandidate(float &nx, float &ny,
       touchMultiContactSequence)
     return false;
   normalizeTouchPoint(touchDownPoint.x, touchDownPoint.y, nx, ny);
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+  heldMs = (touchQueue ? bufferedTouchAt : millis()) - touchDownPoint.timestamp;
+#else
   heldMs = millis() - touchDownPoint.timestamp;
+#endif
   return true;
 #else
   (void)nx;
@@ -1802,6 +2003,13 @@ void InputManager::beginTouch() {
 #if FREEINK_DEVICE_MURPHY_M4
     beginFt6336u(true);
 #else
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+    // Same 0x02 point frame as the CST816S; that path handles the bezel keys.
+    if (BoardConfig::isMetalioEInk4Plus()) {
+      beginPlusTouch();
+      return;
+    }
+#endif
     beginFt6336u();
 #endif
     return;
@@ -1849,6 +2057,9 @@ uint8_t InputManager::serviceTouch() {
   if (!__atomic_load_n(&touchDataEnabled, __ATOMIC_ACQUIRE)) {
     return 0;
   }
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+  if (touchQueue) return serviceBufferedTouch();
+#endif
   const unsigned long now = millis();
   const auto &t = BoardConfig::ACTIVE.touch;
 
@@ -1857,7 +2068,7 @@ uint8_t InputManager::serviceTouch() {
   // release edge consumed) and a new contact beginning in this same call is
   // delivered normally.
   if (!touchPressed && !touchReleasedEvent && !touchHomeKeyDown
-#if FREEINK_DEVICE_METALIO_EINK4
+#if FREEINK_DEVICE_METALIO_EINK4 || FREEINK_DEVICE_METALIO_EINK4_PLUS
       && cstContact.region == freeink::Cst816sRegion::None
 #endif
   ) {
@@ -1887,6 +2098,12 @@ uint8_t InputManager::serviceTouch() {
 #endif
 #if FREEINK_TOUCH_FT6336U
     case BoardConfig::TouchController::Ft6336u:
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+      if (BoardConfig::isMetalioEInk4Plus()) {
+        pollPlusTouch(now);
+        break;
+      }
+#endif
       pollFt6336u(now);
       break;
 #endif
@@ -1916,14 +2133,7 @@ uint8_t InputManager::serviceTouch() {
       break;  // driver compiled out: beginTouch() reported it and left touch disabled
   }
 
-  // Long-press classification, beside the tap/swipe machinery it shares state
-  // with. Fires once per contact, while the finger is still down.
-  if (touchPressed && !touchMultiContactSequence && !touchMovedBeyondTapSlop &&
-      !touchLongPressFired && !touchSuppressed &&
-      now - touchDownPoint.timestamp >= TOUCH_LONG_PRESS_MS) {
-    touchLongPressFired = true;
-    touchLongPressEvent = true;
-  }
+  classifyTouchLongPress(now);
 
 #if FREEINK_DEVICE_METALIO_EINK4
   if (t.controller == BoardConfig::TouchController::Cst816s)
@@ -1933,11 +2143,22 @@ uint8_t InputManager::serviceTouch() {
   if (t.controller == BoardConfig::TouchController::Cst836u)
     return cst836uButtons;
 #endif
-  return (t.synthesizeConfirm && now < touchIrqPulseUntil) ? (1 << BTN_CONFIRM)
-                                                           : 0;
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+  // The Plus FT6336U runs the CST816S poll path, bezel page keys included.
+  if (BoardConfig::isMetalioEInk4Plus()) return cstVirtualButtons;
+#endif
+  return (t.synthesizeConfirm && now < touchIrqPulseUntil) ? (1 << BTN_CONFIRM) : 0;
 #else
   return 0;
 #endif
+}
+
+void InputManager::classifyTouchLongPress(const unsigned long now) {
+  if (touchPressed && !touchMultiContactSequence && !touchMovedBeyondTapSlop && !touchLongPressFired &&
+      !touchSuppressed && now - touchDownPoint.timestamp >= TOUCH_LONG_PRESS_MS) {
+    touchLongPressFired = true;
+    touchLongPressEvent = true;
+  }
 }
 
 #if FREEINK_CAP_TOUCH
@@ -2113,10 +2334,12 @@ void InputManager::releaseTouch(const unsigned long now) {
 void InputManager::beginCst816s() {
   static_assert(BTN_UP == 4 && BTN_DOWN == 5,
                 "Metalio expander mask follows the SDK button indices");
+#if FREEINK_DEVICE_METALIO_EINK4
   if (!freeink::metalio::ensureBooted()) {
     esp_rom_printf("[touch] Metalio board initialization failed\r\n");
     return;
   }
+#endif
   const auto irq = BoardConfig::ACTIVE.touch.irq;
   pinMode(irq, INPUT_PULLUP);
   attachInterruptArg(
@@ -2411,6 +2634,99 @@ uint8_t InputManager::cst836uDecodeFrame(const uint8_t *data,
 #endif // FREEINK_DEVICE_READPICO
 
 // --- FT5x06 / FT6336 (M5Stack Paper Mono) ----------------------------------
+
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+// CST816S can NACK until the first touch: never gate availability on an ID
+// probe. Its 0x02..0x06 point frame uses the same packing as FT5x06, but its
+// interrupt/sleep behavior and off-screen cover keys need their own poll path.
+void InputManager::beginPlusTouch() {
+  const auto& t = BoardConfig::ACTIVE.touch;
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+  if (BoardConfig::isMetalioEInk4Plus() && !freeink::metalioplus::ensureBooted()) return;
+#endif
+  if (t.sda < 0 || t.scl < 0 || !t.i2cAddress) return;
+  if (!Wire.begin(t.sda, t.scl, 400000)) return;
+  Wire.setTimeOut(10);
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+  // FT6336U polling mode (as the vendor firmware): INT stays low while touched.
+  if (BoardConfig::isMetalioEInk4Plus()) ft5x06WriteReg(0xA4, 0x00);
+#endif
+  cstVirtualButtons = 0;
+  cstInterrupt = false;
+  if (t.irq >= 0) {
+    pinMode(t.irq, INPUT_PULLUP);
+    attachInterrupt(digitalPinToInterrupt(t.irq), cstTouchInterrupt, FALLING);
+  }
+  touchDataEnabled = true;
+}
+
+void InputManager::pollPlusTouch(const unsigned long now) {
+  if (static_cast<int32_t>(now - touchReadAt) < 0) return;
+  touchReadAt = now + TOUCH_SAMPLE_DELAY_MS;
+  cstInterrupt = false;
+  uint8_t data[11] = {};
+  const uint8_t readLen = 11;
+  const bool ok = ft5x06ReadReg(0x02, data, readLen);
+  processPlusTouch(now, data, ok);
+}
+
+void InputManager::processPlusTouch(const unsigned long now, const uint8_t* data, const bool ok) {
+  using Region = freeink::Cst816sRegion;
+  const auto& t = BoardConfig::ACTIVE.touch;
+  const Region previous = cstContact.region;
+  const auto classify = [&]() {
+    if (!ok) return now - cstLastSample >= 100 && previous != Region::None ? Region::Invalid : previous;
+    if (!(data[0] & 0x0F) || (data[1] >> 6) == 1) return Region::None;
+    const uint16_t x = ((data[1] & 0x0F) << 8) | data[2];
+    const uint16_t y = ((data[3] & 0x0F) << 8) | data[4];
+    if (y < 1216 && x < 684) return Region::Screen;
+    if (y < 1540 || y > 1660 || x > 360) return Region::Invalid;
+    if (x < 150) return Region::Home;
+    return x < 250 ? Region::Previous : Region::Next;
+  };
+  const Region region = classify();
+  if (!ok && region != Region::Invalid) return;
+  if (ok) cstLastSample = now;
+  cstContact.update(region, now, HOME_KEY_LONG_PRESS_MS);
+  touchHomeKeyDown = cstContact.region == Region::Home;
+  touchHomeKeyEvent = touchHomeKeyDown && previous == Region::None && !touchSuppressed;
+  touchHomeKeyTapEvent = cstContact.homeTap && !touchSuppressed;
+  touchHomeKeyLongEvent = cstContact.homeLong && !touchSuppressed;
+  cstVirtualButtons = 0;
+  if (cstContact.region != Region::Screen) {
+    if (cstContact.region == Region::Invalid) suppressTouchContact();
+    if (touchSnapshot.count) {
+      touchSnapshot.count = touchSnapshot.reportedCount = 0;
+      updateMultiTouchGesture(touchSnapshot, now);
+    }
+    releaseTouch(now);
+    if (!touchSuppressed && cstContact.region == Region::Previous) cstVirtualButtons = (1u << BTN_UP);
+    if (!touchSuppressed && cstContact.region == Region::Next) cstVirtualButtons = (1u << BTN_DOWN);
+    return;
+  }
+  const uint16_t rawX = ((data[1] & 0x0F) << 8) | data[2];
+  const uint16_t rawY = ((data[3] & 0x0F) << 8) | data[4];
+  const auto primary = mapTouchPoint(rawX, rawY, now);
+    // Two-contact snapshot for the shared gesture tracker; IDs are in YH[7:4].
+    touchSnapshot.idsStable = true;
+    touchSnapshot.count = 1;
+    touchSnapshot.points[0] = {static_cast<uint8_t>(data[3] >> 4), primary};
+    const uint16_t raw2X = ((data[7] & 0x0F) << 8) | data[8];
+    const uint16_t raw2Y = ((data[9] & 0x0F) << 8) | data[10];
+    const uint16_t x2 = t.swapXY ? raw2Y : raw2X;
+    const uint16_t y2 = t.swapXY ? raw2X : raw2Y;
+    if ((data[0] & 0x0F) >= 2 && (data[7] >> 6) != 1 && x2 >= t.rawMinX && x2 <= t.rawMaxX && y2 >= t.rawMinY &&
+        y2 <= t.rawMaxY) {
+      const auto second = mapTouchPoint(raw2X, raw2Y, now);
+      touchSnapshot.points[1] = {static_cast<uint8_t>(data[9] >> 4), second};
+      touchSnapshot.count = 2;
+    }
+    touchSnapshot.reportedCount = touchSnapshot.count;
+    updateMultiTouchGesture(touchSnapshot, now);
+  updateTouchContact(primary);
+  if (touchSnapshot.reportedCount > 1) touchMovedBeyondTapSlop = touchMovedBeyondTapReleaseSlop = true;
+}
+#endif  // FREEINK_DEVICE_METALIO_EINK4_PLUS
 
 #if FREEINK_TOUCH_FT5X06 || FREEINK_TOUCH_CST816S
 bool InputManager::ft5x06WriteReg(const uint8_t reg, const uint8_t value) {

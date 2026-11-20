@@ -9,3 +9,4 @@ inline void gpio_hold_dis(int pin) {
   gpioHeld[pin] = false;
 }
 inline void gpio_hold_en(int pin) { gpioHeld[pin] = true; }
+constexpr gpio_num_t GPIO_NUM_2 = 2;
