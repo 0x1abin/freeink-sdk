@@ -101,26 +101,9 @@ class GfxRendererTarget final : public DrawTarget {
     return static_cast<int16_t>(renderer.getLineHeight(gfxFont(font)));
   }
 
-  // Ink from glyph metrics: drawText puts the baseline `ascender` below the
-  // line top, and a glyph's ink starts `top` above the baseline.
-  // ponytail: ASCII only (status labels, clocks); other text keeps the line box.
   Rect inkBounds(const FontId font, const char* text, const TextStyle style) const override {
-    const Rect lineBox = DrawTarget::inkBounds(font, text, style);
-    const int fontId = gfxFont(font);
-    const auto it = renderer.getFontMap().find(fontId);
-    if (!text || it == renderer.getFontMap().end()) return lineBox;
-    const int ascender = renderer.getFontAscenderSize(fontId);
-    int top = lineBox.height;
-    int bottom = 0;
-    for (const char* p = text; *p; ++p) {
-      if (static_cast<unsigned char>(*p) >= 0x80) return lineBox;
-      const auto glyph = it->second.getGlyph(static_cast<uint32_t>(*p), fontStyle(style));
-      if (!glyph || glyph->height <= 0) continue;
-      top = std::min(top, ascender - static_cast<int>(glyph->top));
-      bottom = std::max(bottom, ascender - static_cast<int>(glyph->top) + static_cast<int>(glyph->height));
-    }
-    if (top >= bottom) return lineBox;
-    return Rect{0, static_cast<int16_t>(top), lineBox.width, static_cast<int16_t>(bottom - top)};
+    return measureInkBounds(renderer, gfxFont(font), text, fontStyle(style), DrawTarget::inkBounds(font, text, style),
+                            0);
   }
 
   void fill(const Rect rect, const Paint paint, const uint8_t radius = 0,
@@ -344,6 +327,34 @@ class GfxRendererTarget final : public DrawTarget {
   }
 
  private:
+
+  template <typename R>
+  static auto measureInkBounds(const R& r, const int fontId, const char* text, const EpdFontFamily::Style style,
+                               const Rect lineBox, int) -> decltype(r.getAsciiTextInkY(fontId, text, style), Rect{}) {
+    const auto [top, height] = r.getAsciiTextInkY(fontId, text, style);
+    return height > 0 ? Rect{0, static_cast<int16_t>(top), lineBox.width, static_cast<int16_t>(height)} : lineBox;
+  }
+
+  // Older renderers expose unscaled glyph metrics. Non-ASCII keeps the line box.
+  template <typename R>
+  static Rect measureInkBounds(const R& r, const int fontId, const char* text, const EpdFontFamily::Style style,
+                               const Rect lineBox, long) {
+    const auto it = r.getFontMap().find(fontId);
+    if (!text || it == r.getFontMap().end()) return lineBox;
+    const int ascender = r.getFontAscenderSize(fontId);
+    int top = lineBox.height;
+    int bottom = 0;
+    for (const char* p = text; *p; ++p) {
+      if (static_cast<unsigned char>(*p) >= 0x80) return lineBox;
+      const auto glyph = it->second.getGlyph(static_cast<uint32_t>(*p), style);
+      if (!glyph || glyph->height <= 0) continue;
+      top = std::min(top, ascender - static_cast<int>(glyph->top));
+      bottom = std::max(bottom, ascender - static_cast<int>(glyph->top) + static_cast<int>(glyph->height));
+    }
+    if (top >= bottom) return lineBox;
+    return Rect{0, static_cast<int16_t>(top), lineBox.width, static_cast<int16_t>(bottom - top)};
+  }
+
   Rect clip_{0, 0, 32767, 32767};
   const GfxRenderer& renderer;
   bool hasTouch_ = false;
