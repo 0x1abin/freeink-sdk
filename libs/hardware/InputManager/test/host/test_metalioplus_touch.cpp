@@ -49,5 +49,8 @@ int main() {
   gpioLevels[BoardConfig::ACTIVE.touch.irq] = LOW;
   assert(input.touchContactPending());
   gpioLevels[BoardConfig::ACTIVE.touch.irq] = HIGH;
-  std::puts("Metalio Plus IRQ recovery, idle wake, tap mapping and single-sample taps passed");
+  const auto beforePowerOff = fakeNow;
+  freeink::metalioplus::powerOff();
+  assert(fakeNow - beforePowerOff == 6000);  // Two complete pulse sequences when power stays on.
+  std::puts("Metalio Plus IRQ recovery, idle wake, tap mapping and power-off retry passed");
 }
