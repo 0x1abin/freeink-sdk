@@ -67,6 +67,9 @@
 #if FREEINK_DRIVER_IT8951
 #include "driver/It8951Driver.h"
 #endif
+#if FREEINK_DRIVER_EPDIY
+#include "driver/EpdiyDriver.h"
+#endif
 #if FREEINK_DRIVER_PAPER_MONO
 #include "driver/PaperMonoDriver.h"
 #endif
@@ -289,6 +292,8 @@ void FreeInkDisplay::selectDriver() {
     _driver = &lgfxEpdDriver();
 #elif FREEINK_DRIVER_IT8951
     _driver = &it8951Driver();
+#elif FREEINK_DRIVER_EPDIY
+    _driver = &epdiyDriver();
 #endif
     break;
   }
@@ -1277,6 +1282,33 @@ void FreeInkDisplay::cancelGrayscale16() {
   if (_nativeGrayActive && _driver)
     _driver->cancelGrayscale16();
   _nativeGrayActive = false;
+}
+
+bool FreeInkDisplay::supportsGray16Image() const { return _driver != nullptr && _driver->supportsGray16Image(); }
+
+bool FreeInkDisplay::displayGray16Image(const uint8_t* levels, bool turnOffScreen, bool fast) {
+  if (!levels || _inverted || _buildLent || !supportsGray16Image()) return false;
+  cancelGrayscalePass();
+  DisplayPmLock pmLock;
+  syncPendingAsync();
+  // The glass no longer shows a B/W frame, so no stored baseline matches it.
+  _shadowValid = false;
+  _redRamSynced = false;
+  // As with a B/W frame, the first refresh after a polarity change drives every pixel.
+  if (_inversionDirty) fast = false;
+  _inversionDirty = false;
+  return _driver->displayGray16Image(_bus, levels, turnOffScreen, fast);
+}
+
+bool FreeInkDisplay::setGray16Levels(const uint8_t (*paths)[3]) {
+  if (!_driver || !_driver->supportsGray16Image()) return false;
+  cancelGrayscalePass();
+  syncPendingAsync();  // never rebuild a table under a running refresh
+  return _driver->setGray16Levels(_bus, paths);
+}
+
+bool FreeInkDisplay::getGray16Levels(uint8_t (*paths)[3]) const {
+  return paths && _driver && _driver->supportsGray16Image() && _driver->getGray16Levels(paths);
 }
 
 void FreeInkDisplay::cancelGrayscalePass() {

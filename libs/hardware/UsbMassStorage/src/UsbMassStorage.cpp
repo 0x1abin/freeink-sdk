@@ -13,7 +13,6 @@
 extern "C" bool tud_mounted(void);
 extern "C" bool tud_suspended(void);
 extern "C" bool tud_disconnect(void);
-extern "C" bool tud_suspended(void);
 
 namespace freeink {
 namespace {
@@ -145,7 +144,13 @@ bool UsbMassStorage::begin(FsBlockDeviceInterface* dev) {
     _state.store(UsbMassStorageState::Idle);
     return false;
   }
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+  if (BoardConfig::isMetalioEInk4Plus()) metalioplus::routeUsbToOtg(true);
+#endif
   if (!USB.begin()) {
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+    if (BoardConfig::isMetalioEInk4Plus()) metalioplus::routeUsbToOtg(false);
+#endif
     gMsc.end();
     gOwner.store(nullptr);
     gDev.store(nullptr);
@@ -176,6 +181,9 @@ void UsbMassStorage::end() {
   gOwner.store(nullptr);
   gDev.store(nullptr);
   gMsc.end();
+#if FREEINK_DEVICE_METALIO_EINK4_PLUS
+  if (BoardConfig::isMetalioEInk4Plus()) metalioplus::routeUsbToOtg(false);
+#endif
   _state.store(UsbMassStorageState::Idle);
   _hostSeen.store(false);
 }
