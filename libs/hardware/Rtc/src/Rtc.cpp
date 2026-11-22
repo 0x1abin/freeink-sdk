@@ -30,6 +30,9 @@ constexpr uint8_t PCF8563_REG_TIME = 0x02;  // seconds, minutes, hours, days, we
 constexpr uint8_t PCF8563_REG_CLKOUT = 0x0D;
 constexpr uint8_t PCF8563_CLKOUT_DISABLED = 0x00;
 constexpr uint8_t PCF8563_VL_FLAG = 0x80;  // seconds reg bit7: oscillator stopped / voltage-low
+constexpr uint8_t PCF8563_STOP = 0x20;
+constexpr uint8_t PCF8563_TEST1 = 0x80;
+constexpr uint8_t PCF8563_TESTC = 0x08;
 
 // PCF85063A register map. Same BCD time layout as the PCF8563 but shifted:
 // Control_1/2 at 0x00/0x01, time from 0x04, seconds bit7 is the OS (oscillator
@@ -107,6 +110,25 @@ void ensureWire() {
 
 uint8_t bcdToDec(uint8_t v) { return static_cast<uint8_t>((v >> 4) * 10U + (v & 0x0FU)); }
 uint8_t decToBcd(uint8_t v) { return static_cast<uint8_t>((v / 10U) << 4 | (v % 10U)); }
+
+bool validPcf8563Date(const Rtc::DateTime& dt) {
+  // Preserve the existing century-bit interpretation: set = 1900, clear = 2000.
+  if (dt.year < 1900 || dt.year > 2099 || dt.month < 1 || dt.month > 12 || dt.day < 1 || dt.hour > 23 ||
+      dt.minute > 59 || dt.second > 59 || dt.weekday > 6)
+    return false;
+  constexpr uint8_t days[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+  const bool leap = dt.year % 4 == 0 && (dt.year % 100 != 0 || dt.year % 400 == 0);
+  return dt.day <= days[dt.month - 1] + (dt.month == 2 && leap);
+}
+
+bool validPcf8563Bcd(const uint8_t* raw) {
+  constexpr uint8_t masks[] = {0x7f, 0x7f, 0x3f, 0x3f, 0x07, 0x1f, 0xff};
+  for (unsigned i = 0; i < sizeof(masks); ++i) {
+    const uint8_t value = raw[i] & masks[i];
+    if ((value & 0x0f) > 9 || (value >> 4) > 9) return false;
+  }
+  return true;
+}
 
 bool writeReg(uint8_t addr, uint8_t reg, uint8_t value) {
   const freeink::I2cBusLock busLock;
@@ -222,16 +244,25 @@ bool Rtc::now(DateTime& out) {
   uint8_t raw[7] = {};
   switch (s.rtcType) {
     case BoardConfig::RtcType::Pcf8563: {
-      if (!readRegs(addr, PCF8563_REG_TIME, raw, sizeof(raw))) return false;
-      if (raw[0] & PCF8563_VL_FLAG) return false;  // oscillator stopped -> time not trustworthy
-      out.second = bcdToDec(raw[0] & 0x7FU);
-      out.minute = bcdToDec(raw[1] & 0x7FU);
-      out.hour = bcdToDec(raw[2] & 0x3FU);
-      out.day = bcdToDec(raw[3] & 0x3FU);
-      out.weekday = bcdToDec(raw[4] & 0x07U);
-      out.month = bcdToDec(raw[5] & 0x1FU);
-      const uint8_t yy = bcdToDec(raw[6]);
-      out.year = (raw[5] & 0x80U) ? static_cast<uint16_t>(1900 + yy) : static_cast<uint16_t>(2000 + yy);
+      // Read control and calendar together so a stopped/test clock cannot be
+      // accepted from a separate, otherwise plausible calendar read.
+      uint8_t snapshot[9] = {};
+      if (!readRegs(addr, PCF8563_REG_CONTROL_STATUS1, snapshot, sizeof(snapshot))) return false;
+      const uint8_t* calendar = snapshot + PCF8563_REG_TIME;
+      if ((snapshot[0] & (PCF8563_STOP | PCF8563_TEST1 | PCF8563_TESTC)) || (calendar[0] & PCF8563_VL_FLAG) ||
+          !validPcf8563Bcd(calendar))
+        return false;
+      DateTime value;
+      value.second = bcdToDec(calendar[0] & 0x7FU);
+      value.minute = bcdToDec(calendar[1] & 0x7FU);
+      value.hour = bcdToDec(calendar[2] & 0x3FU);
+      value.day = bcdToDec(calendar[3] & 0x3FU);
+      value.weekday = bcdToDec(calendar[4] & 0x07U);
+      value.month = bcdToDec(calendar[5] & 0x1FU);
+      const uint8_t yy = bcdToDec(calendar[6]);
+      value.year = (calendar[5] & 0x80U) ? static_cast<uint16_t>(1900 + yy) : static_cast<uint16_t>(2000 + yy);
+      if (!validPcf8563Date(value)) return false;
+      out = value;
       return true;
     }
     case BoardConfig::RtcType::Pcf85063: {
@@ -342,6 +373,16 @@ bool Rtc::set(const DateTime& dt) {
   const uint8_t addr = BoardConfig::ACTIVE.sensors.rtcAddr;
   if (!begun_ || addr == 0) return false;
   const auto& s = BoardConfig::ACTIVE.sensors;
+  if (s.rtcType == BoardConfig::RtcType::Pcf8563) {
+    if (!validPcf8563Date(dt)) return false;
+    uint8_t control = 0;
+    if (!readRegs(addr, PCF8563_REG_CONTROL_STATUS1, &control, 1) || (control & PCF8563_TEST1)) return false;
+    // An explicit trusted set may clear TESTC (POR override), but must not
+    // replace TEST1's external clock. Reserved control bits are written zero.
+    // Keep STOP on any failed calendar write: partially applied bytes must
+    // never become an apparently valid running timestamp after reboot.
+    if (!writeReg(addr, PCF8563_REG_CONTROL_STATUS1, PCF8563_STOP)) return false;
+  }
   if (s.rtcType == BoardConfig::RtcType::Cw32L010Pmu) {
     // PMU_CMD_TIME_SYNC takes unix seconds, so the calendar has to be converted
     // here. Unix seconds cannot express a year before 1970, and the register-map
@@ -432,6 +473,9 @@ bool Rtc::set(const DateTime& dt) {
   }
   wire.write(decToBcd(static_cast<uint8_t>(dt.year % 100)));
   if (wire.endTransmission() != 0) return false;
+  if (s.rtcType == BoardConfig::RtcType::Pcf8563) {
+    return writeReg(addr, PCF8563_REG_CONTROL_STATUS1, 0);
+  }
   if (s.rtcType == BoardConfig::RtcType::Ds3231) {
     uint8_t status = 0;
     if (readRegs(addr, DS3231_REG_STATUS, &status, 1)) {

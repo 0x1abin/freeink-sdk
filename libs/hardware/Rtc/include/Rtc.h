@@ -40,9 +40,11 @@ class Rtc {
 
   // Reads the current time. Returns false on I2C error or if the RTC reports its
   // oscillator stopped (low voltage / never set) — the time is then unreliable.
+  // PCF8563 also rejects test modes and malformed calendars, preserving out.
   bool now(DateTime& out);
 
-  // Sets the time. Returns false on I2C error.
+  // Sets the time. Returns false on I2C error. PCF8563 validates the calendar,
+  // refuses TEST1 and leaves the clock stopped if a calendar write fails.
   bool set(const DateTime& dt);
 
   // RX8130 countdown only. Above 65535 seconds, round up to whole minutes.
