@@ -25,7 +25,9 @@ struct TwoWire {
     devices[0x20] = true;
     regs[0x20][6] = regs[0x20][7] = 255;
   }
-  bool begin(int sda, int scl, uint32_t hz) { return sda == 41 && scl == 42 && hz == 400000; }
+  bool begin(int sda, int scl, uint32_t hz) {
+    return hz == 400000 && ((sda == 41 && scl == 42) || (sda == 0 && scl == 1) || (sda == 39 && scl == 40));
+  }
   bool end() { return true; }
   void setTimeOut(uint16_t ms) { timeoutMs = ms; }
   uint16_t getTimeOut() const { return timeoutMs; }
