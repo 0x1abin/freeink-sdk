@@ -15,3 +15,4 @@ c++ -std=c++17 -Wall -Wextra -Werror -Wno-unused-parameter -Wno-unused-private-f
   -DFREEINK_DEVICE_PAPERMONO=1 -Istubs -I../../../InputManager/test/host/metalio_stubs \
   -I../../../BoardConfig/include -I../../include test_bmi270.cpp ../../src/Imu.cpp -o "$BUILD_DIR/bmi270"
 "$BUILD_DIR/bmi270"
+python3 run_mount.py

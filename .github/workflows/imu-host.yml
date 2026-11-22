@@ -1,0 +1,33 @@
+name: IMU host checks
+
+on:
+  pull_request:
+    paths:
+      - 'libs/hardware/Imu/**'
+      - 'libs/hardware/InputManager/test/host/metalio_stubs/**'
+      - 'libs/hardware/BoardConfig/**'
+      - '.github/workflows/imu-host.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'libs/hardware/Imu/**'
+      - 'libs/hardware/InputManager/test/host/metalio_stubs/**'
+      - 'libs/hardware/BoardConfig/**'
+      - '.github/workflows/imu-host.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  imu-host:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+      - name: Check existing drivers and real board mount profiles
+        run: sh libs/hardware/Imu/test/host/run.sh
+      - name: Check mount profiles with sanitizers
+        run: python3 libs/hardware/Imu/test/host/run_mount.py --sanitize

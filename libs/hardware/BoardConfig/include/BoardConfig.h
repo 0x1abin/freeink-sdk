@@ -445,8 +445,10 @@
 #define FREEINK_CAP_TEMP_HUMIDITY (FREEINK_DEVICE_STICKY)
 #endif
 #ifndef FREEINK_CAP_IMU
-#define FREEINK_CAP_IMU \
-  (FREEINK_DEVICE_X3 || FREEINK_DEVICE_STICKY || FREEINK_DEVICE_X4CLASSIC || FREEINK_DEVICE_READPICO || FREEINK_DEVICE_WS397 || FREEINK_DEVICE_METALIO_EINK4 || FREEINK_DEVICE_PICCO || FREEINK_DEVICE_PAPERMONO)
+#define FREEINK_CAP_IMU                                                                                        \
+  (FREEINK_DEVICE_X3 || FREEINK_DEVICE_STICKY || FREEINK_DEVICE_X4CLASSIC || FREEINK_DEVICE_READPICO ||        \
+   FREEINK_DEVICE_WS397 || FREEINK_DEVICE_METALIO_EINK4 || FREEINK_DEVICE_PICCO || FREEINK_DEVICE_PAPERMONO || \
+   FREEINK_DEVICE_METALIO_EINK4_PLUS)
 #endif
 // LEDC PWM buzzer (tone beeper). The Buzzer lib drives the AudioConfig.buzzer
 // pin; on for boards that wire one (Sticky GPIO48, Murphy GPIO46, PaperS3
@@ -1896,7 +1898,7 @@ constexpr BoardProfile METALIO_EINK4_PLUS = {
     {0, 1, 400000, 0x55, 0x6B, 0, GaugeType::Bq27220, 0, ChargerType::Cx25601n},
     NO_MIC,
     // PCF8563 RTC (0x51) and SC7A20H accelerometer (0x19) on the shared bus.
-    {0, 1, 400000, 0x51, 0, 0x19, 0, RtcType::Pcf8563, ImuType::Sc7a20h},
+    {0, 1, 400000, 0x51, 0, 0x19, 0, RtcType::Pcf8563, ImuType::Sc7a20h, true, true, true},
     1.0f,  // CrossMux selects the existing native-pixel high-DPI UI profile.
     {},    // power: no latch GPIO; the power switch is pulsed through the TCA9555
     0,     // displayControllerVariant: not probed

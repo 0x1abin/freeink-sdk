@@ -318,6 +318,26 @@ bool powerDownQmi8658(uint8_t addr) {
   return sensorsDisabled && oscillatorDisabled;
 }
 
+void applyMountCorrection(Imu::Sample& out, const BoardConfig::SensorsConfig& sensors) {
+  // Swap first, then flip; accel and gyro report the same board frame.
+  if (sensors.imuSwapXY) {
+    float t = out.ax;
+    out.ax = out.ay;
+    out.ay = t;
+    t = out.gx;
+    out.gx = out.gy;
+    out.gy = t;
+  }
+  if (sensors.imuFlipX) {
+    out.ax = -out.ax;
+    out.gx = -out.gx;
+  }
+  if (sensors.imuFlipY) {
+    out.ay = -out.ay;
+    out.gy = -out.gy;
+  }
+}
+
 }  // namespace
 
 bool Imu::begin() {
@@ -459,6 +479,7 @@ bool Imu::read(Sample& out) {
     const int16_t ay = static_cast<int16_t>((raw[2] & 0xF0) | (uint16_t(raw[3]) << 8));
     const int16_t az = static_cast<int16_t>((raw[4] & 0xF0) | (uint16_t(raw[5]) << 8));
     out = {ax * SC7_G_PER_RAW_LSB, ay * SC7_G_PER_RAW_LSB, az * SC7_G_PER_RAW_LSB, 0, 0, 0};
+    applyMountCorrection(out, s);
     return true;
   }
 #endif
@@ -556,24 +577,7 @@ bool Imu::read(Sample& out) {
 
 #endif
 
-  // Mount correction (see SensorsConfig): swap first, then flip, applied to
-  // accel and gyro together so both report the same board frame.
-  if (s.imuSwapXY) {
-    float t = out.ax;
-    out.ax = out.ay;
-    out.ay = t;
-    t = out.gx;
-    out.gx = out.gy;
-    out.gy = t;
-  }
-  if (s.imuFlipX) {
-    out.ax = -out.ax;
-    out.gx = -out.gx;
-  }
-  if (s.imuFlipY) {
-    out.ay = -out.ay;
-    out.gy = -out.gy;
-  }
+  applyMountCorrection(out, s);
   return true;
 }
 
