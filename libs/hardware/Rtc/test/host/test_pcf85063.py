@@ -121,7 +121,9 @@ int main() {
 """)
     binary = root / "rtc-test"
     subprocess.run(["c++", "-std=c++17", "-Wall", "-Wextra", "-Werror",
+                    "-Wno-unused-const-variable",  # Unselected RX8010 constants under Apple clang.
                     "-I", str(root), "-I", str(RTC / "include"),
+                    "-I", str(RTC.parent / "BoardConfig/include"),
                     str(RTC / "src/Rtc.cpp"), str(root / "test.cpp"),
                     "-o", str(binary)], check=True)
     subprocess.run([str(binary)], check=True)

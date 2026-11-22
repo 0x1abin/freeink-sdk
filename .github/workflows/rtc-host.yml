@@ -1,0 +1,35 @@
+name: RTC host checks
+
+on:
+  pull_request:
+    paths:
+      - 'libs/hardware/Rtc/**'
+      - 'libs/hardware/BatteryMonitor/**'
+      - 'libs/hardware/BoardConfig/**'
+      - '.github/workflows/rtc-host.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'libs/hardware/Rtc/**'
+      - 'libs/hardware/BatteryMonitor/**'
+      - 'libs/hardware/BoardConfig/**'
+      - '.github/workflows/rtc-host.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  rtc-host:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+      - name: Check existing RTC backends and power hooks
+        run: |
+          python3 libs/hardware/Rtc/test/host/run.py
+          python3 libs/hardware/Rtc/test/host/test_pcf85063.py
+      - name: Check PCF8563 state and fault recovery with sanitizers
+        run: python3 libs/hardware/Rtc/test/host/run_pcf8563.py
